@@ -1,13 +1,11 @@
 [profile.default]
 evm_version = 'cancun'
-sizes = true
-verbosity = 3
 optimizer = true
 optimizer_runs = 200
+via_ir = true
 libs = ["node_modules", "lib"]
 extra_output = ['storageLayout']
 fs_permissions = [{ access = "read-write", path = "./"}]
-via_ir = true
 
 [rpc_endpoints]
 ethereum = "${RPC_ETHEREUM_MAINNET}"
@@ -24,11 +22,11 @@ celo_sepolia = "${RPC_CELO_SEPOLIA}"
 [profile.ci_sizes]
 optimizer_runs = 200
 
-[invariant]
-fail_on_revert = false
-
 [fuzz]
 runs = 4096
+
+[invariant]
+fail_on_revert = false
 
 [fmt]
 number_underscore = "thousands"
