@@ -19,7 +19,11 @@ contract LiquidityHelpers is BaseScript {
         uint256 amount1Max,
         address recipient,
         bytes memory hookData
-    ) internal pure returns (bytes memory, bytes[] memory) {
+    )
+        internal
+        pure
+        returns (bytes memory, bytes[] memory)
+    {
         bytes memory actions = abi.encodePacked(
             uint8(Actions.MINT_POSITION), uint8(Actions.SETTLE_PAIR), uint8(Actions.SWEEP), uint8(Actions.SWEEP)
         );

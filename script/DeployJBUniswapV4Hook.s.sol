@@ -138,9 +138,7 @@ contract DeployJBUniswapV4Hook is Script {
         console2.log("Salt:", vm.toString(salt));
 
         // Deploy the hook with the mined address
-        JBUniswapV4Hook hook = new JBUniswapV4Hook{
-            salt: salt
-        }(
+        JBUniswapV4Hook hook = new JBUniswapV4Hook{salt: salt}(
             IPoolManager(poolManager),
             IJBTokens(jbTokens),
             IJBDirectory(jbDirectory),

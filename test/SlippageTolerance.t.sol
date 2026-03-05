@@ -17,7 +17,11 @@ contract SlippageCalcHarness {
         address projectToken,
         address terminalToken,
         int24 arithmeticMeanTick
-    ) external pure returns (uint256) {
+    )
+        external
+        pure
+        returns (uint256)
+    {
         (address token0,) = projectToken < terminalToken ? (projectToken, terminalToken) : (terminalToken, projectToken);
         bool zeroForOne = terminalToken == token0;
 
@@ -152,7 +156,7 @@ contract SlippageToleranceTest is Test {
 
     function test_ZeroSqrtP_ReturnsMaxTolerance() public {
         // Can't actually get sqrtP == 0 from TickMath, but the code handles it defensively
-        int24 minTick = -887272;
+        int24 minTick = -887_272;
         uint160 sqrtP = TickMath.getSqrtPriceAtTick(minTick);
 
         assertTrue(sqrtP > 0, "Even minimum tick gives sqrtP > 0");

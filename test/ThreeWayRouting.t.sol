@@ -67,11 +67,25 @@ contract MockJBDirectory {
         mockController = controller;
     }
 
-    function controllerOf(uint256 /* projectId */ ) external view returns (address) {
+    function controllerOf(
+        uint256 /* projectId */
+    )
+        external
+        view
+        returns (address)
+    {
         return mockController;
     }
 
-    function primaryTerminalOf(uint256, /* projectId */ address /* token */ ) external view returns (address) {
+    function primaryTerminalOf(
+        uint256,
+        /* projectId */
+        address /* token */
+    )
+        external
+        view
+        returns (address)
+    {
         return mockTerminal;
     }
 }
@@ -83,13 +97,23 @@ contract MockJBPrices {
         return 0;
     }
 
-    function setPricePerUnitOf(uint256 projectId, uint256 pricingCurrency, uint256 unitCurrency, uint256 price)
+    function setPricePerUnitOf(
+        uint256 projectId,
+        uint256 pricingCurrency,
+        uint256 unitCurrency,
+        uint256 price
+    )
         external
     {
         prices[projectId][pricingCurrency][unitCurrency] = price;
     }
 
-    function pricePerUnitOf(uint256 projectId, uint256 pricingCurrency, uint256 unitCurrency, uint256 /* decimals */ )
+    function pricePerUnitOf(
+        uint256 projectId,
+        uint256 pricingCurrency,
+        uint256 unitCurrency,
+        uint256 /* decimals */
+    )
         external
         view
         returns (uint256)
@@ -112,7 +136,11 @@ contract MockJBTerminalStore {
         uint256 cashOutCount,
         uint256 currency,
         uint256 /* decimals */
-    ) external view returns (uint256) {
+    )
+        external
+        view
+        returns (uint256)
+    {
         uint256 surplusPerTokenValue = surplusPerToken[projectId][currency];
         if (surplusPerTokenValue == 0) return 0;
         return (surplusPerTokenValue * cashOutCount) / 1e18;
@@ -169,7 +197,11 @@ contract MockJBMultiTerminal {
         uint256 minReturnedTokens,
         string calldata,
         bytes calldata
-    ) external payable returns (uint256 beneficiaryTokenCount) {
+    )
+        external
+        payable
+        returns (uint256 beneficiaryTokenCount)
+    {
         lastProjectId = projectId;
         lastToken = token;
         lastAmount = amount;
@@ -199,7 +231,10 @@ contract MockJBMultiTerminal {
         uint256 minTokensReclaimed,
         address payable beneficiary,
         bytes calldata
-    ) external returns (uint256) {
+    )
+        external
+        returns (uint256)
+    {
         lastProjectId = projectId;
         lastToken = tokenToReclaim;
         lastAmount = cashOutCount;
@@ -308,7 +343,7 @@ contract MockUniswapV3Pool {
         token0 = _token0;
         token1 = _token1;
         fee = _fee;
-        sqrtPriceX96 = 79228162514264337593543950336; // sqrt(1.0) * 2^96
+        sqrtPriceX96 = 79_228_162_514_264_337_593_543_950_336; // sqrt(1.0) * 2^96
         tick = 0;
         priceMultiplier = 1e18;
     }
@@ -329,7 +364,7 @@ contract MockUniswapV3Pool {
 
         if (multiplier >= 0.9e18 && multiplier <= 1.1e18) {
             int256 priceRatio = int256(multiplier) - int256(1e18);
-            tick = int24((priceRatio * 10000) / int256(1e18));
+            tick = int24((priceRatio * 10_000) / int256(1e18));
         } else if (multiplier > 1.1e18) {
             if (multiplier >= 2e18) {
                 tick = 6931;
@@ -351,8 +386,8 @@ contract MockUniswapV3Pool {
                 tick = -1315 + int24((int256(multiplier) - int256(0.833e18)) * 1315 / int256(0.067e18));
             }
         }
-        if (tick > 887272) tick = 887272;
-        if (tick < -887272) tick = -887272;
+        if (tick > 887_272) tick = 887_272;
+        if (tick < -887_272) tick = -887_272;
     }
 
     function setLiquidity(uint128 _liquidity) external {
@@ -380,7 +415,13 @@ contract MockUniswapV3Pool {
         unlocked = true;
     }
 
-    function swap(address recipient, bool zeroForOne, int256 amountSpecified, uint160, bytes calldata data)
+    function swap(
+        address recipient,
+        bool zeroForOne,
+        int256 amountSpecified,
+        uint160,
+        bytes calldata data
+    )
         external
         returns (int256 amount0, int256 amount1)
     {
@@ -394,12 +435,12 @@ contract MockUniswapV3Pool {
         uint256 amountOut;
 
         if (zeroForOne) {
-            uint256 amountAfterFee = amountIn * (1000000 - fee) / 1000000;
+            uint256 amountAfterFee = amountIn * (1_000_000 - fee) / 1_000_000;
             amountOut = (amountAfterFee * priceMultiplier) / 1e18;
             amount0 = int256(amountIn);
             amount1 = -int256(amountOut);
         } else {
-            uint256 amountAfterFee = amountIn * (1000000 - fee) / 1000000;
+            uint256 amountAfterFee = amountIn * (1_000_000 - fee) / 1_000_000;
             amountOut = (amountAfterFee * 1e18) / priceMultiplier;
             amount0 = -int256(amountOut);
             amount1 = int256(amountIn);
@@ -447,7 +488,12 @@ contract MockUniswapV3Pool {
     function observations(uint256 index)
         external
         view
-        returns (uint32 blockTimestamp, int56 tickCumulative, uint160 secondsPerLiquidityCumulativeX128, bool initialized)
+        returns (
+            uint32 blockTimestamp,
+            int56 tickCumulative,
+            uint160 secondsPerLiquidityCumulativeX128,
+            bool initialized
+        )
     {
         if (index == 0) {
             uint32 currentTimestamp = uint32(block.timestamp);
@@ -533,7 +579,7 @@ contract ThreeWayRoutingTest is Test {
     JuiceboxSwapRouter jbSwapRouter;
     PoolModifyLiquidityTest modifyLiquidityRouter;
 
-    uint160 constant SQRT_PRICE_1_1 = 79228162514264337593543950336;
+    uint160 constant SQRT_PRICE_1_1 = 79_228_162_514_264_337_593_543_950_336;
     bytes constant ZERO_BYTES = "";
     uint256 constant PROJECT_ID = 123;
 
@@ -543,7 +589,7 @@ contract ThreeWayRoutingTest is Test {
     PoolId id;
 
     function setUp() public {
-        vm.warp(10000);
+        vm.warp(10_000);
 
         manager = new PoolManager(address(this));
         swapRouter = new PoolSwapTest(IPoolManager(address(manager)));
@@ -580,8 +626,7 @@ contract ThreeWayRoutingTest is Test {
             address(mockWETH)
         );
 
-        (, bytes32 salt) =
-            HookMiner.find(address(this), flags, type(JBUniswapV4Hook).creationCode, constructorArgs);
+        (, bytes32 salt) = HookMiner.find(address(this), flags, type(JBUniswapV4Hook).creationCode, constructorArgs);
 
         hook = new JBUniswapV4Hook{salt: salt}(
             IPoolManager(address(manager)),
@@ -600,10 +645,10 @@ contract ThreeWayRoutingTest is Test {
         }
 
         // Create V3 pool
-        mockV3Pool = MockUniswapV3Pool(mockV3Factory.createPool(address(token0), address(token1), 10000));
+        mockV3Pool = MockUniswapV3Pool(mockV3Factory.createPool(address(token0), address(token1), 10_000));
         mockV3Pool.setLiquidity(1000e18);
-        token0.mint(address(mockV3Pool), 10000 ether);
-        token1.mint(address(mockV3Pool), 10000 ether);
+        token0.mint(address(mockV3Pool), 10_000 ether);
+        token1.mint(address(mockV3Pool), 10_000 ether);
 
         // Set up JB project: token0 is the project token
         mockJBTokens.setProjectId(address(token0), PROJECT_ID);
@@ -653,7 +698,7 @@ contract ThreeWayRoutingTest is Test {
     /// And a BestRouteSelected event should be emitted with routeType "juicebox"
     function test_ThreeWay_JBWins() public {
         // Set JB weight very high so JB gives way more tokens than Uniswap
-        mockJBController.setWeight(PROJECT_ID, 10000e18);
+        mockJBController.setWeight(PROJECT_ID, 10_000e18);
 
         // V3 pool at default 1:1 price
         mockV3Pool.setPriceMultiplier(1e18);
@@ -662,11 +707,8 @@ contract ThreeWayRoutingTest is Test {
         token1.mint(address(this), 1 ether);
         token1.approve(address(jbSwapRouter), 1 ether);
 
-        SwapParams memory params = SwapParams({
-            zeroForOne: false,
-            amountSpecified: -1 ether,
-            sqrtPriceLimitX96: TickMath.MAX_SQRT_PRICE - 1
-        });
+        SwapParams memory params =
+            SwapParams({zeroForOne: false, amountSpecified: -1 ether, sqrtPriceLimitX96: TickMath.MAX_SQRT_PRICE - 1});
 
         // Set expectEmit right before the swap call
         vm.expectEmit(true, false, false, false);
@@ -689,11 +731,11 @@ contract ThreeWayRoutingTest is Test {
     /// Then V3 should give the best output
     /// And a BestRouteSelected event should be emitted with routeType "v3"
     function test_ThreeWay_V3Wins() public {
-        vm.warp(block.timestamp + 10000);
+        vm.warp(block.timestamp + 10_000);
 
         // Set V3 price very high: 2 token1 per token0
         mockV3Pool.setPriceMultiplier(2e18);
-        mockV3Pool.setLiquidity(1000_000_000_000_000_000_000_000_000);
+        mockV3Pool.setLiquidity(1_000_000_000_000_000_000_000_000_000);
 
         // Make JB unattractive: low surplus for selling
         mockJBTerminalStore.setSurplus(PROJECT_ID, address(token1), 0.01 ether);
@@ -703,11 +745,8 @@ contract ThreeWayRoutingTest is Test {
         // Prepare tokens
         token0.approve(address(jbSwapRouter), 1 ether);
 
-        SwapParams memory params = SwapParams({
-            zeroForOne: true,
-            amountSpecified: -1 ether,
-            sqrtPriceLimitX96: TickMath.MIN_SQRT_PRICE + 1
-        });
+        SwapParams memory params =
+            SwapParams({zeroForOne: true, amountSpecified: -1 ether, sqrtPriceLimitX96: TickMath.MIN_SQRT_PRICE + 1});
 
         vm.expectEmit(true, false, false, false);
         emit JBUniswapV4Hook.BestRouteSelected(id, "v3", 0);
@@ -738,11 +777,8 @@ contract ThreeWayRoutingTest is Test {
 
         token0.approve(address(jbSwapRouter), 1 ether);
 
-        SwapParams memory params = SwapParams({
-            zeroForOne: true,
-            amountSpecified: -1 ether,
-            sqrtPriceLimitX96: TickMath.MIN_SQRT_PRICE + 1
-        });
+        SwapParams memory params =
+            SwapParams({zeroForOne: true, amountSpecified: -1 ether, sqrtPriceLimitX96: TickMath.MIN_SQRT_PRICE + 1});
 
         vm.expectEmit(true, false, false, false);
         emit JBUniswapV4Hook.BestRouteSelected(id, "v4", 0);
@@ -776,11 +812,8 @@ contract ThreeWayRoutingTest is Test {
 
         token0.approve(address(jbSwapRouter), 1 ether);
 
-        SwapParams memory params = SwapParams({
-            zeroForOne: true,
-            amountSpecified: -1 ether,
-            sqrtPriceLimitX96: TickMath.MIN_SQRT_PRICE + 1
-        });
+        SwapParams memory params =
+            SwapParams({zeroForOne: true, amountSpecified: -1 ether, sqrtPriceLimitX96: TickMath.MIN_SQRT_PRICE + 1});
 
         vm.expectEmit(true, false, false, false);
         emit JBUniswapV4Hook.BestRouteSelected(id, "v4", 0);
@@ -809,7 +842,7 @@ contract ThreeWayRoutingTest is Test {
 
         uint256 newProjectId = 456;
         mockJBTokens.setProjectId(address(newToken0), newProjectId);
-        mockJBController.setWeight(newProjectId, 10000e18);
+        mockJBController.setWeight(newProjectId, 10_000e18);
         mockJBMultiTerminal.setProjectToken(newProjectId, address(newToken0));
 
         uint32 newToken1CurrencyId = uint32(uint160(address(newToken1)));
@@ -843,11 +876,8 @@ contract ThreeWayRoutingTest is Test {
         newToken1.mint(address(this), 1 ether);
         newToken1.approve(address(jbSwapRouter), 1 ether);
 
-        SwapParams memory params = SwapParams({
-            zeroForOne: false,
-            amountSpecified: -1 ether,
-            sqrtPriceLimitX96: TickMath.MAX_SQRT_PRICE - 1
-        });
+        SwapParams memory params =
+            SwapParams({zeroForOne: false, amountSpecified: -1 ether, sqrtPriceLimitX96: TickMath.MAX_SQRT_PRICE - 1});
 
         vm.expectEmit(true, false, false, false);
         emit JBUniswapV4Hook.BestRouteSelected(newId, "juicebox", 0);
@@ -873,12 +903,11 @@ contract ThreeWayRoutingTest is Test {
             (nonJBToken0, nonJBToken1) = (nonJBToken1, nonJBToken0);
         }
 
-        MockUniswapV3Pool nonJBV3Pool = MockUniswapV3Pool(
-            mockV3Factory.createPool(address(nonJBToken0), address(nonJBToken1), 10000)
-        );
+        MockUniswapV3Pool nonJBV3Pool =
+            MockUniswapV3Pool(mockV3Factory.createPool(address(nonJBToken0), address(nonJBToken1), 10_000));
         nonJBV3Pool.setLiquidity(1000e18);
-        nonJBToken0.mint(address(nonJBV3Pool), 10000 ether);
-        nonJBToken1.mint(address(nonJBV3Pool), 10000 ether);
+        nonJBToken0.mint(address(nonJBV3Pool), 10_000 ether);
+        nonJBToken1.mint(address(nonJBV3Pool), 10_000 ether);
 
         PoolKey memory nonJBKey = PoolKey({
             currency0: Currency.wrap(address(nonJBToken0)),
@@ -905,11 +934,8 @@ contract ThreeWayRoutingTest is Test {
         // Approve for swap and set expectEmit right before swap call
         nonJBToken0.approve(address(swapRouter), 1 ether);
 
-        SwapParams memory params = SwapParams({
-            zeroForOne: true,
-            amountSpecified: -1 ether,
-            sqrtPriceLimitX96: TickMath.MIN_SQRT_PRICE + 1
-        });
+        SwapParams memory params =
+            SwapParams({zeroForOne: true, amountSpecified: -1 ether, sqrtPriceLimitX96: TickMath.MIN_SQRT_PRICE + 1});
 
         // For non-JB tokens, only RouteSelected is emitted (not BestRouteSelected)
         vm.expectEmit(true, false, false, true);
@@ -931,17 +957,14 @@ contract ThreeWayRoutingTest is Test {
         mockV3Pool.setUnlocked(false);
 
         // Set JB weight high so JB is better than V4
-        mockJBController.setWeight(PROJECT_ID, 10000e18);
+        mockJBController.setWeight(PROJECT_ID, 10_000e18);
 
         // Prepare tokens
         token1.mint(address(this), 1 ether);
         token1.approve(address(jbSwapRouter), 1 ether);
 
-        SwapParams memory params = SwapParams({
-            zeroForOne: false,
-            amountSpecified: -1 ether,
-            sqrtPriceLimitX96: TickMath.MAX_SQRT_PRICE - 1
-        });
+        SwapParams memory params =
+            SwapParams({zeroForOne: false, amountSpecified: -1 ether, sqrtPriceLimitX96: TickMath.MAX_SQRT_PRICE - 1});
 
         vm.expectEmit(true, false, false, false);
         emit JBUniswapV4Hook.BestRouteSelected(id, "juicebox", 0);
@@ -973,11 +996,8 @@ contract ThreeWayRoutingTest is Test {
 
         token0.approve(address(jbSwapRouter), 1 ether);
 
-        SwapParams memory params = SwapParams({
-            zeroForOne: true,
-            amountSpecified: -1 ether,
-            sqrtPriceLimitX96: TickMath.MIN_SQRT_PRICE + 1
-        });
+        SwapParams memory params =
+            SwapParams({zeroForOne: true, amountSpecified: -1 ether, sqrtPriceLimitX96: TickMath.MIN_SQRT_PRICE + 1});
 
         vm.expectEmit(true, false, false, false);
         emit JBUniswapV4Hook.BestRouteSelected(id, "juicebox", 0);
@@ -1001,7 +1021,7 @@ contract ThreeWayRoutingTest is Test {
         uint256 ethProjectId = 789;
 
         mockJBTokens.setProjectId(address(ethPairToken), ethProjectId);
-        mockJBController.setWeight(ethProjectId, 10000e18);
+        mockJBController.setWeight(ethProjectId, 10_000e18);
         mockJBMultiTerminal.setProjectToken(ethProjectId, address(ethPairToken));
 
         // currency0 = native ETH (address(0)), currency1 = ethPairToken
@@ -1011,24 +1031,20 @@ contract ThreeWayRoutingTest is Test {
         // Create V3 pool with WETH and ethPairToken
         if (address(mockWETH) < address(ethPairToken)) {
             MockUniswapV3Pool ethV3Pool =
-                MockUniswapV3Pool(mockV3Factory.createPool(address(mockWETH), address(ethPairToken), 10000));
+                MockUniswapV3Pool(mockV3Factory.createPool(address(mockWETH), address(ethPairToken), 10_000));
             ethV3Pool.setLiquidity(1000e18);
-            mockWETH.mint(address(ethV3Pool), 10000 ether);
-            ethPairToken.mint(address(ethV3Pool), 10000 ether);
+            mockWETH.mint(address(ethV3Pool), 10_000 ether);
+            ethPairToken.mint(address(ethV3Pool), 10_000 ether);
         } else {
             MockUniswapV3Pool ethV3Pool =
-                MockUniswapV3Pool(mockV3Factory.createPool(address(ethPairToken), address(mockWETH), 10000));
+                MockUniswapV3Pool(mockV3Factory.createPool(address(ethPairToken), address(mockWETH), 10_000));
             ethV3Pool.setLiquidity(1000e18);
-            mockWETH.mint(address(ethV3Pool), 10000 ether);
-            ethPairToken.mint(address(ethV3Pool), 10000 ether);
+            mockWETH.mint(address(ethV3Pool), 10_000 ether);
+            ethPairToken.mint(address(ethV3Pool), 10_000 ether);
         }
 
         PoolKey memory ethKey = PoolKey({
-            currency0: nativeETH,
-            currency1: wrappedToken,
-            fee: 3000,
-            tickSpacing: 60,
-            hooks: IHooks(address(hook))
+            currency0: nativeETH, currency1: wrappedToken, fee: 3000, tickSpacing: 60, hooks: IHooks(address(hook))
         });
 
         vm.deal(address(this), 100 ether);
@@ -1047,11 +1063,8 @@ contract ThreeWayRoutingTest is Test {
 
         // zeroForOne=true means selling currency0 (ETH) for currency1 (ethPairToken = JB token)
         // This is buying JB tokens with ETH
-        SwapParams memory params = SwapParams({
-            zeroForOne: true,
-            amountSpecified: -1 ether,
-            sqrtPriceLimitX96: TickMath.MIN_SQRT_PRICE + 1
-        });
+        SwapParams memory params =
+            SwapParams({zeroForOne: true, amountSpecified: -1 ether, sqrtPriceLimitX96: TickMath.MIN_SQRT_PRICE + 1});
 
         vm.expectEmit(true, false, false, false);
         emit JBUniswapV4Hook.BestRouteSelected(ethId, "juicebox", 0);
@@ -1070,7 +1083,7 @@ contract ThreeWayRoutingTest is Test {
     /// Then the transaction should revert
     function test_ThreeWay_AmountOutMin_AppliedToWinner() public {
         // JB weight high so JB routing wins
-        mockJBController.setWeight(PROJECT_ID, 10000e18);
+        mockJBController.setWeight(PROJECT_ID, 10_000e18);
 
         // Override pay to return a specific amount
         mockJBMultiTerminal.setPayReturnAmount(5000 ether);
@@ -1079,11 +1092,8 @@ contract ThreeWayRoutingTest is Test {
         token1.mint(address(this), 1 ether);
         token1.approve(address(jbSwapRouter), 1 ether);
 
-        SwapParams memory params = SwapParams({
-            zeroForOne: false,
-            amountSpecified: -1 ether,
-            sqrtPriceLimitX96: TickMath.MAX_SQRT_PRICE - 1
-        });
+        SwapParams memory params =
+            SwapParams({zeroForOne: false, amountSpecified: -1 ether, sqrtPriceLimitX96: TickMath.MAX_SQRT_PRICE - 1});
 
         // amountOutMin higher than what JB returns (5000 < 6000)
         // JB terminal enforces minReturnedTokens internally, causing revert wrapped by PoolManager
@@ -1101,14 +1111,14 @@ contract ThreeWayRoutingTest is Test {
     /// When the user performs a swap
     /// Then the best route should always be selected and not revert
     function testFuzz_ThreeWay_RoutingConsistency(uint256 jbWeight, uint256 v3Multiplier) public {
-        jbWeight = bound(jbWeight, 1e18, 100000e18);
+        jbWeight = bound(jbWeight, 1e18, 100_000e18);
         v3Multiplier = bound(v3Multiplier, 0.3e18, 3e18);
 
-        vm.warp(block.timestamp + 10000);
+        vm.warp(block.timestamp + 10_000);
 
         mockJBController.setWeight(PROJECT_ID, jbWeight);
         mockV3Pool.setPriceMultiplier(v3Multiplier);
-        mockV3Pool.setLiquidity(1000_000_000_000_000_000_000_000_000);
+        mockV3Pool.setLiquidity(1_000_000_000_000_000_000_000_000_000);
 
         mockJBTerminalStore.setSurplus(PROJECT_ID, address(token1), 0.5 ether);
 
@@ -1118,11 +1128,8 @@ contract ThreeWayRoutingTest is Test {
         token1.mint(address(this), 1 ether);
         token1.approve(address(jbSwapRouter), 1 ether);
 
-        SwapParams memory params = SwapParams({
-            zeroForOne: false,
-            amountSpecified: -1 ether,
-            sqrtPriceLimitX96: TickMath.MAX_SQRT_PRICE - 1
-        });
+        SwapParams memory params =
+            SwapParams({zeroForOne: false, amountSpecified: -1 ether, sqrtPriceLimitX96: TickMath.MAX_SQRT_PRICE - 1});
 
         // Should not revert for any valid combination
         jbSwapRouter.swap(key, params, 0);

@@ -67,11 +67,25 @@ contract MockJBDirectory_Oracle {
         mockController = controller;
     }
 
-    function controllerOf(uint256 /* projectId */ ) external view returns (address) {
+    function controllerOf(
+        uint256 /* projectId */
+    )
+        external
+        view
+        returns (address)
+    {
         return mockController;
     }
 
-    function primaryTerminalOf(uint256, /* projectId */ address /* token */ ) external view returns (address) {
+    function primaryTerminalOf(
+        uint256,
+        /* projectId */
+        address /* token */
+    )
+        external
+        view
+        returns (address)
+    {
         return mockTerminal;
     }
 }
@@ -83,13 +97,23 @@ contract MockJBPrices_Oracle {
         return 0;
     }
 
-    function setPricePerUnitOf(uint256 projectId, uint256 pricingCurrency, uint256 unitCurrency, uint256 price)
+    function setPricePerUnitOf(
+        uint256 projectId,
+        uint256 pricingCurrency,
+        uint256 unitCurrency,
+        uint256 price
+    )
         external
     {
         prices[projectId][pricingCurrency][unitCurrency] = price;
     }
 
-    function pricePerUnitOf(uint256 projectId, uint256 pricingCurrency, uint256 unitCurrency, uint256 /* decimals */ )
+    function pricePerUnitOf(
+        uint256 projectId,
+        uint256 pricingCurrency,
+        uint256 unitCurrency,
+        uint256 /* decimals */
+    )
         external
         view
         returns (uint256)
@@ -112,7 +136,11 @@ contract MockJBTerminalStore_Oracle {
         uint256 cashOutCount,
         uint256 currency,
         uint256 /* decimals */
-    ) external view returns (uint256) {
+    )
+        external
+        view
+        returns (uint256)
+    {
         uint256 surplusPerTokenValue = surplusPerToken[projectId][currency];
         if (surplusPerTokenValue == 0) return 0;
         return (surplusPerTokenValue * cashOutCount) / 1e18;
@@ -154,7 +182,11 @@ contract MockJBMultiTerminal_Oracle {
         uint256 minReturnedTokens,
         string calldata,
         bytes calldata
-    ) external payable returns (uint256 beneficiaryTokenCount) {
+    )
+        external
+        payable
+        returns (uint256 beneficiaryTokenCount)
+    {
         lastProjectId = projectId;
         lastToken = token;
         lastAmount = amount;
@@ -184,7 +216,10 @@ contract MockJBMultiTerminal_Oracle {
         uint256 minTokensReclaimed,
         address payable beneficiary,
         bytes calldata
-    ) external returns (uint256) {
+    )
+        external
+        returns (uint256)
+    {
         lastProjectId = projectId;
         lastToken = tokenToReclaim;
         lastAmount = cashOutCount;
@@ -275,7 +310,7 @@ contract MockUniswapV3Pool_Oracle {
         token0 = _token0;
         token1 = _token1;
         fee = _fee;
-        sqrtPriceX96 = 79228162514264337593543950336;
+        sqrtPriceX96 = 79_228_162_514_264_337_593_543_950_336;
         tick = 0;
         priceMultiplier = 1e18;
     }
@@ -329,7 +364,12 @@ contract MockUniswapV3Pool_Oracle {
     function observations(uint256 index)
         external
         view
-        returns (uint32 blockTimestamp, int56 tickCumulative, uint160 secondsPerLiquidityCumulativeX128, bool initialized)
+        returns (
+            uint32 blockTimestamp,
+            int56 tickCumulative,
+            uint160 secondsPerLiquidityCumulativeX128,
+            bool initialized
+        )
     {
         if (index == 0) {
             uint32 currentTimestamp = uint32(block.timestamp);
@@ -350,7 +390,13 @@ contract MockUniswapV3Pool_Oracle {
         }
     }
 
-    function swap(address recipient, bool zeroForOne, int256 amountSpecified, uint160, bytes calldata data)
+    function swap(
+        address recipient,
+        bool zeroForOne,
+        int256 amountSpecified,
+        uint160,
+        bytes calldata data
+    )
         external
         returns (int256 amount0, int256 amount1)
     {
@@ -361,12 +407,12 @@ contract MockUniswapV3Pool_Oracle {
         uint256 amountOut;
 
         if (zeroForOne) {
-            uint256 amountAfterFee = amountIn * (1000000 - fee) / 1000000;
+            uint256 amountAfterFee = amountIn * (1_000_000 - fee) / 1_000_000;
             amountOut = (amountAfterFee * priceMultiplier) / 1e18;
             amount0 = int256(amountIn);
             amount1 = -int256(amountOut);
         } else {
-            uint256 amountAfterFee = amountIn * (1000000 - fee) / 1000000;
+            uint256 amountAfterFee = amountIn * (1_000_000 - fee) / 1_000_000;
             amountOut = (amountAfterFee * 1e18) / priceMultiplier;
             amount0 = -int256(amountOut);
             amount1 = int256(amountIn);
@@ -436,7 +482,7 @@ contract OracleDeepTest is Test {
     JuiceboxSwapRouter jbSwapRouter;
     PoolModifyLiquidityTest modifyLiquidityRouter;
 
-    uint160 constant SQRT_PRICE_1_1 = 79228162514264337593543950336;
+    uint160 constant SQRT_PRICE_1_1 = 79_228_162_514_264_337_593_543_950_336;
     bytes constant ZERO_BYTES = "";
 
     MockERC20 token0;
@@ -507,10 +553,10 @@ contract OracleDeepTest is Test {
         }
 
         // Create v3 pool for token0/token1 pair
-        mockV3Pool = MockUniswapV3Pool_Oracle(mockV3Factory.createPool(address(token0), address(token1), 10000));
+        mockV3Pool = MockUniswapV3Pool_Oracle(mockV3Factory.createPool(address(token0), address(token1), 10_000));
         mockV3Pool.setLiquidity(1000e18);
-        token0.mint(address(mockV3Pool), 10000 ether);
-        token1.mint(address(mockV3Pool), 10000 ether);
+        token0.mint(address(mockV3Pool), 10_000 ether);
+        token1.mint(address(mockV3Pool), 10_000 ether);
 
         // Set up a Juicebox project for token0
         mockJBTokens.setProjectId(address(token0), 123);
@@ -564,14 +610,10 @@ contract OracleDeepTest is Test {
     // ---------------------------------------------------------------
 
     function _doSwap(bool zeroForOne, int256 amountSpecified) internal {
-        uint160 sqrtLimit =
-            zeroForOne ? TickMath.MIN_SQRT_PRICE + 1 : TickMath.MAX_SQRT_PRICE - 1;
+        uint160 sqrtLimit = zeroForOne ? TickMath.MIN_SQRT_PRICE + 1 : TickMath.MAX_SQRT_PRICE - 1;
 
-        SwapParams memory params = SwapParams({
-            zeroForOne: zeroForOne,
-            amountSpecified: amountSpecified,
-            sqrtPriceLimitX96: sqrtLimit
-        });
+        SwapParams memory params =
+            SwapParams({zeroForOne: zeroForOne, amountSpecified: amountSpecified, sqrtPriceLimitX96: sqrtLimit});
 
         swapRouter.swap(key, params, PoolSwapTest.TestSettings(false, false), abi.encode(uint256(0)));
     }
@@ -772,7 +814,7 @@ contract OracleDeepTest is Test {
     function test_TWAPSqrtPrice_InsufficientObservations_ReturnsZero() public view {
         // Right after initialization we have exactly 1 observation.
         // The hook's _getTWAPSqrtPrice checks if cardinality < 2 and returns 0.
-        (,uint16 cardinality,) = hook.states(id);
+        (, uint16 cardinality,) = hook.states(id);
         assertEq(cardinality, 1, "Should have exactly 1 observation");
 
         // estimateUniswapOutput falls back to spot price when _getTWAPSqrtPrice returns 0.
@@ -908,7 +950,7 @@ contract OracleDeepTest is Test {
     /// @notice Fuzz test: as time advances, observations should always be recorded.
     function testFuzz_OracleTimestampProgression(uint32 delta) public {
         // Bound the time delta to a reasonable range: at least 1 second, at most 1 day
-        delta = uint32(bound(uint256(delta), 1, 86400));
+        delta = uint32(bound(uint256(delta), 1, 86_400));
 
         (uint16 indexBefore,,) = hook.states(id);
 

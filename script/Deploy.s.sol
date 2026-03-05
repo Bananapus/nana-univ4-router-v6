@@ -47,31 +47,31 @@ contract DeployScript is Script {
         if (block.chainid == 1) {
             weth = 0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2;
             v3Factory = 0x1F98431c8aD98523631AE4a59f267346ea31F984;
-        // Ethereum Sepolia
+            // Ethereum Sepolia
         } else if (block.chainid == 11_155_111) {
             weth = 0x7b79995e5f793A07Bc00c21412e50Ecae098E7f9;
             v3Factory = 0x0227628f3F023bb0B980b67D528571c95c6DaC1c;
-        // Optimism Mainnet
+            // Optimism Mainnet
         } else if (block.chainid == 10) {
             weth = 0x4200000000000000000000000000000000000006;
             v3Factory = 0x1F98431c8aD98523631AE4a59f267346ea31F984;
-        // Base Mainnet
+            // Base Mainnet
         } else if (block.chainid == 8453) {
             weth = 0x4200000000000000000000000000000000000006;
             v3Factory = 0x33128a8fC17869897dcE68Ed026d694621f6FDfD;
-        // Optimism Sepolia
+            // Optimism Sepolia
         } else if (block.chainid == 11_155_420) {
             weth = 0x4200000000000000000000000000000000000006;
             v3Factory = 0x4752ba5DBc23f44D87826276BF6Fd6b1C372aD24;
-        // Base Sepolia
+            // Base Sepolia
         } else if (block.chainid == 84_532) {
             weth = 0x4200000000000000000000000000000000000006;
             v3Factory = 0x4752ba5DBc23f44D87826276BF6Fd6b1C372aD24;
-        // Arbitrum Mainnet
+            // Arbitrum Mainnet
         } else if (block.chainid == 42_161) {
             weth = 0x82aF49447D8a07e3bd95BD0d56f35241523fBab1;
             v3Factory = 0x1F98431c8aD98523631AE4a59f267346ea31F984;
-        // Arbitrum Sepolia
+            // Arbitrum Sepolia
         } else if (block.chainid == 421_614) {
             weth = 0x980B62Da83eFf3D4576C647993b0c1D7faf17c73;
             v3Factory = 0x248AB79Bbb9bC29bB72f7Cd42F17e054Fc40188e;
@@ -130,10 +130,13 @@ contract DeployScript is Script {
         string memory basePath,
         string memory networkName,
         string memory contractName
-    ) internal view returns (address) {
-        string memory json = vm.readFile(
-            string.concat(basePath, "nana-core-v6/", networkName, "/", contractName, ".json")
-        );
+    )
+        internal
+        view
+        returns (address)
+    {
+        string memory json =
+            vm.readFile(string.concat(basePath, "nana-core-v6/", networkName, "/", contractName, ".json"));
         return stdJson.readAddress(json, ".address");
     }
 
@@ -150,11 +153,7 @@ contract DeployScript is Script {
         revert("Unsupported chain");
     }
 
-    function _isDeployed(
-        bytes32 salt,
-        bytes memory creationCode,
-        bytes memory arguments
-    ) internal view returns (bool) {
+    function _isDeployed(bytes32 salt, bytes memory creationCode, bytes memory arguments) internal view returns (bool) {
         address _deployedTo = vm.computeCreate2Address({
             salt: salt,
             initCodeHash: keccak256(abi.encodePacked(creationCode, arguments)),

@@ -67,11 +67,25 @@ contract MockJBDirectoryV3 {
         mockController = controller;
     }
 
-    function controllerOf(uint256 /* projectId */ ) external view returns (address) {
+    function controllerOf(
+        uint256 /* projectId */
+    )
+        external
+        view
+        returns (address)
+    {
         return mockController;
     }
 
-    function primaryTerminalOf(uint256, /* projectId */ address /* token */ ) external view returns (address) {
+    function primaryTerminalOf(
+        uint256,
+        /* projectId */
+        address /* token */
+    )
+        external
+        view
+        returns (address)
+    {
         return mockTerminal;
     }
 }
@@ -83,13 +97,23 @@ contract MockJBPricesV3 {
         return 0;
     }
 
-    function setPricePerUnitOf(uint256 projectId, uint256 pricingCurrency, uint256 unitCurrency, uint256 price)
+    function setPricePerUnitOf(
+        uint256 projectId,
+        uint256 pricingCurrency,
+        uint256 unitCurrency,
+        uint256 price
+    )
         external
     {
         prices[projectId][pricingCurrency][unitCurrency] = price;
     }
 
-    function pricePerUnitOf(uint256 projectId, uint256 pricingCurrency, uint256 unitCurrency, uint256 /* decimals */ )
+    function pricePerUnitOf(
+        uint256 projectId,
+        uint256 pricingCurrency,
+        uint256 unitCurrency,
+        uint256 /* decimals */
+    )
         external
         view
         returns (uint256)
@@ -149,7 +173,11 @@ contract MockJBMultiTerminalV3 {
         uint256 minReturnedTokens,
         string calldata,
         bytes calldata
-    ) external payable returns (uint256 beneficiaryTokenCount) {
+    )
+        external
+        payable
+        returns (uint256 beneficiaryTokenCount)
+    {
         lastProjectId = projectId;
         lastToken = token;
         lastAmount = amount;
@@ -179,7 +207,10 @@ contract MockJBMultiTerminalV3 {
         uint256 minTokensReclaimed,
         address payable beneficiary,
         bytes calldata
-    ) external returns (uint256) {
+    )
+        external
+        returns (uint256)
+    {
         lastProjectId = projectId;
         lastToken = tokenToReclaim;
         lastAmount = cashOutCount;
@@ -266,7 +297,12 @@ contract MockJBTerminalStoreV3 {
         surplusPerToken[projectId][currency] = surplusAmount;
     }
 
-    function currentReclaimableSurplusOf(uint256 projectId, uint256 cashOutCount, uint256 currency, uint256)
+    function currentReclaimableSurplusOf(
+        uint256 projectId,
+        uint256 cashOutCount,
+        uint256 currency,
+        uint256
+    )
         external
         view
         returns (uint256)
@@ -304,7 +340,7 @@ contract MockUniswapV3PoolV3Edge {
         token0 = _token0;
         token1 = _token1;
         fee = _fee;
-        sqrtPriceX96 = 79228162514264337593543950336; // sqrt(1.0) * 2^96
+        sqrtPriceX96 = 79_228_162_514_264_337_593_543_950_336; // sqrt(1.0) * 2^96
         tick = 0;
         priceMultiplier = 1e18;
     }
@@ -326,7 +362,7 @@ contract MockUniswapV3PoolV3Edge {
 
         if (multiplier >= 0.9e18 && multiplier <= 1.1e18) {
             int256 priceRatio = int256(multiplier) - int256(1e18);
-            tick = int24((priceRatio * 10000) / int256(1e18));
+            tick = int24((priceRatio * 10_000) / int256(1e18));
         } else if (multiplier > 1.1e18) {
             if (multiplier >= 2e18) {
                 tick = 6931;
@@ -348,8 +384,8 @@ contract MockUniswapV3PoolV3Edge {
                 tick = -1315 + int24((int256(multiplier) - int256(0.833e18)) * 1315 / int256(0.067e18));
             }
         }
-        if (tick > 887272) tick = 887272;
-        if (tick < -887272) tick = -887272;
+        if (tick > 887_272) tick = 887_272;
+        if (tick < -887_272) tick = -887_272;
     }
 
     function setLiquidity(uint128 _liquidity) external {
@@ -377,7 +413,13 @@ contract MockUniswapV3PoolV3Edge {
         unlocked = true;
     }
 
-    function swap(address recipient, bool zeroForOne, int256 amountSpecified, uint160, bytes calldata data)
+    function swap(
+        address recipient,
+        bool zeroForOne,
+        int256 amountSpecified,
+        uint160,
+        bytes calldata data
+    )
         external
         returns (int256 amount0, int256 amount1)
     {
@@ -391,13 +433,13 @@ contract MockUniswapV3PoolV3Edge {
         uint256 amountOut;
 
         if (zeroForOne) {
-            uint256 amountAfterFee = amountIn * (1000000 - fee) / 1000000;
+            uint256 amountAfterFee = amountIn * (1_000_000 - fee) / 1_000_000;
             amountOut = (amountAfterFee * priceMultiplier) / 1e18;
 
             amount0 = int256(amountIn);
             amount1 = -int256(amountOut);
         } else {
-            uint256 amountAfterFee = amountIn * (1000000 - fee) / 1000000;
+            uint256 amountAfterFee = amountIn * (1_000_000 - fee) / 1_000_000;
             amountOut = (amountAfterFee * 1e18) / priceMultiplier;
 
             amount0 = -int256(amountOut);
@@ -446,7 +488,12 @@ contract MockUniswapV3PoolV3Edge {
     function observations(uint256 index)
         external
         view
-        returns (uint32 blockTimestamp, int56 tickCumulative, uint160 secondsPerLiquidityCumulativeX128, bool initialized)
+        returns (
+            uint32 blockTimestamp,
+            int56 tickCumulative,
+            uint160 secondsPerLiquidityCumulativeX128,
+            bool initialized
+        )
     {
         if (index == 0) {
             uint32 currentTimestamp = uint32(block.timestamp);
@@ -534,7 +581,7 @@ contract V3RoutingEdgeCasesTest is Test {
     JuiceboxSwapRouter jbSwapRouter;
     PoolModifyLiquidityTest modifyLiquidityRouter;
 
-    uint160 constant SQRT_PRICE_1_1 = 79228162514264337593543950336;
+    uint160 constant SQRT_PRICE_1_1 = 79_228_162_514_264_337_593_543_950_336;
     bytes constant ZERO_BYTES = "";
 
     MockERC20 token0;
@@ -612,14 +659,14 @@ contract V3RoutingEdgeCasesTest is Test {
         }
 
         // Create v3 pool for token0/token1 pair (10000 fee tier)
-        mockV3Pool = MockUniswapV3PoolV3Edge(mockV3Factory.createPool(address(token0), address(token1), 10000));
+        mockV3Pool = MockUniswapV3PoolV3Edge(mockV3Factory.createPool(address(token0), address(token1), 10_000));
 
         // Set up high liquidity for v3 pool
         mockV3Pool.setLiquidity(1000e18);
 
         // Mint tokens to the v3 pool so it can handle swaps
-        token0.mint(address(mockV3Pool), 10000 ether);
-        token1.mint(address(mockV3Pool), 10000 ether);
+        token0.mint(address(mockV3Pool), 10_000 ether);
+        token1.mint(address(mockV3Pool), 10_000 ether);
 
         // Set up a Juicebox project for token0
         mockJBTokens.setProjectId(address(token0), 123);
@@ -689,8 +736,7 @@ contract V3RoutingEdgeCasesTest is Test {
         mockV3Pool.setUnlocked(false);
 
         // Call estimateUniswapV3Output — _getQuote checks slot0().unlocked and returns 0 if false
-        uint256 estimate =
-            hook.estimateUniswapV3Output(address(token0), address(token1), 1 ether, true);
+        uint256 estimate = hook.estimateUniswapV3Output(address(token0), address(token1), 1 ether, true);
         assertEq(estimate, 0, "Estimate should be 0 when V3 pool is locked");
 
         // Restore
@@ -703,7 +749,7 @@ contract V3RoutingEdgeCasesTest is Test {
     function test_V3Callback_InvalidSender_Reverts() public {
         // Call uniswapV3SwapCallback from this test contract (not a valid V3 pool)
         // The callback validates msg.sender against V3_FACTORY.getPool()
-        bytes memory data = abi.encode(address(token0), address(token1), uint24(10000));
+        bytes memory data = abi.encode(address(token0), address(token1), uint24(10_000));
 
         vm.expectRevert(JBUniswapV4Hook.JBUniswapV4Hook_InvalidCallback.selector);
         hook.uniswapV3SwapCallback(1, -1, data);
@@ -715,7 +761,7 @@ contract V3RoutingEdgeCasesTest is Test {
     function test_V3Callback_BothDeltasNegative_Reverts() public {
         // Even if called from the correct pool address, both deltas <= 0 should revert first
         // The check `amount0Delta <= 0 && amount1Delta <= 0` is before the sender validation
-        bytes memory data = abi.encode(address(token0), address(token1), uint24(10000));
+        bytes memory data = abi.encode(address(token0), address(token1), uint24(10_000));
 
         // Prank as the mock V3 pool to pass the sender check
         vm.prank(address(mockV3Pool));
@@ -740,8 +786,7 @@ contract V3RoutingEdgeCasesTest is Test {
         (address t0, address t1) = wethAddr < otherAddr ? (wethAddr, otherAddr) : (otherAddr, wethAddr);
 
         // Create a V3 pool for WETH/otherToken
-        MockUniswapV3PoolV3Edge wethPool =
-            MockUniswapV3PoolV3Edge(mockV3Factory.createPool(t0, t1, 10000));
+        MockUniswapV3PoolV3Edge wethPool = MockUniswapV3PoolV3Edge(mockV3Factory.createPool(t0, t1, 10_000));
         wethPool.setLiquidity(100e18);
 
         // Now call estimateUniswapV3Output with the native ETH address(0) pair
@@ -763,8 +808,7 @@ contract V3RoutingEdgeCasesTest is Test {
         mockV3Pool.setLiquidity(0);
 
         // The _getQuote path checks `if (liquidity == 0) return 0` after resolving TWAP/spot
-        uint256 estimate =
-            hook.estimateUniswapV3Output(address(token0), address(token1), 1 ether, true);
+        uint256 estimate = hook.estimateUniswapV3Output(address(token0), address(token1), 1 ether, true);
         assertEq(estimate, 0, "Estimate should be 0 when V3 pool has zero liquidity");
 
         // Restore liquidity
@@ -786,16 +830,14 @@ contract V3RoutingEdgeCasesTest is Test {
         // Deploy a custom mock pool that returns observation timestamp == block.timestamp
         // causing _getOldestObservationSecondsAgo to return 0
         MockUniswapV3PoolSpotFallback spotPool =
-            new MockUniswapV3PoolSpotFallback(address(freshToken0), address(freshToken1), 10000);
+            new MockUniswapV3PoolSpotFallback(address(freshToken0), address(freshToken1), 10_000);
         spotPool.setLiquidity(100e18);
 
         // Register the pool in the factory
-        mockV3Factory.setPool(address(freshToken0), address(freshToken1), 10000, address(spotPool));
+        mockV3Factory.setPool(address(freshToken0), address(freshToken1), 10_000, address(spotPool));
 
         // Call estimateUniswapV3Output -> should use spot tick fallback path and return non-zero
-        uint256 estimate = hook.estimateUniswapV3Output(
-            address(freshToken0), address(freshToken1), 1 ether, true
-        );
+        uint256 estimate = hook.estimateUniswapV3Output(address(freshToken0), address(freshToken1), 1 ether, true);
 
         // With tick=0 (1:1 price) and liquidity > 0, the spot fallback should yield a non-zero quote
         assertGt(estimate, 0, "Spot fallback should produce a non-zero estimate");
@@ -831,8 +873,7 @@ contract V3RoutingEdgeCasesTest is Test {
         // Warp forward so TWAP window is well-established
         vm.warp(block.timestamp + 7200);
 
-        uint256 estimate =
-            hook.estimateUniswapV3Output(address(token0), address(token1), 1 ether, true);
+        uint256 estimate = hook.estimateUniswapV3Output(address(token0), address(token1), 1 ether, true);
 
         // With a valid TWAP at tick=0 (1:1 price), 1 ether input should produce close to 1 ether output
         assertGt(estimate, 0, "Valid TWAP should return a positive estimate");
@@ -848,7 +889,7 @@ contract V3RoutingEdgeCasesTest is Test {
         token0.mint(address(hook), 10 ether);
 
         // Encode the callback data the same way the hook does
-        bytes memory callbackData = abi.encode(address(token0), address(token1), uint24(10000));
+        bytes memory callbackData = abi.encode(address(token0), address(token1), uint24(10_000));
 
         // Record pool balance before the callback
         uint256 poolBalBefore = token0.balanceOf(address(mockV3Pool));
@@ -887,7 +928,7 @@ contract MockUniswapV3PoolSpotFallback {
         token0 = _token0;
         token1 = _token1;
         fee = _fee;
-        sqrtPriceX96 = 79228162514264337593543950336; // 1:1 price
+        sqrtPriceX96 = 79_228_162_514_264_337_593_543_950_336; // 1:1 price
         tick = 0;
     }
 
@@ -916,7 +957,12 @@ contract MockUniswapV3PoolSpotFallback {
     function observations(uint256)
         external
         view
-        returns (uint32 blockTimestamp, int56 tickCumulative, uint160 secondsPerLiquidityCumulativeX128, bool initialized)
+        returns (
+            uint32 blockTimestamp,
+            int56 tickCumulative,
+            uint160 secondsPerLiquidityCumulativeX128,
+            bool initialized
+        )
     {
         // Always return current timestamp — makes oldest observation age == 0
         uint32 ts = uint32(block.timestamp);
