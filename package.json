@@ -10,12 +10,9 @@
     "node": ">=20.0.0"
   },
   "scripts": {
-    "test": "forge test",
-    "test:fork": "FOUNDRY_PROFILE=CI forge test",
-    "coverage": "forge coverage --report lcov --report summary"
+    "test": "forge test"
   },
   "dependencies": {
-    "@bananapus/core-v6": "^0.0.1",
-    "@openzeppelin/contracts": "^5.2.0"
+    "@bananapus/core-v6": "^0.0.1"
   }
 }
