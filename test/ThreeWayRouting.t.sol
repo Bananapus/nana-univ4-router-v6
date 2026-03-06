@@ -24,7 +24,7 @@ import {MockWETH} from "./mock/MockWETH.sol";
 import {JuiceboxSwapRouter} from "./utils/JuiceboxSwapRouter.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
-import {IUniswapV3SwapCallback} from "../lib/v3-core/contracts/interfaces/callback/IUniswapV3SwapCallback.sol";
+import {IUniswapV3SwapCallback} from "@uniswap/v3-core/contracts/interfaces/callback/IUniswapV3SwapCallback.sol";
 
 // Import Juicebox interfaces and structs from the hook file
 import {
@@ -35,12 +35,12 @@ import {
     IJBDirectory,
     IJBTerminalStore
 } from "../src/JBUniswapV4Hook.sol";
-import {IJBTerminal} from "@bananapus/core-v6/interfaces/IJBTerminal.sol";
+import {IJBTerminal} from "@bananapus/core-v6/src/interfaces/IJBTerminal.sol";
 import {IUniswapV3Factory} from "../src/interfaces/IUniswapV3Factory.sol";
-import {JBRuleset} from "@bananapus/core-v6/structs/JBRuleset.sol";
-import {JBRulesetMetadata} from "@bananapus/core-v6/structs/JBRulesetMetadata.sol";
-import {JBRulesetMetadataResolver} from "@bananapus/core-v6/libraries/JBRulesetMetadataResolver.sol";
-import {IJBRulesetApprovalHook} from "@bananapus/core-v6/interfaces/IJBRulesetApprovalHook.sol";
+import {JBRuleset} from "@bananapus/core-v6/src/structs/JBRuleset.sol";
+import {JBRulesetMetadata} from "@bananapus/core-v6/src/structs/JBRulesetMetadata.sol";
+import {JBRulesetMetadataResolver} from "@bananapus/core-v6/src/libraries/JBRulesetMetadataResolver.sol";
+import {IJBRulesetApprovalHook} from "@bananapus/core-v6/src/interfaces/IJBRulesetApprovalHook.sol";
 import {HookMiner} from "@uniswap/v4-periphery/src/utils/HookMiner.sol";
 
 // ============================================

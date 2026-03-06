@@ -31,15 +31,15 @@ import {
     IJBDirectory,
     IJBTerminalStore
 } from "../src/JBUniswapV4Hook.sol";
-import {IJBTerminal} from "@bananapus/core-v6/interfaces/IJBTerminal.sol";
-import {IJBMultiTerminal} from "@bananapus/core-v6/interfaces/IJBMultiTerminal.sol";
-import {IJBToken} from "@bananapus/core-v6/interfaces/IJBToken.sol";
-import {JBRuleset} from "@bananapus/core-v6/structs/JBRuleset.sol";
-import {JBRulesetMetadata} from "@bananapus/core-v6/structs/JBRulesetMetadata.sol";
+import {IJBTerminal} from "@bananapus/core-v6/src/interfaces/IJBTerminal.sol";
+import {IJBMultiTerminal} from "@bananapus/core-v6/src/interfaces/IJBMultiTerminal.sol";
+import {IJBToken} from "@bananapus/core-v6/src/interfaces/IJBToken.sol";
+import {JBRuleset} from "@bananapus/core-v6/src/structs/JBRuleset.sol";
+import {JBRulesetMetadata} from "@bananapus/core-v6/src/structs/JBRulesetMetadata.sol";
 import {IUniswapV3Factory} from "../src/interfaces/IUniswapV3Factory.sol";
 import {IUniswapV3Pool} from "../src/interfaces/IUniswapV3Pool.sol";
 import {HookMiner} from "@uniswap/v4-periphery/src/utils/HookMiner.sol";
-import {INonfungiblePositionManager} from "../lib/v3-periphery/contracts/interfaces/INonfungiblePositionManager.sol";
+import {INonfungiblePositionManager} from "@uniswap/v3-periphery/contracts/interfaces/INonfungiblePositionManager.sol";
 
 /// @title JBUniswapV4HookForkTest
 /// @notice Fork tests using mainnet addresses

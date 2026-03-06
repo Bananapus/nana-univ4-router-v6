@@ -4,8 +4,8 @@ pragma solidity ^0.8.24;
 import {Test} from "forge-std/Test.sol";
 import {TickMath} from "@uniswap/v4-core/src/libraries/TickMath.sol";
 import {FullMath} from "@uniswap/v4-core/src/libraries/FullMath.sol";
-import {UD60x18} from "../lib/prb-math/src/ud60x18/ValueType.sol";
-import {log2} from "../lib/prb-math/src/ud60x18/Math.sol";
+import {UD60x18} from "@prb/math/src/ud60x18/ValueType.sol";
+import {log2} from "@prb/math/src/ud60x18/Math.sol";
 
 contract SlippageCalcHarness {
     uint256 public constant TWAP_SLIPPAGE_DENOMINATOR = 10_000;
