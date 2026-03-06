@@ -68,11 +68,25 @@ contract MockJBDirectory {
         mockController = controller;
     }
 
-    function controllerOf(uint256 /* projectId */ ) external view returns (address) {
+    function controllerOf(
+        uint256 /* projectId */
+    )
+        external
+        view
+        returns (address)
+    {
         return mockController;
     }
 
-    function primaryTerminalOf(uint256, /* projectId */ address /* token */ ) external view returns (address) {
+    function primaryTerminalOf(
+        uint256,
+        /* projectId */
+        address /* token */
+    )
+        external
+        view
+        returns (address)
+    {
         return mockTerminal;
     }
 }
@@ -84,13 +98,23 @@ contract MockJBPrices {
         return 0;
     }
 
-    function setPricePerUnitOf(uint256 projectId, uint256 pricingCurrency, uint256 unitCurrency, uint256 price)
+    function setPricePerUnitOf(
+        uint256 projectId,
+        uint256 pricingCurrency,
+        uint256 unitCurrency,
+        uint256 price
+    )
         external
     {
         prices[projectId][pricingCurrency][unitCurrency] = price;
     }
 
-    function pricePerUnitOf(uint256 projectId, uint256 pricingCurrency, uint256 unitCurrency, uint256 /* decimals */ )
+    function pricePerUnitOf(
+        uint256 projectId,
+        uint256 pricingCurrency,
+        uint256 unitCurrency,
+        uint256 /* decimals */
+    )
         external
         view
         returns (uint256)
@@ -150,7 +174,11 @@ contract MockJBMultiTerminal {
         uint256 minReturnedTokens,
         string calldata,
         bytes calldata
-    ) external payable returns (uint256 beneficiaryTokenCount) {
+    )
+        external
+        payable
+        returns (uint256 beneficiaryTokenCount)
+    {
         lastProjectId = projectId;
         lastToken = token;
         lastAmount = amount;
@@ -180,7 +208,10 @@ contract MockJBMultiTerminal {
         uint256 minTokensReclaimed,
         address payable beneficiary,
         bytes calldata
-    ) external returns (uint256) {
+    )
+        external
+        returns (uint256)
+    {
         lastProjectId = projectId;
         lastToken = tokenToReclaim;
         lastAmount = cashOutCount;
@@ -267,7 +298,12 @@ contract MockJBTerminalStore {
         surplusPerToken[projectId][currency] = surplusAmount;
     }
 
-    function currentReclaimableSurplusOf(uint256 projectId, uint256 cashOutCount, uint256 currency, uint256)
+    function currentReclaimableSurplusOf(
+        uint256 projectId,
+        uint256 cashOutCount,
+        uint256 currency,
+        uint256
+    )
         external
         view
         returns (uint256)
@@ -304,7 +340,7 @@ contract MockUniswapV3Pool {
         token0 = _token0;
         token1 = _token1;
         fee = _fee;
-        sqrtPriceX96 = 79228162514264337593543950336; // sqrt(1.0) * 2^96
+        sqrtPriceX96 = 79_228_162_514_264_337_593_543_950_336; // sqrt(1.0) * 2^96
         tick = 0;
         priceMultiplier = 1e18;
     }
@@ -321,7 +357,7 @@ contract MockUniswapV3Pool {
 
         if (multiplier >= 0.9e18 && multiplier <= 1.1e18) {
             int256 priceRatio = int256(multiplier) - int256(1e18);
-            tick = int24((priceRatio * 10000) / int256(1e18));
+            tick = int24((priceRatio * 10_000) / int256(1e18));
         } else if (multiplier > 1.1e18) {
             if (multiplier >= 2e18) {
                 tick = 6931;
@@ -343,8 +379,8 @@ contract MockUniswapV3Pool {
                 tick = -1315 + int24((int256(multiplier) - int256(0.833e18)) * 1315 / int256(0.067e18));
             }
         }
-        if (tick > 887272) tick = 887272;
-        if (tick < -887272) tick = -887272;
+        if (tick > 887_272) tick = 887_272;
+        if (tick < -887_272) tick = -887_272;
     }
 
     function setLiquidity(uint128 _liquidity) external {
@@ -372,7 +408,13 @@ contract MockUniswapV3Pool {
         unlocked = true;
     }
 
-    function swap(address recipient, bool zeroForOne, int256 amountSpecified, uint160, bytes calldata data)
+    function swap(
+        address recipient,
+        bool zeroForOne,
+        int256 amountSpecified,
+        uint160,
+        bytes calldata data
+    )
         external
         returns (int256 amount0, int256 amount1)
     {
@@ -386,12 +428,12 @@ contract MockUniswapV3Pool {
         uint256 amountOut;
 
         if (zeroForOne) {
-            uint256 amountAfterFee = amountIn * (1000000 - fee) / 1000000;
+            uint256 amountAfterFee = amountIn * (1_000_000 - fee) / 1_000_000;
             amountOut = (amountAfterFee * priceMultiplier) / 1e18;
             amount0 = int256(amountIn);
             amount1 = -int256(amountOut);
         } else {
-            uint256 amountAfterFee = amountIn * (1000000 - fee) / 1000000;
+            uint256 amountAfterFee = amountIn * (1_000_000 - fee) / 1_000_000;
             amountOut = (amountAfterFee * 1e18) / priceMultiplier;
             amount0 = -int256(amountOut);
             amount1 = int256(amountIn);
@@ -439,7 +481,12 @@ contract MockUniswapV3Pool {
     function observations(uint256 index)
         external
         view
-        returns (uint32 blockTimestamp, int56 tickCumulative, uint160 secondsPerLiquidityCumulativeX128, bool initialized)
+        returns (
+            uint32 blockTimestamp,
+            int56 tickCumulative,
+            uint160 secondsPerLiquidityCumulativeX128,
+            bool initialized
+        )
     {
         if (index == 0) {
             uint32 currentTimestamp = uint32(block.timestamp);
@@ -522,7 +569,7 @@ contract StressAndOrderOfMagnitudeTest is Test {
     JuiceboxSwapRouter jbSwapRouter;
     PoolModifyLiquidityTest modifyLiquidityRouter;
 
-    uint160 constant SQRT_PRICE_1_1 = 79228162514264337593543950336;
+    uint160 constant SQRT_PRICE_1_1 = 79_228_162_514_264_337_593_543_950_336;
     bytes constant ZERO_BYTES = "";
 
     MockERC20 token0;
@@ -572,12 +619,7 @@ contract StressAndOrderOfMagnitudeTest is Test {
             testWETH
         );
 
-        (, bytes32 salt) = HookMiner.find(
-            address(this),
-            flags,
-            type(JBUniswapV4Hook).creationCode,
-            constructorArgs
-        );
+        (, bytes32 salt) = HookMiner.find(address(this), flags, type(JBUniswapV4Hook).creationCode, constructorArgs);
 
         hook = new JBUniswapV4Hook{salt: salt}(
             IPoolManager(address(manager)),
@@ -597,12 +639,12 @@ contract StressAndOrderOfMagnitudeTest is Test {
         }
 
         // Create v3 pool for token0/token1 pair
-        mockV3Pool = MockUniswapV3Pool(mockV3Factory.createPool(address(token0), address(token1), 10000));
+        mockV3Pool = MockUniswapV3Pool(mockV3Factory.createPool(address(token0), address(token1), 10_000));
         mockV3Pool.setLiquidity(1000e18);
 
         // Mint tokens to the v3 pool
-        token0.mint(address(mockV3Pool), 10000 ether);
-        token1.mint(address(mockV3Pool), 10000 ether);
+        token0.mint(address(mockV3Pool), 10_000 ether);
+        token1.mint(address(mockV3Pool), 10_000 ether);
 
         // Set up a Juicebox project for token0
         mockJBTokens.setProjectId(address(token0), 123);
@@ -736,7 +778,7 @@ contract StressAndOrderOfMagnitudeTest is Test {
             // Use a high but safe sqrtPriceX96: type(uint128).max fits in the squaring
             // getSqrtPriceAtTick for tick ~443636 gives sqrtPriceX96 ~ type(uint128).max
             // Use tick 443636 which is well within bounds
-            uint160 safeSqrtPrice = TickMath.getSqrtPriceAtTick(443636);
+            uint160 safeSqrtPrice = TickMath.getSqrtPriceAtTick(443_636);
             assertTrue(safeSqrtPrice <= type(uint128).max, "Safe price should be <= uint128.max");
 
             PoolKey memory safeKey = PoolKey({
@@ -900,8 +942,7 @@ contract StressAndOrderOfMagnitudeTest is Test {
 
         // At least one direction should produce a non-zero result for 1 ether input
         assertTrue(
-            resultZeroForOne > 0 || resultOneForZero > 0,
-            "At least one direction should produce non-zero output"
+            resultZeroForOne > 0 || resultOneForZero > 0, "At least one direction should produce non-zero output"
         );
     }
 
@@ -954,8 +995,8 @@ contract StressAndOrderOfMagnitudeTest is Test {
             assertEq(minTokens, 1000e18, "1 unit at 0 decimals should return 1000e18 tokens");
         } else {
             // 1 smallest unit normalizes to (1 * 1e18) / 10^decimals
-            // tokens = mulDiv(1000e18, normalized, 1e18) = 1000 * normalized / 1e18 * 1e18 = 1000 * (1e18 / 10^decimals)
-            // = 1000e18 / 10^decimals
+            // tokens = mulDiv(1000e18, normalized, 1e18) = 1000 * normalized / 1e18 * 1e18 = 1000 * (1e18 /
+            // 10^decimals) = 1000e18 / 10^decimals
             uint256 expectedMin = (1000e18) / (10 ** uint256(decimals));
             assertEq(
                 minTokens,
@@ -997,9 +1038,7 @@ contract StressAndOrderOfMagnitudeTest is Test {
             hook.calculateExpectedTokensWithCurrency(projectId, address(0), 1_000_000 ether);
         uint256 expectedMillionExact = uint256(maxWeight) * 1_000_000;
         assertEq(
-            expectedTokensMillionEth,
-            expectedMillionExact,
-            "Max weight * 1M ETH should produce weight * 1M tokens"
+            expectedTokensMillionEth, expectedMillionExact, "Max weight * 1M ETH should produce weight * 1M tokens"
         );
 
         console.log("Max weight * 1000 ETH:", expectedTokens);

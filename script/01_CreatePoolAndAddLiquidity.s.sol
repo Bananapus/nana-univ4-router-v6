@@ -73,7 +73,6 @@ contract CreatePoolAndAddLiquidityScript is BaseScript, LiquidityHelpers {
         if (currency0.isAddressZero()) valueToPass += amount0Max;
         if (currency1.isAddressZero()) valueToPass += amount1Max;
 
-
         vm.startBroadcast();
         tokenApprovals();
 
