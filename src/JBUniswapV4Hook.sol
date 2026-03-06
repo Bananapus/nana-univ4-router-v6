@@ -29,7 +29,7 @@ import {IWETH} from "./interfaces/IWETH.sol";
 // Uniswap v3 interfaces
 import {IUniswapV3Factory} from "./interfaces/IUniswapV3Factory.sol";
 import {IUniswapV3Pool} from "./interfaces/IUniswapV3Pool.sol";
-import {IUniswapV3SwapCallback} from "../lib/v3-core/contracts/interfaces/callback/IUniswapV3SwapCallback.sol";
+import {IUniswapV3SwapCallback} from "@uniswap/v3-core/contracts/interfaces/callback/IUniswapV3SwapCallback.sol";
 
 // v3 oracle data is read via interface calls, no library imports needed
 
@@ -37,20 +37,20 @@ import {IUniswapV3SwapCallback} from "../lib/v3-core/contracts/interfaces/callba
 import {Oracle} from "./libraries/Oracle.sol";
 
 // Import Juicebox protocol interfaces
-import {IJBTokens} from "@bananapus/core-v6/interfaces/IJBTokens.sol";
-import {IJBToken} from "@bananapus/core-v6/interfaces/IJBToken.sol";
-import {IJBDirectory} from "@bananapus/core-v6/interfaces/IJBDirectory.sol";
-import {IJBMultiTerminal} from "@bananapus/core-v6/interfaces/IJBMultiTerminal.sol";
-import {IJBController} from "@bananapus/core-v6/interfaces/IJBController.sol";
-import {IJBTerminal} from "@bananapus/core-v6/interfaces/IJBTerminal.sol";
+import {IJBTokens} from "@bananapus/core-v6/src/interfaces/IJBTokens.sol";
+import {IJBToken} from "@bananapus/core-v6/src/interfaces/IJBToken.sol";
+import {IJBDirectory} from "@bananapus/core-v6/src/interfaces/IJBDirectory.sol";
+import {IJBMultiTerminal} from "@bananapus/core-v6/src/interfaces/IJBMultiTerminal.sol";
+import {IJBController} from "@bananapus/core-v6/src/interfaces/IJBController.sol";
+import {IJBTerminal} from "@bananapus/core-v6/src/interfaces/IJBTerminal.sol";
 
-import {IJBPrices} from "@bananapus/core-v6/interfaces/IJBPrices.sol";
-import {IJBTerminalStore} from "@bananapus/core-v6/interfaces/IJBTerminalStore.sol";
+import {IJBPrices} from "@bananapus/core-v6/src/interfaces/IJBPrices.sol";
+import {IJBTerminalStore} from "@bananapus/core-v6/src/interfaces/IJBTerminalStore.sol";
 
-import {JBRuleset} from "@bananapus/core-v6/structs/JBRuleset.sol";
-import {JBRulesetMetadata} from "@bananapus/core-v6/structs/JBRulesetMetadata.sol";
-import {JBRulesetMetadataResolver} from "@bananapus/core-v6/libraries/JBRulesetMetadataResolver.sol";
-import {JBConstants} from "@bananapus/core-v6/libraries/JBConstants.sol";
+import {JBRuleset} from "@bananapus/core-v6/src/structs/JBRuleset.sol";
+import {JBRulesetMetadata} from "@bananapus/core-v6/src/structs/JBRulesetMetadata.sol";
+import {JBRulesetMetadataResolver} from "@bananapus/core-v6/src/libraries/JBRulesetMetadataResolver.sol";
+import {JBConstants} from "@bananapus/core-v6/src/libraries/JBConstants.sol";
 
 
 /// @title JBUniswapV4Hook
