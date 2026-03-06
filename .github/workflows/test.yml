@@ -18,6 +18,6 @@ jobs:
       - name: Install Foundry
         uses: foundry-rs/foundry-toolchain@v1
       - name: Run tests
-        run: forge test --fail-fast
+        run: forge test --fail-fast --skip "*/script/**"
       - name: Check contract sizes
         run: forge build --sizes --skip "*/test/**" --skip "*/script/**"
