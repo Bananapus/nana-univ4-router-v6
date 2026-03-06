@@ -8,9 +8,9 @@ import {Hooks} from "@uniswap/v4-core/src/libraries/Hooks.sol";
 import {HookMiner} from "@uniswap/v4-periphery/src/utils/HookMiner.sol";
 
 import {JBUniswapV4Hook} from "src/JBUniswapV4Hook.sol";
-import {IJBTokens} from "@bananapus/core-v6/interfaces/IJBTokens.sol";
-import {IJBDirectory} from "@bananapus/core-v6/interfaces/IJBDirectory.sol";
-import {IJBPrices} from "@bananapus/core-v6/interfaces/IJBPrices.sol";
+import {IJBTokens} from "@bananapus/core-v6/src/interfaces/IJBTokens.sol";
+import {IJBDirectory} from "@bananapus/core-v6/src/interfaces/IJBDirectory.sol";
+import {IJBPrices} from "@bananapus/core-v6/src/interfaces/IJBPrices.sol";
 import {IUniswapV3Factory} from "src/interfaces/IUniswapV3Factory.sol";
 
 contract DeployScript is Script {
