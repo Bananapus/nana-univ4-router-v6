@@ -1,34 +1,23 @@
-name: Test Suite
-
+name: test
 on:
+  push:
+    branches:
+      - main
+  pull_request:
+    branches:
+      - main
   workflow_dispatch:
-  # push:
-  # pull_request:
-
-env:
-  FOUNDRY_PROFILE: ci
 
 jobs:
-  test:
-    name: Foundry Project
+  forge-test:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
         with:
           submodules: recursive
-
       - name: Install Foundry
         uses: foundry-rs/foundry-toolchain@v1
-        with:
-          version: stable
-
-      - name: Build
-        run: |
-          forge --version
-          forge build --sizes
-        id: build
-
-      - name: Test
-        run: |
-          forge test -vvv
-        id: test
+      - name: Run tests
+        run: forge test --fail-fast --skip "*/script/**"
+      - name: Check contract sizes
+        run: forge build --sizes --skip "*/test/**" --skip "*/script/**"

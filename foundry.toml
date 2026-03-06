@@ -1,18 +1,23 @@
 [profile.default]
-evm_version = "cancun"
-ffi = true
-fs_permissions = [
-    {access = "read-write", path = ".forge-snapshots/"},
-    {access = "read", path = "../nana/"}
-]
-libs = ["lib"]
-out = "out"
-# solc_version = "0.8.26"  # Commented out to allow auto-detection of versions from pragma statements
-src = "src"
+solc = '0.8.24'
+evm_version = 'cancun'
+optimizer_runs = 200
+libs = ["node_modules", "lib"]
+fs_permissions = [{ access = "read-write", path = "./"}]
 via_ir = true
-optimizer = true
+
+[profile.ci_sizes]
 optimizer_runs = 200
 
-[rpc_endpoints]
-mainnet = "${MAINNET_RPC_URL}"
+[fuzz]
+runs = 4096
 
+[invariant]
+runs = 1024
+depth = 100
+fail_on_revert = false
+
+[fmt]
+number_underscore = "thousands"
+multiline_func_header = "all"
+wrap_comments = true

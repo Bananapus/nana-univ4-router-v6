@@ -43,7 +43,15 @@ contract JuiceboxSwapRouter {
     /// @param params The swap parameters
     /// @param amountOutMin Minimum tokens user accepts (slippage protection)
     /// @return delta The balance delta from the swap
-    function swap(PoolKey memory key, SwapParams memory params, uint256 amountOutMin) external payable returns (BalanceDelta delta) {
+    function swap(
+        PoolKey memory key,
+        SwapParams memory params,
+        uint256 amountOutMin
+    )
+        external
+        payable
+        returns (BalanceDelta delta)
+    {
         // Set msgSender for hooks to query
         _msgSender = msg.sender;
 
@@ -114,7 +122,7 @@ contract JuiceboxSwapRouter {
                 // Swapping currency1 for currency0: output is delta0 (positive)
                 outputAmount = delta0 > 0 ? uint256(delta0) : 0;
             }
-            
+
             if (outputAmount < amountOutMin) {
                 revert("Output below minimum");
             }

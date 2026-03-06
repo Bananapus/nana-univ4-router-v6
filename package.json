@@ -1,0 +1,26 @@
+{
+  "name": "@bananapus/univ4-router-v6",
+  "version": "0.0.1",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Bananapus/nana-univ4-router-v6"
+  },
+  "engines": {
+    "node": ">=20.0.0"
+  },
+  "scripts": {
+    "test": "forge test"
+  },
+  "dependencies": {
+    "@bananapus/core-v6": "^0.0.1",
+    "@openzeppelin/contracts": "^5.2.0",
+    "@openzeppelin/uniswap-hooks": "^1.1.1",
+    "@prb/math": "^4.1.0",
+    "@uniswap/v3-core": "github:Uniswap/v3-core#0.8",
+    "@uniswap/v3-periphery": "github:Uniswap/v3-periphery#0.8",
+    "@uniswap/v4-core": "^1.0.2",
+    "@uniswap/v4-periphery": "^1.0.3",
+    "solmate": "^6.8.0"
+  }
+}
