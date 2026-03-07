@@ -1645,8 +1645,7 @@ contract JuiceboxHookTest is Test {
             try swapRouter.swap(key, params, PoolSwapTest.TestSettings(false, false), abi.encode(uint256(100))) {} // 1%
             // slippage
             // Swap succeeded
-
-            catch {
+                catch {
                 // Skip if swap fails (e.g., due to liquidity)
                 break;
             }
@@ -1755,7 +1754,6 @@ contract JuiceboxHookTest is Test {
         // NOTE: Actual Juicebox routing is disabled in this version due to architectural constraints
         // The fix to the delta calculation is still correct (line 526 in JBUniswapV4Hook.sol)
         // In production, this would route through Juicebox when jbExpectedTokens > uniswapExpectedTokens
-
             catch {
             // Swap may fail due to liquidity constraints - this is okay
         }
