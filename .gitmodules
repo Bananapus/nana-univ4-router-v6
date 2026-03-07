@@ -1,0 +1,6 @@
+[submodule "lib/hookmate"]
+	path = lib/hookmate
+	url = https://github.com/akshatmittal/hookmate.git
+[submodule "lib/forge-std"]
+	path = lib/forge-std
+	url = https://github.com/foundry-rs/forge-std.git
