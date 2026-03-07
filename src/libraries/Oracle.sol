@@ -295,6 +295,7 @@ library Oracle {
     /// @return tickCumulative The tick * time elapsed since the pool was first initialized, as of `secondsAgo`
     /// @return secondsPerLiquidityCumulativeX128 The time elapsed / max(1, liquidity) since the pool was first
     /// initialized, as of `secondsAgo`
+    // slither-disable-next-line divide-before-multiply
     function observeSingle(
         Observation[65_535] storage self,
         uint32 time,

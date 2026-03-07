@@ -695,7 +695,7 @@ contract ThreeWayRoutingTest is Test {
     /// And V4 pool has 1:1 pricing
     /// When the user buys token0 with 1 ether of token1
     /// Then JB should give the best output (10000 tokens vs ~1 from V4/V3)
-    /// And a BestRouteSelected event should be emitted with routeType "juicebox"
+    /// And a BestRouteSelected event should be emitted with routeType 2 (juicebox)
     function test_ThreeWay_JBWins() public {
         // Set JB weight very high so JB gives way more tokens than Uniswap
         mockJBController.setWeight(PROJECT_ID, 10_000e18);
@@ -712,7 +712,7 @@ contract ThreeWayRoutingTest is Test {
 
         // Set expectEmit right before the swap call
         vm.expectEmit(true, false, false, false);
-        emit JBUniswapV4Hook.BestRouteSelected(id, "juicebox", 0);
+        emit JBUniswapV4Hook.BestRouteSelected(id, 2, 0);
 
         jbSwapRouter.swap(key, params, 0);
 
@@ -729,7 +729,7 @@ contract ThreeWayRoutingTest is Test {
     /// And V4 pool has 1:1 pricing
     /// When the user sells token0 for token1
     /// Then V3 should give the best output
-    /// And a BestRouteSelected event should be emitted with routeType "v3"
+    /// And a BestRouteSelected event should be emitted with routeType 1 (v3)
     function test_ThreeWay_V3Wins() public {
         vm.warp(block.timestamp + 10_000);
 
@@ -749,7 +749,7 @@ contract ThreeWayRoutingTest is Test {
             SwapParams({zeroForOne: true, amountSpecified: -1 ether, sqrtPriceLimitX96: TickMath.MIN_SQRT_PRICE + 1});
 
         vm.expectEmit(true, false, false, false);
-        emit JBUniswapV4Hook.BestRouteSelected(id, "v3", 0);
+        emit JBUniswapV4Hook.BestRouteSelected(id, 1, 0);
 
         jbSwapRouter.swap(key, params, 0);
 
@@ -765,7 +765,7 @@ contract ThreeWayRoutingTest is Test {
     /// And V4 pool has 1:1 pricing
     /// When the user sells token0 for token1
     /// Then V4 should be the best option (default passthrough)
-    /// And a BestRouteSelected event should be emitted with routeType "v4"
+    /// And a BestRouteSelected event should be emitted with routeType 0 (v4)
     function test_ThreeWay_V4Wins() public {
         // Make JB unattractive
         mockJBTerminalStore.setSurplus(PROJECT_ID, address(token1), 0.01 ether);
@@ -781,7 +781,7 @@ contract ThreeWayRoutingTest is Test {
             SwapParams({zeroForOne: true, amountSpecified: -1 ether, sqrtPriceLimitX96: TickMath.MIN_SQRT_PRICE + 1});
 
         vm.expectEmit(true, false, false, false);
-        emit JBUniswapV4Hook.BestRouteSelected(id, "v4", 0);
+        emit JBUniswapV4Hook.BestRouteSelected(id, 0, 0);
 
         jbSwapRouter.swap(key, params, 0);
 
@@ -816,7 +816,7 @@ contract ThreeWayRoutingTest is Test {
             SwapParams({zeroForOne: true, amountSpecified: -1 ether, sqrtPriceLimitX96: TickMath.MIN_SQRT_PRICE + 1});
 
         vm.expectEmit(true, false, false, false);
-        emit JBUniswapV4Hook.BestRouteSelected(id, "v4", 0);
+        emit JBUniswapV4Hook.BestRouteSelected(id, 0, 0);
 
         jbSwapRouter.swap(key, params, 0);
 
@@ -880,7 +880,7 @@ contract ThreeWayRoutingTest is Test {
             SwapParams({zeroForOne: false, amountSpecified: -1 ether, sqrtPriceLimitX96: TickMath.MAX_SQRT_PRICE - 1});
 
         vm.expectEmit(true, false, false, false);
-        emit JBUniswapV4Hook.BestRouteSelected(newId, "juicebox", 0);
+        emit JBUniswapV4Hook.BestRouteSelected(newId, 2, 0);
 
         jbSwapRouter.swap(newKey, params, 0);
 
@@ -967,7 +967,7 @@ contract ThreeWayRoutingTest is Test {
             SwapParams({zeroForOne: false, amountSpecified: -1 ether, sqrtPriceLimitX96: TickMath.MAX_SQRT_PRICE - 1});
 
         vm.expectEmit(true, false, false, false);
-        emit JBUniswapV4Hook.BestRouteSelected(id, "juicebox", 0);
+        emit JBUniswapV4Hook.BestRouteSelected(id, 2, 0);
 
         jbSwapRouter.swap(key, params, 0);
 
@@ -1000,7 +1000,7 @@ contract ThreeWayRoutingTest is Test {
             SwapParams({zeroForOne: true, amountSpecified: -1 ether, sqrtPriceLimitX96: TickMath.MIN_SQRT_PRICE + 1});
 
         vm.expectEmit(true, false, false, false);
-        emit JBUniswapV4Hook.BestRouteSelected(id, "juicebox", 0);
+        emit JBUniswapV4Hook.BestRouteSelected(id, 2, 0);
 
         jbSwapRouter.swap(key, params, 0);
 
@@ -1067,7 +1067,7 @@ contract ThreeWayRoutingTest is Test {
             SwapParams({zeroForOne: true, amountSpecified: -1 ether, sqrtPriceLimitX96: TickMath.MIN_SQRT_PRICE + 1});
 
         vm.expectEmit(true, false, false, false);
-        emit JBUniswapV4Hook.BestRouteSelected(ethId, "juicebox", 0);
+        emit JBUniswapV4Hook.BestRouteSelected(ethId, 2, 0);
 
         jbSwapRouter.swap{value: 1 ether}(ethKey, params, 0);
 

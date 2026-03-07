@@ -148,6 +148,10 @@ contract JBUniswapV4Hook is BaseHook, IUniswapV3SwapCallback {
     /// @notice The denominator used when calculating TWAP slippage percent values.
     uint256 public constant TWAP_SLIPPAGE_DENOMINATOR = 10_000;
 
+    /// @notice V3 fee tiers to search, ordered by commonality.
+    /// 3000 = 0.3%, 500 = 0.05%, 10000 = 1%, 100 = 0.01%.
+    uint24[4] internal _FEE_TIERS = [uint24(3000), uint24(500), uint24(10_000), uint24(100)];
+
     //*********************************************************************//
     // --------------------- public stored properties -------------------- //
     //*********************************************************************//
@@ -166,11 +170,8 @@ contract JBUniswapV4Hook is BaseHook, IUniswapV3SwapCallback {
     event RouteSelected(PoolId indexed poolId, bool useJuicebox, uint256 expectedTokens);
 
     /// @notice Emitted when the best route is selected among v3, v4, and Juicebox
-    event BestRouteSelected(
-        PoolId indexed poolId,
-        string routeType, // "v3", "v4", or "juicebox"
-        uint256 expectedTokens
-    );
+    /// @param routeType 0 = v4, 1 = v3, 2 = juicebox
+    event BestRouteSelected(PoolId indexed poolId, uint8 routeType, uint256 expectedTokens);
 
     //*********************************************************************//
     // -------------------------- constructor ---------------------------- //
@@ -197,6 +198,7 @@ contract JBUniswapV4Hook is BaseHook, IUniswapV3SwapCallback {
         DIRECTORY = directory;
         PRICES = prices;
         V3_FACTORY = v3Factory;
+        // slither-disable-next-line missing-zero-check
         WETH = wrappedNativeEth;
     }
 
@@ -331,14 +333,16 @@ contract JBUniswapV4Hook is BaseHook, IUniswapV3SwapCallback {
 
         // Get the terminal store for the project
         try IJBMultiTerminal(address(terminal)).STORE() returns (IJBTerminalStore store) {
-            // Get the current reclaimable surplus for the project
-            // This represents how much value can be reclaimed for the given token amount
-            return store.currentReclaimableSurplusOf(
+            // Get the current reclaimable surplus for the project (gross, before fees)
+            uint256 grossReclaim = store.currentReclaimableSurplusOf(
                 projectId,
                 tokenAmountIn,
                 uint32(uint160(outputToken)), // the currency id of the output token
                 _getTokenDecimals(outputToken)
             );
+            // Deduct JB protocol fee (2.5%): amount * FEE / MAX_FEE (25 / 1000)
+            // Conservative: if hook is feeless, estimate is slightly low → routes to Uniswap (still good).
+            return grossReclaim - FullMath.mulDiv(grossReclaim, 25, 1000);
         } catch {
             return 0;
         }
@@ -351,6 +355,7 @@ contract JBUniswapV4Hook is BaseHook, IUniswapV3SwapCallback {
     /// @param amountIn The input amount
     /// @param zeroForOne Whether swapping token0 for token1
     /// @return estimatedOut The estimated output amount
+    // slither-disable-next-line incorrect-equality
     function estimateUniswapOutput(
         PoolId poolId,
         PoolKey memory key,
@@ -365,7 +370,9 @@ contract JBUniswapV4Hook is BaseHook, IUniswapV3SwapCallback {
         uint160 sqrtPriceX96TWAP = _getTWAPSqrtPrice(poolId);
 
         // If TWAP is not available (not enough observations), fallback to spot price
+        // slither-disable-next-line incorrect-equality
         if (sqrtPriceX96TWAP == 0) {
+            // slither-disable-next-line unused-return
             (sqrtPriceX96TWAP,,,) = poolManager.getSlot0(poolId);
         }
 
@@ -424,11 +431,13 @@ contract JBUniswapV4Hook is BaseHook, IUniswapV3SwapCallback {
         uint32 currentTime = uint32(block.timestamp);
 
         // Get tick cumulative for current time
+        // slither-disable-next-line unused-return
         (int48 tickCumulativeCurrent,) = observations[poolId].observeSingle({
             time: currentTime, secondsAgo: 0, tick: tick, index: index, liquidity: liquidity, cardinality: cardinality
         });
 
         // Get tick cumulative for secondsAgo
+        // slither-disable-next-line unused-return
         (int48 tickCumulativePast,) = observations[poolId].observeSingle({
             time: currentTime,
             secondsAgo: secondsAgo,
@@ -461,15 +470,45 @@ contract JBUniswapV4Hook is BaseHook, IUniswapV3SwapCallback {
         // Determine input/output tokens based on swap direction
         address inputToken = zeroForOne ? token0 : token1;
         address outputToken = zeroForOne ? token1 : token0;
-        estimatedOut = _getQuote({projectToken: outputToken, amountIn: amountIn, terminalToken: inputToken});
+        (estimatedOut,,) = _getQuote({projectToken: outputToken, amountIn: amountIn, terminalToken: inputToken});
         return estimatedOut;
     }
 
-    /// @notice Get a quote based on the TWAP
+    /// @notice Find the V3 pool with highest liquidity across all fee tiers.
+    /// @param tokenA First token in the pair
+    /// @param tokenB Second token in the pair
+    /// @return bestPool The address of the best pool (address(0) if none found)
+    /// @return bestFee The fee tier of the best pool
+    function _findBestV3Pool(address tokenA, address tokenB) internal view returns (address bestPool, uint24 bestFee) {
+        uint128 bestLiquidity;
+        for (uint256 i; i < 4; i++) {
+            // slither-disable-next-line calls-loop
+            try V3_FACTORY.getPool(tokenA, tokenB, _FEE_TIERS[i]) returns (address poolAddr) {
+                if (poolAddr == address(0)) continue;
+                // slither-disable-next-line calls-loop
+                try IUniswapV3Pool(poolAddr).liquidity() returns (uint128 liq) {
+                    if (liq > bestLiquidity || (bestPool == address(0) && liq == 0)) {
+                        bestLiquidity = liq;
+                        bestPool = poolAddr;
+                        bestFee = _FEE_TIERS[i];
+                    }
+                } catch {
+                    continue;
+                }
+            } catch {
+                continue;
+            }
+        }
+    }
+
+    /// @notice Get a quote based on the TWAP from the best V3 pool
     /// @param projectToken The token being received (quote token)
     /// @param amountIn The number of terminal tokens being used to swap
     /// @param terminalToken The token being paid in (base token)
     /// @return amountOut The expected number of tokens to receive
+    /// @return v3Pool The V3 pool address used for the quote
+    /// @return poolFee The fee tier of the V3 pool used
+    // slither-disable-next-line unused-return
     function _getQuote(
         address projectToken,
         uint256 amountIn,
@@ -477,28 +516,24 @@ contract JBUniswapV4Hook is BaseHook, IUniswapV3SwapCallback {
     )
         internal
         view
-        returns (uint256 amountOut)
+        returns (uint256 amountOut, address v3Pool, uint24 poolFee)
     {
-        // Get a reference to the pool that'll be used to make the swap.
-        address v3Pool;
-        try V3_FACTORY.getPool({tokenA: projectToken, tokenB: terminalToken, fee: 10_000}) returns (address poolAddr) {
-            v3Pool = poolAddr;
-        } catch {
-            return 0;
-        }
+        // Find the best V3 pool across all fee tiers.
+        (v3Pool, poolFee) = _findBestV3Pool(projectToken, terminalToken);
 
-        // Make sure the pool exists, if not, return an empty quote.
-        if (v3Pool == address(0)) return 0;
+        // Make sure a pool exists, if not, return an empty quote.
+        if (v3Pool == address(0)) return (0, address(0), 0);
 
         IUniswapV3Pool pool = IUniswapV3Pool(v3Pool);
 
         // If there is a contract at the address, try to get the pool's slot 0.
+        // slither-disable-next-line unused-return
         try pool.slot0() returns (uint160, int24, uint16, uint16, uint16, uint8, bool unlocked) {
-            // If the pool hasn't been initialized, return an empty quote.
-            if (!unlocked) return 0;
+            // Pool is either uninitialized (sqrtPriceX96 == 0) or locked (reentrancy guard active); skip it.
+            if (!unlocked) return (0, address(0), 0);
         } catch {
             // If the address is invalid, return an empty quote.
-            return 0;
+            return (0, address(0), 0);
         }
 
         // Use the standard TWAP window
@@ -526,24 +561,29 @@ contract JBUniswapV4Hook is BaseHook, IUniswapV3SwapCallback {
                 arithmeticMeanTick = tick;
                 liquidity = pool.liquidity();
             } catch {
-                return 0;
+                return (0, address(0), 0);
             }
         } else {
             try this._consult({pool: pool, secondsAgo: uint32(twapWindow)}) returns (int24 tick, uint128 liq) {
                 arithmeticMeanTick = tick;
                 liquidity = liq;
             } catch {
-                return 0;
+                return (0, address(0), 0);
             }
         }
 
         // If there's no liquidity, return an empty quote.
-        if (liquidity == 0) return 0;
+        if (liquidity == 0) return (0, address(0), 0);
 
         // Get a quote based on this TWAP tick.
         amountOut = _getQuoteAtTick({
             tick: arithmeticMeanTick, baseAmount: uint128(amountIn), baseToken: terminalToken, quoteToken: projectToken
         });
+
+        // Deduct V3 pool fee (hundredths of a bip, same scale as V4).
+        if (poolFee > 0) {
+            amountOut = amountOut - FullMath.mulDiv(amountOut, poolFee, 1_000_000);
+        }
     }
 
     /// @notice Calculates time-weighted means of tick and liquidity for a given Uniswap V3 pool
@@ -659,6 +699,7 @@ contract JBUniswapV4Hook is BaseHook, IUniswapV3SwapCallback {
         uint32 oldestAllowedTime = currentTime > TWAP_PERIOD ? currentTime - TWAP_PERIOD : 0;
 
         // Get oldest observation timestamp
+        // slither-disable-next-line weak-prng
         Oracle.Observation memory oldestObs = observations[poolId][(state.index + 1) % state.cardinality];
         if (!oldestObs.initialized) {
             oldestObs = observations[poolId][0];
@@ -848,6 +889,7 @@ contract JBUniswapV4Hook is BaseHook, IUniswapV3SwapCallback {
         // Auto-grow cardinality when at capacity to enable TWAP functionality
         // Grow when we're about to wrap around (index == cardinality - 1) and cardinality == cardinalityNext
         uint16 newCardinalityNext = state.cardinalityNext;
+        // slither-disable-next-line incorrect-equality
         if (state.cardinality == state.cardinalityNext && state.index == state.cardinality - 1) {
             // Double the cardinality, capped at a reasonable maximum (e.g., 256 for 30-minute TWAP with 1-hour window)
             // This allows storing ~256 observations = ~128 hours of data at 1 observation per 30 minutes
@@ -1046,27 +1088,27 @@ contract JBUniswapV4Hook is BaseHook, IUniswapV3SwapCallback {
         (address v3Token0, address v3Token1, bool v3ZeroForOne) =
             _getTokenOrdering({tokenA: v3TokenIn, tokenB: v3TokenOut});
         uint256 uniswapV3ExpectedTokens;
-        try this.estimateUniswapV3Output({
-            token0: v3Token0, token1: v3Token1, amountIn: amountIn, zeroForOne: v3ZeroForOne
-        }) returns (
-            uint256 tokens
-        ) {
-            uniswapV3ExpectedTokens = tokens;
-        } catch {
-            uniswapV3ExpectedTokens = 0;
+        uint24 v3Fee;
+        {
+            // _getQuote discovers the best V3 pool across all fee tiers
+            address inputToken = v3ZeroForOne ? v3Token0 : v3Token1;
+            address outputToken_ = v3ZeroForOne ? v3Token1 : v3Token0;
+            (uniswapV3ExpectedTokens,, v3Fee) =
+                _getQuote({projectToken: outputToken_, amountIn: amountIn, terminalToken: inputToken});
         }
 
         // Compare v3 vs v4 prices
         bool v3BetterThanV4 = uniswapV3ExpectedTokens > uniswapV4ExpectedTokens;
 
         // Determine the best option among v3, v4, and Juicebox
+        // Route types: 0 = v4, 1 = v3, 2 = juicebox
         uint256 bestExpectedTokens = uniswapV4ExpectedTokens;
-        string memory bestRoute = "v4";
+        uint8 bestRoute = 0;
 
         // Check if v3 is better than v4
         if (v3BetterThanV4 && uniswapV3ExpectedTokens > 0) {
             bestExpectedTokens = uniswapV3ExpectedTokens;
-            bestRoute = "v3";
+            bestRoute = 1;
         }
 
         bool jbTerminalAvailable = address(jbTerminal) != address(0) && address(jbTerminal).code.length > 0;
@@ -1074,7 +1116,7 @@ contract JBUniswapV4Hook is BaseHook, IUniswapV3SwapCallback {
 
         if (juiceboxBetterThanUniswap && juiceboxExpectedOutput > 0) {
             bestExpectedTokens = juiceboxExpectedOutput;
-            bestRoute = "juicebox";
+            bestRoute = 2;
         }
 
         emit BestRouteSelected(poolId, bestRoute, bestExpectedTokens);
@@ -1109,7 +1151,8 @@ contract JBUniswapV4Hook is BaseHook, IUniswapV3SwapCallback {
                 amountIn: amountIn,
                 zeroForOne: v3ZeroForOne,
                 originalTokenIn: tokenIn,
-                originalTokenOut: tokenOut
+                originalTokenOut: tokenOut,
+                fee: v3Fee
             });
 
             // Enforce amountOutMin guarantee
@@ -1135,6 +1178,7 @@ contract JBUniswapV4Hook is BaseHook, IUniswapV3SwapCallback {
     /// @param terminal The Juicebox terminal to use
     /// @param amountOutMin Minimum tokens user accepts (enforced by JB terminal)
     /// @return outputReceived The amount of output tokens received
+    // slither-disable-next-line arbitrary-send-eth
     function _routeThroughJuicebox(
         uint256 projectId,
         Currency inputCurrency,
@@ -1206,20 +1250,23 @@ contract JBUniswapV4Hook is BaseHook, IUniswapV3SwapCallback {
     /// @param zeroForOne Swap direction (true = token0 → token1)
     /// @param originalTokenIn Original input token (may be native ETH)
     /// @param originalTokenOut Original output token (may be native ETH)
+    /// @param fee The V3 fee tier to use (discovered by _findBestV3Pool)
     /// @return outputReceived The amount of output tokens received
+    // slither-disable-next-line arbitrary-send-eth
     function _routeThroughV3(
         address token0,
         address token1,
         uint256 amountIn,
         bool zeroForOne,
         address originalTokenIn,
-        address originalTokenOut
+        address originalTokenOut,
+        uint24 fee
     )
         internal
         returns (uint256 outputReceived)
     {
-        // Get the v3 pool (10000 fee tier)
-        address v3Pool = V3_FACTORY.getPool({tokenA: token0, tokenB: token1, fee: 10_000});
+        // Get the v3 pool for the discovered fee tier
+        address v3Pool = V3_FACTORY.getPool({tokenA: token0, tokenB: token1, fee: fee});
         if (v3Pool == address(0)) revert JBUniswapV4Hook_V3PoolNotFound();
 
         // Check pool is unlocked
@@ -1250,7 +1297,7 @@ contract JBUniswapV4Hook is BaseHook, IUniswapV3SwapCallback {
                 zeroForOne: zeroForOne,
                 amountSpecified: int256(amountIn), // positive for exact input
                 sqrtPriceLimitX96: zeroForOne ? V3_MIN_SQRT_RATIO + 1 : V3_MAX_SQRT_RATIO - 1,
-                data: abi.encode(token0, token1, uint24(10_000)) // data for callback validation
+                data: abi.encode(token0, token1, fee) // data for callback validation
             });
 
         // Calculate output received (one of the deltas will be negative, the other positive)

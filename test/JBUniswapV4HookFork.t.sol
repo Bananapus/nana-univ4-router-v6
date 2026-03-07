@@ -672,20 +672,20 @@ contract JBUniswapV4HookForkTest is Test {
     // =========================
 
     function _bestRouteSelectedSig() private pure returns (bytes32) {
-        return keccak256("BestRouteSelected(bytes32,string,uint256)");
+        return keccak256("BestRouteSelected(bytes32,uint8,uint256)");
     }
 
-    function _getLastBestRouteFromLogs() private returns (string memory routeType, uint256 expectedTokens) {
+    function _getLastBestRouteFromLogs() private returns (uint8 routeType, uint256 expectedTokens) {
         Vm.Log[] memory entries = vm.getRecordedLogs();
         bytes32 sig = _bestRouteSelectedSig();
         for (uint256 i = entries.length; i > 0; i--) {
             Vm.Log memory logEntry = entries[i - 1];
             if (logEntry.topics.length > 0 && logEntry.topics[0] == sig) {
-                (routeType, expectedTokens) = abi.decode(logEntry.data, (string, uint256));
+                (routeType, expectedTokens) = abi.decode(logEntry.data, (uint8, uint256));
                 return (routeType, expectedTokens);
             }
         }
-        return ("", 0);
+        return (0, 0);
     }
 
     /// @notice Make v4 clearly favorable by pushing price with a BAN->WETH swap, then verify route="v4".
@@ -730,9 +730,9 @@ contract JBUniswapV4HookForkTest is Test {
             zeroForOne: false, amountSpecified: -int256(amountIn), sqrtPriceLimitX96: TickMath.MAX_SQRT_PRICE - 1
         });
         try jbSwapRouter.swap(key, testSwap, 0) { // 1% slippage
-            (string memory route, uint256 expectedTokens) = _getLastBestRouteFromLogs();
+            (uint8 route, uint256 expectedTokens) = _getLastBestRouteFromLogs();
             // Expect v4 due to manipulated favorable v4 price
-            assertEq(keccak256(bytes(route)), keccak256("v4"), "Expected best route to be v4");
+            assertEq(route, 0, "Expected best route to be v4");
         } catch Error(string memory reason) {
             console.log("testFork_V4BestPriceRoutesToV4 swap failed:", reason);
         } catch {
@@ -782,9 +782,9 @@ contract JBUniswapV4HookForkTest is Test {
             zeroForOne: true, amountSpecified: -int256(amountIn), sqrtPriceLimitX96: TickMath.MIN_SQRT_PRICE + 1
         });
         try jbSwapRouter.swap(key, testSwap, 0) { // 1% slippage
-            (string memory route, uint256 expectedTokens) = _getLastBestRouteFromLogs();
+            (uint8 route, uint256 expectedTokens) = _getLastBestRouteFromLogs();
             // Expect v4 due to manipulated favorable v4 price
-            assertEq(keccak256(bytes(route)), keccak256("v4"), "Expected best route to be v4");
+            assertEq(route, 0, "Expected best route to be v4");
         } catch Error(string memory reason) {
             console.log("testFork_V4BestPriceRoutesToV4_NANAtoWETH swap failed:", reason);
         } catch {
@@ -852,8 +852,8 @@ contract JBUniswapV4HookForkTest is Test {
                 zeroForOne: false, amountSpecified: -int256(amountIn), sqrtPriceLimitX96: TickMath.MAX_SQRT_PRICE - 1
             });
             try jbSwapRouter.swap(key, testSwap, 0) { // 1% slippage
-                (string memory route, uint256 expectedTokens) = _getLastBestRouteFromLogs();
-                assertEq(keccak256(bytes(route)), keccak256("v3"), "Expected best route to be v3");
+                (uint8 route, uint256 expectedTokens) = _getLastBestRouteFromLogs();
+                assertEq(route, 1, "Expected best route to be v3");
             } catch Error(string memory reason) {
                 console.log("testFork_V3BestPriceRoutesToV3 swap failed:", reason);
             } catch {
@@ -909,8 +909,8 @@ contract JBUniswapV4HookForkTest is Test {
             zeroForOne: true, amountSpecified: -int256(amountIn), sqrtPriceLimitX96: TickMath.MIN_SQRT_PRICE + 1
         });
         try jbSwapRouter.swap(key, testSwap, 0) { // 1% slippage
-            (string memory route, uint256 expectedTokens) = _getLastBestRouteFromLogs();
-            assertEq(keccak256(bytes(route)), keccak256("v3"), "Expected best route to be v3");
+            (uint8 route, uint256 expectedTokens) = _getLastBestRouteFromLogs();
+            assertEq(route, 1, "Expected best route to be v3");
         } catch Error(string memory reason) {
             console.log("testFork_V3BestPriceRoutesToV3_NANAtoWETH swap failed:", reason);
         } catch {
@@ -1009,7 +1009,7 @@ contract JBUniswapV4HookForkTest is Test {
         });
 
         try jbSwapRouter.swap{value: amountIn}(useKey, testSwap, 100) { // 1% slippage
-            (string memory route, uint256 expectedTokens) = _getLastBestRouteFromLogs();
+            (uint8 route, uint256 expectedTokens) = _getLastBestRouteFromLogs();
 
             // Check for primary terminal (same check as in JBUniswapV4Hook.sol)
             // When buying with WETH, we need to look up terminal that accepts native ETH (JB_NATIVE_TOKEN)
@@ -1023,7 +1023,7 @@ contract JBUniswapV4HookForkTest is Test {
             }
 
             if (jbOut > v4Out && jbOut > 0 && address(jbTerminal) != address(0)) {
-                assertEq(keccak256(bytes(route)), keccak256("juicebox"), "Expected route to be juicebox");
+                assertEq(route, 2, "Expected route to be juicebox");
 
                 // Verify quote accuracy: check actual tokens received match quote
                 uint256 finalNANA = IERC20(NANA).balanceOf(user);
@@ -1036,7 +1036,7 @@ contract JBUniswapV4HookForkTest is Test {
                     assertGe(nanaReceived, jbOut * 90 / 100, "Should receive at least 90% of quoted tokens");
                 }
             } else if (v4Out > 0) {
-                assertEq(keccak256(bytes(route)), keccak256("v4"), "Expected route to be v4");
+                assertEq(route, 0, "Expected route to be v4");
             }
         } catch Error(string memory reason) {
             console.log("testFork_NoV3Pool_JuiceboxBestOrV4Fallback swap failed:", reason);
@@ -1131,7 +1131,7 @@ contract JBUniswapV4HookForkTest is Test {
         });
 
         try jbSwapRouter.swap(useKey, testSwap, 0) { // 1% slippage
-            (string memory route,) = _getLastBestRouteFromLogs();
+            (uint8 route,) = _getLastBestRouteFromLogs();
 
             IJBTerminal jbTerminal;
             // When selling (NANA -> WETH), we need a terminal that has WETH (the output token), not NANA
@@ -1146,7 +1146,7 @@ contract JBUniswapV4HookForkTest is Test {
             }
 
             if (jbOut > v4Out && jbOut > 0 && address(jbTerminal) != address(0)) {
-                assertEq(keccak256(bytes(route)), keccak256("juicebox"), "Expected route to be juicebox");
+                assertEq(route, 2, "Expected route to be juicebox");
 
                 // Verify quote accuracy: check actual WETH received matches quote
                 uint256 finalWETH = IERC20(WETH).balanceOf(user);
@@ -1159,7 +1159,7 @@ contract JBUniswapV4HookForkTest is Test {
                     assertGe(wethReceived, jbOut * 90 / 100, "Should receive at least 90% of quoted tokens");
                 }
             } else if (v4Out > 0) {
-                assertEq(keccak256(bytes(route)), keccak256("v4"), "Expected route to be v4");
+                assertEq(route, 0, "Expected route to be v4");
             }
         } catch Error(string memory reason) {
             console.log("testFork_NoV3Pool_JuiceboxBestOrV4Fallback_NANAtoWETH swap failed:", reason);
@@ -1269,8 +1269,8 @@ contract JBUniswapV4HookForkTest is Test {
 
         try jbSwapRouter.swap{value: buyAmount}(nativeKey, buySwap, 100) { // 1% slippage
         // Verify route was Juicebox
-            (string memory route,) = _getLastBestRouteFromLogs();
-            assertEq(keccak256(bytes(route)), keccak256("juicebox"), "Should route through Juicebox");
+            (uint8 route,) = _getLastBestRouteFromLogs();
+            assertEq(route, 2, "Should route through Juicebox");
 
             // Verify user received NANA (proving pay() succeeded and hook settled NANA back)
             uint256 finalUserETH = user.balance;
@@ -1418,18 +1418,13 @@ contract JBUniswapV4HookForkTest is Test {
 
         try jbSwapRouter.swap(key, sellSwap, 0) { // 1% slippage
         // Verify route matches expectation based on terminal availability
-            (string memory route,) = _getLastBestRouteFromLogs();
+            (uint8 route,) = _getLastBestRouteFromLogs();
             if (expectJuiceboxRoute) {
-                assertEq(
-                    keccak256(bytes(route)), keccak256("juicebox"), "Should route through Juicebox when terminal exists"
-                );
+                assertEq(route, 2, "Should route through Juicebox when terminal exists");
             } else {
                 // If no terminal exists, hook should route through Uniswap (v4 or v3)
                 // This catches bugs where hook looks up wrong terminal
-                assertTrue(
-                    keccak256(bytes(route)) == keccak256("v4") || keccak256(bytes(route)) == keccak256("v3"),
-                    "Should route through Uniswap when no terminal exists"
-                );
+                assertTrue(route == 0 || route == 1, "Should route through Uniswap when no terminal exists");
                 vm.stopPrank();
                 return; // No point checking balances if routing through Uniswap
             }
