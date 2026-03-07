@@ -1,5 +1,5 @@
 [profile.default]
-solc = '0.8.24'
+solc = '0.8.26'
 evm_version = 'cancun'
 optimizer_runs = 200
 libs = ["node_modules", "lib"]
@@ -16,6 +16,9 @@ runs = 4096
 runs = 1024
 depth = 100
 fail_on_revert = false
+
+[rpc_endpoints]
+mainnet = "${RPC_ETHEREUM_MAINNET}"
 
 [fmt]
 number_underscore = "thousands"
