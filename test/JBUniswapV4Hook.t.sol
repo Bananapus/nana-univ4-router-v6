@@ -2219,8 +2219,8 @@ contract JuiceboxHookTest is Test {
         // Should return positive value
         assertGt(expectedOutput, 0, "Should calculate positive expected output");
 
-        // Should be based on surplus (0.5 ether per token)
-        assertEq(expectedOutput, 0.5 ether, "Should match surplus per token");
+        // Should be based on surplus (0.5 ether per token) minus 2.5% JB protocol fee
+        assertEq(expectedOutput, 0.5 ether - (0.5 ether * 25 / 1000), "Should match surplus per token minus fee");
     }
 
     /// Given the user has JB project tokens (token0)
@@ -2241,8 +2241,10 @@ contract JuiceboxHookTest is Test {
         // Should return positive value
         assertGt(expectedOutput, 0, "Should calculate positive expected output");
 
-        // Should scale with token amount
-        assertEq(expectedOutput, (surplusAmount * tokenAmount) / 1e18, "Should scale with token amount");
+        // Should scale with token amount, minus 2.5% JB protocol fee
+        uint256 grossReclaim = (surplusAmount * tokenAmount) / 1e18;
+        uint256 expectedNet = grossReclaim - (grossReclaim * 25 / 1000);
+        assertEq(expectedOutput, expectedNet, "Should scale with token amount minus fee");
     }
 
     // ============================================
