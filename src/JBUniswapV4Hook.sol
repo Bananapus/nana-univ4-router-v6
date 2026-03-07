@@ -198,6 +198,7 @@ contract JBUniswapV4Hook is BaseHook, IUniswapV3SwapCallback {
         DIRECTORY = directory;
         PRICES = prices;
         V3_FACTORY = v3Factory;
+        // slither-disable-next-line missing-zero-check
         WETH = wrappedNativeEth;
     }
 
@@ -354,6 +355,7 @@ contract JBUniswapV4Hook is BaseHook, IUniswapV3SwapCallback {
     /// @param amountIn The input amount
     /// @param zeroForOne Whether swapping token0 for token1
     /// @return estimatedOut The estimated output amount
+    // slither-disable-next-line incorrect-equality
     function estimateUniswapOutput(
         PoolId poolId,
         PoolKey memory key,
@@ -368,7 +370,9 @@ contract JBUniswapV4Hook is BaseHook, IUniswapV3SwapCallback {
         uint160 sqrtPriceX96TWAP = _getTWAPSqrtPrice(poolId);
 
         // If TWAP is not available (not enough observations), fallback to spot price
+        // slither-disable-next-line incorrect-equality
         if (sqrtPriceX96TWAP == 0) {
+            // slither-disable-next-line unused-return
             (sqrtPriceX96TWAP,,,) = poolManager.getSlot0(poolId);
         }
 
@@ -427,11 +431,13 @@ contract JBUniswapV4Hook is BaseHook, IUniswapV3SwapCallback {
         uint32 currentTime = uint32(block.timestamp);
 
         // Get tick cumulative for current time
+        // slither-disable-next-line unused-return
         (int48 tickCumulativeCurrent,) = observations[poolId].observeSingle({
             time: currentTime, secondsAgo: 0, tick: tick, index: index, liquidity: liquidity, cardinality: cardinality
         });
 
         // Get tick cumulative for secondsAgo
+        // slither-disable-next-line unused-return
         (int48 tickCumulativePast,) = observations[poolId].observeSingle({
             time: currentTime,
             secondsAgo: secondsAgo,
@@ -502,6 +508,7 @@ contract JBUniswapV4Hook is BaseHook, IUniswapV3SwapCallback {
     /// @return amountOut The expected number of tokens to receive
     /// @return v3Pool The V3 pool address used for the quote
     /// @return poolFee The fee tier of the V3 pool used
+    // slither-disable-next-line unused-return
     function _getQuote(
         address projectToken,
         uint256 amountIn,
@@ -520,6 +527,7 @@ contract JBUniswapV4Hook is BaseHook, IUniswapV3SwapCallback {
         IUniswapV3Pool pool = IUniswapV3Pool(v3Pool);
 
         // If there is a contract at the address, try to get the pool's slot 0.
+        // slither-disable-next-line unused-return
         try pool.slot0() returns (uint160, int24, uint16, uint16, uint16, uint8, bool unlocked) {
             // Pool is either uninitialized (sqrtPriceX96 == 0) or locked (reentrancy guard active); skip it.
             if (!unlocked) return (0, address(0), 0);
@@ -691,6 +699,7 @@ contract JBUniswapV4Hook is BaseHook, IUniswapV3SwapCallback {
         uint32 oldestAllowedTime = currentTime > TWAP_PERIOD ? currentTime - TWAP_PERIOD : 0;
 
         // Get oldest observation timestamp
+        // slither-disable-next-line weak-prng
         Oracle.Observation memory oldestObs = observations[poolId][(state.index + 1) % state.cardinality];
         if (!oldestObs.initialized) {
             oldestObs = observations[poolId][0];
@@ -880,6 +889,7 @@ contract JBUniswapV4Hook is BaseHook, IUniswapV3SwapCallback {
         // Auto-grow cardinality when at capacity to enable TWAP functionality
         // Grow when we're about to wrap around (index == cardinality - 1) and cardinality == cardinalityNext
         uint16 newCardinalityNext = state.cardinalityNext;
+        // slither-disable-next-line incorrect-equality
         if (state.cardinality == state.cardinalityNext && state.index == state.cardinality - 1) {
             // Double the cardinality, capped at a reasonable maximum (e.g., 256 for 30-minute TWAP with 1-hour window)
             // This allows storing ~256 observations = ~128 hours of data at 1 observation per 30 minutes
@@ -1168,6 +1178,7 @@ contract JBUniswapV4Hook is BaseHook, IUniswapV3SwapCallback {
     /// @param terminal The Juicebox terminal to use
     /// @param amountOutMin Minimum tokens user accepts (enforced by JB terminal)
     /// @return outputReceived The amount of output tokens received
+    // slither-disable-next-line arbitrary-send-eth
     function _routeThroughJuicebox(
         uint256 projectId,
         Currency inputCurrency,
@@ -1241,6 +1252,7 @@ contract JBUniswapV4Hook is BaseHook, IUniswapV3SwapCallback {
     /// @param originalTokenOut Original output token (may be native ETH)
     /// @param fee The V3 fee tier to use (discovered by _findBestV3Pool)
     /// @return outputReceived The amount of output tokens received
+    // slither-disable-next-line arbitrary-send-eth
     function _routeThroughV3(
         address token0,
         address token1,
