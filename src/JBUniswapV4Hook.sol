@@ -624,10 +624,13 @@ contract JBUniswapV4Hook is BaseHook, IUniswapV3SwapCallback {
     /// @notice Given a pool, it returns the number of seconds ago of the oldest stored observation
     /// @param pool Address of Uniswap V3 pool that we want to observe
     /// @return secondsAgo The number of seconds ago of the oldest observation stored for the pool
+    // slither-disable-next-line unused-return
     function _getOldestObservationSecondsAgo(IUniswapV3Pool pool) external view returns (uint32 secondsAgo) {
+        // slither-disable-next-line unused-return
         (,, uint16 observationIndex, uint16 observationCardinality,,,) = pool.slot0();
         if (observationCardinality == 0) revert JBUniswapV4Hook_ObservationCardinalityZero();
 
+        // slither-disable-next-line unused-return,weak-prng
         (uint32 observationTimestamp,,, bool initialized) =
             pool.observations((observationIndex + 1) % observationCardinality);
 
