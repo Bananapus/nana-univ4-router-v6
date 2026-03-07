@@ -473,14 +473,7 @@ contract JBUniswapV4Hook is BaseHook, IUniswapV3SwapCallback {
     /// @param tokenB Second token in the pair
     /// @return bestPool The address of the best pool (address(0) if none found)
     /// @return bestFee The fee tier of the best pool
-    function _findBestV3Pool(
-        address tokenA,
-        address tokenB
-    )
-        internal
-        view
-        returns (address bestPool, uint24 bestFee)
-    {
+    function _findBestV3Pool(address tokenA, address tokenB) internal view returns (address bestPool, uint24 bestFee) {
         uint128 bestLiquidity;
         for (uint256 i; i < 4; i++) {
             // slither-disable-next-line calls-loop

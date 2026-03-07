@@ -1424,9 +1424,7 @@ contract JBUniswapV4HookForkTest is Test {
             } else {
                 // If no terminal exists, hook should route through Uniswap (v4 or v3)
                 // This catches bugs where hook looks up wrong terminal
-                assertTrue(
-                    route == 0 || route == 1, "Should route through Uniswap when no terminal exists"
-                );
+                assertTrue(route == 0 || route == 1, "Should route through Uniswap when no terminal exists");
                 vm.stopPrank();
                 return; // No point checking balances if routing through Uniswap
             }
