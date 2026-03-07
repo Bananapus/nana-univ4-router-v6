@@ -1,4 +1,4 @@
-# nana-univ4-router
+# Nana UniV4 Router
 
 Uniswap V4 hook that intelligently routes swaps involving Juicebox project tokens to the best price among three sources -- the V4 pool, V3 pools, and Juicebox's native minting/cash-out mechanism -- with TWAP oracle protection against manipulation. Ensures project tokens always trade at or above their intrinsic treasury-backed value.
 
