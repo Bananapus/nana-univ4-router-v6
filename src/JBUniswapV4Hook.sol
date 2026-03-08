@@ -694,6 +694,7 @@ contract JBUniswapV4Hook is BaseHook, IUniswapV3SwapCallback {
 
         // Get current pool state for observation
         // getSlot0 returns: sqrtPriceX96, tick, protocolFee, lpFee (no liquidity)
+        // slither-disable-next-line unused-return
         (, int24 tick,,) = poolManager.getSlot0(poolId);
         // Get current liquidity from the dedicated accessor
         uint128 liquidity = poolManager.getLiquidity(poolId);
@@ -885,6 +886,7 @@ contract JBUniswapV4Hook is BaseHook, IUniswapV3SwapCallback {
     function _recordObservation(PoolId poolId) internal {
         // Get current pool state
         // getSlot0 returns: sqrtPriceX96, tick, protocolFee, lpFee (no liquidity)
+        // slither-disable-next-line unused-return
         (, int24 tick,,) = poolManager.getSlot0(poolId);
         // Get current liquidity from the dedicated accessor
         uint128 liquidity = poolManager.getLiquidity(poolId);
@@ -1291,6 +1293,7 @@ contract JBUniswapV4Hook is BaseHook, IUniswapV3SwapCallback {
         if (v3Pool == address(0)) revert JBUniswapV4Hook_V3PoolNotFound();
 
         // Check pool is unlocked
+        // slither-disable-next-line unused-return
         (,,,,,, bool unlocked) = IUniswapV3Pool(v3Pool).slot0();
         if (!unlocked) revert JBUniswapV4Hook_V3PoolLocked();
 
