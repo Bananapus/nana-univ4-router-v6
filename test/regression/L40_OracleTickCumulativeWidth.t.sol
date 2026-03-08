@@ -16,7 +16,7 @@ contract L40_OracleTickCumulativeWidth is Test {
         // Construct an Observation with extreme values and verify field sizes are correct.
         Oracle.Observation memory obs = Oracle.Observation({
             blockTimestamp: type(uint32).max,
-            prevTick: int24(887272), // max tick
+            prevTick: int24(887_272), // max tick
             tickCumulative: type(int56).max,
             secondsPerLiquidityCumulativeX128: type(uint136).max,
             initialized: true
@@ -30,7 +30,7 @@ contract L40_OracleTickCumulativeWidth is Test {
     /// At max tick (887272), int48 overflows at delta > 157,784 seconds (~43.8 hours).
     /// int56 should handle delta up to ~40,391,679 seconds (~1.4 years).
     function test_int56_handlesLongDurations() public pure {
-        int24 maxTick = int24(887272);
+        int24 maxTick = int24(887_272);
         // 200,000 seconds (~55.5 hours) — would overflow int48 but fits in int56.
         uint32 delta = 200_000;
 
@@ -52,7 +52,7 @@ contract L40_OracleTickCumulativeWidth is Test {
 
     /// @notice Verify negative tick accumulation also works with int56.
     function test_int56_negativeTickAccumulation() public pure {
-        int24 minTick = int24(-887272);
+        int24 minTick = int24(-887_272);
         uint32 delta = 500_000;
 
         int56 accumulated = int56(minTick) * int56(uint56(delta));
