@@ -56,12 +56,16 @@ contract DeployJBUniswapV4Hook is Script {
     function getWETH() internal view returns (address) {
         if (block.chainid == 1) {
             return 0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2; // Ethereum Mainnet WETH9
-        } else if (block.chainid == 10 || block.chainid == 11_155_111 || block.chainid == 11_155_420) {
+        } else if (block.chainid == 11_155_111) {
+            return 0x7b79995e5f793A07Bc00c21412e50Ecae098E7f9; // Ethereum Sepolia WETH
+        } else if (block.chainid == 10 || block.chainid == 11_155_420) {
             return 0x4200000000000000000000000000000000000006; // Optimism WETH
         } else if (block.chainid == 8453 || block.chainid == 84_532) {
             return 0x4200000000000000000000000000000000000006; // Base WETH
-        } else if (block.chainid == 42_161 || block.chainid == 421_614) {
-            return 0x82aF49447D8a07e3bd95BD0d56f35241523fBab1; // Arbitrum WETH
+        } else if (block.chainid == 42_161) {
+            return 0x82aF49447D8a07e3bd95BD0d56f35241523fBab1; // Arbitrum Mainnet WETH
+        } else if (block.chainid == 421_614) {
+            return 0x980B62Da83eFf3D4576C647993b0c1D7faf17c73; // Arbitrum Sepolia WETH
         } else {
             revert("Invalid RPC / WETH address not configured for this network");
         }
