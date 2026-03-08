@@ -944,14 +944,20 @@ contract JBUniswapV4Hook is BaseHook, IUniswapV3SwapCallback {
         if (hookData.length >= 32) {
             uint256 amountOutMin = abi.decode(hookData, (uint256));
             if (amountOutMin > 0) {
-                // Extract output amount from delta based on swap direction
-                int128 outputAmount =
+                // Extract output amount from delta based on swap direction.
+                // In V4's convention, output amounts are negative (credits owed to the user),
+                // so we negate to get the absolute output amount for comparison.
+                int128 rawOutput =
                     params.zeroForOne ? BalanceDeltaLibrary.amount1(delta) : BalanceDeltaLibrary.amount0(delta);
 
-                // Only validate if output is positive (indicates a real V4 swap)
-                // For routed swaps, output might be zero/small and we already validated in _beforeSwap
-                if (outputAmount > 0 && uint256(int256(outputAmount)) < amountOutMin) {
-                    revert JBUniswapV4Hook_InsufficientOutput();
+                // Only validate if there is a real V4 swap (non-zero output).
+                // For routed swaps (V3/Juicebox), delta is zero and slippage was already validated in _beforeSwap.
+                if (rawOutput != 0) {
+                    // Output is negative in V4 convention; negate to get the positive amount received.
+                    uint256 outputAmount = rawOutput < 0 ? uint256(int256(-rawOutput)) : uint256(int256(rawOutput));
+                    if (outputAmount < amountOutMin) {
+                        revert JBUniswapV4Hook_InsufficientOutput();
+                    }
                 }
             }
         }
