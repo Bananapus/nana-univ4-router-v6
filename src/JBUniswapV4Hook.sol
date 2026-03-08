@@ -434,13 +434,13 @@ contract JBUniswapV4Hook is BaseHook, IUniswapV3SwapCallback {
 
         // Get tick cumulative for current time
         // slither-disable-next-line unused-return
-        (int48 tickCumulativeCurrent,) = observations[poolId].observeSingle({
+        (int56 tickCumulativeCurrent,) = observations[poolId].observeSingle({
             time: currentTime, secondsAgo: 0, tick: tick, index: index, liquidity: liquidity, cardinality: cardinality
         });
 
         // Get tick cumulative for secondsAgo
         // slither-disable-next-line unused-return
-        (int48 tickCumulativePast,) = observations[poolId].observeSingle({
+        (int56 tickCumulativePast,) = observations[poolId].observeSingle({
             time: currentTime,
             secondsAgo: secondsAgo,
             tick: tick,
@@ -450,7 +450,7 @@ contract JBUniswapV4Hook is BaseHook, IUniswapV3SwapCallback {
         });
 
         // Calculate arithmetic mean tick
-        arithmeticMeanTick = int24((tickCumulativeCurrent - tickCumulativePast) / int48(uint48(secondsAgo)));
+        arithmeticMeanTick = int24((tickCumulativeCurrent - tickCumulativePast) / int56(uint56(secondsAgo)));
     }
 
     /// @notice Estimate expected output tokens from a Uniswap v3 swap using TWAP
