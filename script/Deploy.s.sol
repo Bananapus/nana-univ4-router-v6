@@ -111,21 +111,16 @@ contract DeployScript is Script {
 
         vm.startBroadcast(deployerPrivateKey);
 
-        // Skip if already deployed (HookMiner computes from deployer, not Arachnid proxy).
-        if (hookAddress.code.length == 0) {
-            JBUniswapV4Hook hook = new JBUniswapV4Hook{salt: salt}(
-                IPoolManager(poolManager),
-                IJBTokens(jbTokens),
-                IJBDirectory(jbDirectory),
-                IJBPrices(jbPrices),
-                IUniswapV3Factory(v3Factory),
-                weth
-            );
+        JBUniswapV4Hook hook = new JBUniswapV4Hook{salt: salt}(
+            IPoolManager(poolManager),
+            IJBTokens(jbTokens),
+            IJBDirectory(jbDirectory),
+            IJBPrices(jbPrices),
+            IUniswapV3Factory(v3Factory),
+            weth
+        );
 
-            console2.log("JBUniswapV4Hook deployed at:", address(hook));
-        } else {
-            console2.log("JBUniswapV4Hook already deployed at:", hookAddress);
-        }
+        console2.log("JBUniswapV4Hook deployed at:", address(hook));
 
         vm.stopBroadcast();
     }
@@ -158,12 +153,4 @@ contract DeployScript is Script {
         revert("Unsupported chain");
     }
 
-    function _isDeployed(bytes32 salt, bytes memory creationCode, bytes memory arguments) internal view returns (bool) {
-        address _deployedTo = vm.computeCreate2Address({
-            salt: salt,
-            initCodeHash: keccak256(abi.encodePacked(creationCode, arguments)),
-            deployer: address(0x4e59b44847b379578588920cA78FbF26c0B4956C)
-        });
-        return address(_deployedTo).code.length != 0;
-    }
 }
