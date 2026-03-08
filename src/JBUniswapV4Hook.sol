@@ -41,6 +41,7 @@ import {IJBTokens} from "@bananapus/core-v6/src/interfaces/IJBTokens.sol";
 import {IJBToken} from "@bananapus/core-v6/src/interfaces/IJBToken.sol";
 import {IJBDirectory} from "@bananapus/core-v6/src/interfaces/IJBDirectory.sol";
 import {IJBMultiTerminal} from "@bananapus/core-v6/src/interfaces/IJBMultiTerminal.sol";
+import {IJBFeeTerminal} from "@bananapus/core-v6/src/interfaces/IJBFeeTerminal.sol";
 import {IJBController} from "@bananapus/core-v6/src/interfaces/IJBController.sol";
 import {IJBTerminal} from "@bananapus/core-v6/src/interfaces/IJBTerminal.sol";
 
@@ -340,9 +341,10 @@ contract JBUniswapV4Hook is BaseHook, IUniswapV3SwapCallback {
                 uint32(uint160(outputToken)), // the currency id of the output token
                 _getTokenDecimals(outputToken)
             );
-            // Deduct JB protocol fee (2.5%): amount * FEE / MAX_FEE (25 / 1000)
+            // Deduct JB protocol fee dynamically read from the terminal.
             // Conservative: if hook is feeless, estimate is slightly low → routes to Uniswap (still good).
-            return grossReclaim - FullMath.mulDiv(grossReclaim, 25, 1000);
+            uint256 fee = IJBFeeTerminal(address(terminal)).FEE();
+            return grossReclaim - FullMath.mulDiv(grossReclaim, fee, JBConstants.MAX_FEE);
         } catch {
             return 0;
         }
