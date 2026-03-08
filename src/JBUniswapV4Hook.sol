@@ -96,6 +96,9 @@ contract JBUniswapV4Hook is BaseHook, IUniswapV3SwapCallback {
     /// @notice Reverts when swap output is below minimum required amount
     error JBUniswapV4Hook_InsufficientOutput();
 
+    /// @notice Reverts when sweep is called by an address other than the deployer
+    error JBUniswapV4Hook_Unauthorized();
+
     //*********************************************************************//
     // ---------------------------- structs ------------------------------ //
     //*********************************************************************//
@@ -134,6 +137,9 @@ contract JBUniswapV4Hook is BaseHook, IUniswapV3SwapCallback {
 
     /// @notice Wrapped native ETH address for the current chain. Treated as native ETH for pricing.
     address public immutable WETH;
+
+    /// @notice The address that deployed this contract, used as the sweep authority.
+    address public immutable DEPLOYER;
 
     /// @notice TWAP period in seconds (30 minutes by default)
     uint32 public constant TWAP_PERIOD = 1800;
@@ -200,10 +206,36 @@ contract JBUniswapV4Hook is BaseHook, IUniswapV3SwapCallback {
         V3_FACTORY = v3Factory;
         // slither-disable-next-line missing-zero-check
         WETH = wrappedNativeEth;
+        DEPLOYER = msg.sender;
     }
 
     /// @notice Receive function to accept ETH
     receive() external payable {}
+
+    /// @notice Sweep stuck ERC-20 tokens or native ETH to a recipient.
+    /// @dev Only callable by the deployer. Tokens can get stuck if a terminal call reverts
+    /// after the hook has taken tokens from the pool manager but before settling.
+    /// @param token The ERC-20 token to sweep, or address(0) for native ETH.
+    /// @param to The recipient address.
+    function sweep(address token, address to) external {
+        if (msg.sender != DEPLOYER) revert JBUniswapV4Hook_Unauthorized();
+
+        if (token == address(0)) {
+            // Sweep native ETH
+            uint256 balance = address(this).balance;
+            if (balance > 0) {
+                // slither-disable-next-line arbitrary-send-eth
+                (bool success,) = to.call{value: balance}("");
+                require(success, "ETH transfer failed");
+            }
+        } else {
+            // Sweep ERC-20 tokens
+            uint256 balance = IERC20(token).balanceOf(address(this));
+            if (balance > 0) {
+                IERC20(token).safeTransfer(to, balance);
+            }
+        }
+    }
 
     //*********************************************************************//
     // ------------------------- public views ---------------------------- //
