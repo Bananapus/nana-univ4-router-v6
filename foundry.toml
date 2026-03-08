@@ -18,7 +18,7 @@ depth = 100
 fail_on_revert = false
 
 [rpc_endpoints]
-mainnet = "${RPC_ETHEREUM_MAINNET}"
+ethereum = "${RPC_ETHEREUM_MAINNET}"
 
 [fmt]
 number_underscore = "thousands"
