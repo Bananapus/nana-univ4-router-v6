@@ -1058,27 +1058,35 @@ contract JBUniswapV4Hook is BaseHook, IUniswapV3SwapCallback {
         bool isSellingJBToken = tokenInProjectId != 0;
         bool isBuyingJBToken = tokenOutProjectId != 0;
 
-        // Get the projectId (whichever token is the JB token)
-        uint256 projectId = isSellingJBToken ? tokenInProjectId : (isBuyingJBToken ? tokenOutProjectId : 0);
+        // When both tokens are JB tokens, each side has its own project ID.
+        // Use separate variables to avoid confusing buy-side and sell-side contexts.
+        // Buying uses tokenOutProjectId (the project whose token we're acquiring).
+        // Selling uses tokenInProjectId (the project whose token we're cashing out).
+        uint256 buyProjectId = isBuyingJBToken ? tokenOutProjectId : 0;
+        uint256 sellProjectId = isSellingJBToken ? tokenInProjectId : 0;
+
+        // Use the appropriate project ID for Juicebox operations.
+        // Buying takes priority: if both are JB tokens, we compare buying via Juicebox vs Uniswap.
+        uint256 projectId = isBuyingJBToken ? buyProjectId : sellProjectId;
 
         uint256 juiceboxExpectedOutput;
 
         // Check if Juicebox is better than the best Uniswap option
         // Only consider Juicebox if a valid terminal exists for the appropriate token
-        // For buying: terminal must support the payment token (tokenIn)
-        // For selling: terminal must have the output token (tokenOut) that we're cashing out to
+        // For buying: terminal must support the payment token (tokenIn), projectId is the buy-side project
+        // For selling: terminal must have the output token (tokenOut), projectId is the sell-side project
         address terminalToken = isBuyingJBToken ? tokenIn : tokenOut;
         IJBTerminal jbTerminal = _getPrimaryTerminal({projectId: projectId, token: terminalToken});
 
         if (isBuyingJBToken) {
             // Buying JB tokens: compare Juicebox vs Uniswap for getting JB tokens
             juiceboxExpectedOutput = calculateExpectedTokensWithCurrency({
-                projectId: projectId, paymentToken: tokenIn, paymentAmount: amountIn
+                projectId: buyProjectId, paymentToken: tokenIn, paymentAmount: amountIn
             });
         } else if (isSellingJBToken) {
             // Selling JB tokens: compare Juicebox vs Uniswap for getting output tokens
             juiceboxExpectedOutput = calculateExpectedOutputFromSelling({
-                projectId: projectId, tokenAmountIn: amountIn, outputToken: tokenOut, terminal: jbTerminal
+                projectId: sellProjectId, tokenAmountIn: amountIn, outputToken: tokenOut, terminal: jbTerminal
             });
         } else {
             // No JB token involved, proceed with normal Uniswap swap
