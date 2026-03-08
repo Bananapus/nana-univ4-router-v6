@@ -1205,9 +1205,11 @@ contract JBUniswapV4Hook is BaseHook, IUniswapV3SwapCallback {
         // Only normalize native ETH to JB_NATIVE_TOKEN (WETH only appears when routing through v3)
         address normalizedTokenIn = _normalizeTokenForTerminal(tokenIn);
 
-        // Approve the terminal to spend the tokens if needed
+        // Approve the terminal to spend the tokens if needed.
+        // Use forceApprove to set an exact allowance, avoiding accumulation from safeIncreaseAllowance
+        // if a previous terminal call reverted after partial token consumption.
         if (!inputCurrency.isAddressZero()) {
-            IERC20(tokenIn).safeIncreaseAllowance(address(terminal), amountIn);
+            IERC20(tokenIn).forceApprove(address(terminal), amountIn);
         }
 
         if (isBuying) {
