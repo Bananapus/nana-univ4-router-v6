@@ -22,6 +22,7 @@ import {TickMath} from "@uniswap/v4-core/src/libraries/TickMath.sol";
 import {IERC20Metadata} from "@openzeppelin/contracts/token/ERC20/extensions/IERC20Metadata.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
+import {Ownable} from "@openzeppelin/contracts/access/Ownable.sol";
 
 // Import WETH interface
 import {IWETH} from "./interfaces/IWETH.sol";
@@ -58,7 +59,7 @@ import {JBConstants} from "@bananapus/core-v6/src/libraries/JBConstants.sol";
 /// option that gives users the most tokens. It uses TWAP (Time-Weighted Average Price) oracles to protect against
 /// manipulation.
 ///      The route with the highest expected output is automatically selected.
-contract JBUniswapV4Hook is BaseHook, IUniswapV3SwapCallback {
+contract JBUniswapV4Hook is BaseHook, IUniswapV3SwapCallback, Ownable {
     using PoolIdLibrary for PoolKey;
     using StateLibrary for IPoolManager;
     using SafeERC20 for IERC20;
@@ -95,9 +96,6 @@ contract JBUniswapV4Hook is BaseHook, IUniswapV3SwapCallback {
 
     /// @notice Reverts when swap output is below minimum required amount
     error JBUniswapV4Hook_InsufficientOutput();
-
-    /// @notice Reverts when sweep is called by an address other than the deployer
-    error JBUniswapV4Hook_Unauthorized();
 
     //*********************************************************************//
     // ---------------------------- structs ------------------------------ //
@@ -137,9 +135,6 @@ contract JBUniswapV4Hook is BaseHook, IUniswapV3SwapCallback {
 
     /// @notice Wrapped native ETH address for the current chain. Treated as native ETH for pricing.
     address public immutable WETH;
-
-    /// @notice The address that deployed this contract, used as the sweep authority.
-    address public immutable DEPLOYER;
 
     /// @notice TWAP period in seconds (30 minutes by default)
     uint32 public constant TWAP_PERIOD = 1800;
@@ -199,6 +194,7 @@ contract JBUniswapV4Hook is BaseHook, IUniswapV3SwapCallback {
         address wrappedNativeEth
     )
         BaseHook(poolManager)
+        Ownable(msg.sender)
     {
         TOKENS = tokens;
         DIRECTORY = directory;
@@ -206,20 +202,17 @@ contract JBUniswapV4Hook is BaseHook, IUniswapV3SwapCallback {
         V3_FACTORY = v3Factory;
         // slither-disable-next-line missing-zero-check
         WETH = wrappedNativeEth;
-        DEPLOYER = msg.sender;
     }
 
     /// @notice Receive function to accept ETH
     receive() external payable {}
 
     /// @notice Sweep stuck ERC-20 tokens or native ETH to a recipient.
-    /// @dev Only callable by the deployer. Tokens can get stuck if a terminal call reverts
+    /// @dev Only callable by the owner. Tokens can get stuck if a terminal call reverts
     /// after the hook has taken tokens from the pool manager but before settling.
     /// @param token The ERC-20 token to sweep, or address(0) for native ETH.
     /// @param to The recipient address.
-    function sweep(address token, address to) external {
-        if (msg.sender != DEPLOYER) revert JBUniswapV4Hook_Unauthorized();
-
+    function sweep(address token, address to) external onlyOwner {
         if (token == address(0)) {
             // Sweep native ETH
             uint256 balance = address(this).balance;

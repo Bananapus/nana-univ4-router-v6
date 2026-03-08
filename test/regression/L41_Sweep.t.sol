@@ -8,6 +8,7 @@ import {IJBTokens} from "@bananapus/core-v6/src/interfaces/IJBTokens.sol";
 import {IJBDirectory} from "@bananapus/core-v6/src/interfaces/IJBDirectory.sol";
 import {IJBPrices} from "@bananapus/core-v6/src/interfaces/IJBPrices.sol";
 import {IUniswapV3Factory} from "../../src/interfaces/IUniswapV3Factory.sol";
+import {Ownable} from "@openzeppelin/contracts/access/Ownable.sol";
 import {MockERC20} from "../../test/mock/MockERC20.sol";
 
 /// @title L-41 Regression: sweep function can recover stuck tokens
@@ -69,12 +70,12 @@ contract L41_SweepTest is Test {
         assertEq(recipient.balance, amount, "Recipient should have received ETH");
     }
 
-    function test_sweepRevertsForNonDeployer() public {
+    function test_sweepRevertsForNonOwner() public {
         token.mint(address(hook), 1000e18);
 
         address attacker = makeAddr("attacker");
         vm.prank(attacker);
-        vm.expectRevert(JBUniswapV4Hook.JBUniswapV4Hook_Unauthorized.selector);
+        vm.expectRevert(abi.encodeWithSelector(Ownable.OwnableUnauthorizedAccount.selector, attacker));
         hook.sweep(address(token), attacker);
     }
 }
