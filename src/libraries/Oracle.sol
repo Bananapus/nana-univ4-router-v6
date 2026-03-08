@@ -23,13 +23,20 @@ library Oracle {
     /// @notice This is the min amount of ticks in either direction that triggers a full backrun
     int24 constant LIMIT_ABS_TICK_MOVE = 9116;
 
-    /// @dev slot dimensions has been modified to add an int24 prevTick
+    /// @dev Slot dimensions have been modified to add an int24 prevTick.
+    /// @dev OVERFLOW CONSTRAINT: The `int48 tickCumulative` field overflows at ~44 hours when the tick is at
+    /// its maximum value (887272). For comparison, Uniswap V3 uses `int56` which allows ~1.4 years at max tick.
+    /// This means TWAP observations spanning more than ~44 hours at extreme tick values may produce incorrect
+    /// results. The struct is tightly packed into a single 256-bit slot (32 + 24 + 48 + 144 + 8 = 256), so
+    /// widening to int56 would require a second storage slot and double SSTORE costs per observation.
+    /// Callers should be aware of this limitation when configuring TWAP windows.
     struct Observation {
         // the block timestamp of the observation
         uint32 blockTimestamp;
         // the previous printed tick to calculate the change from time to time
         int24 prevTick;
         // the tick accumulator, i.e. tick * time elapsed since the pool was first initialized
+        // WARNING: overflows after ~44 hours at max tick (887272). See struct-level NatSpec for details.
         int48 tickCumulative;
         // the seconds per liquidity, i.e. seconds elapsed / max(1, liquidity) since the pool was first initialized
         uint144 secondsPerLiquidityCumulativeX128;
@@ -60,6 +67,7 @@ library Oracle {
             return Observation({
                 blockTimestamp: blockTimestamp,
                 prevTick: tick,
+                // NOTE: int48 overflow possible when |tick| * delta exceeds int48 range (~44h at max tick).
                 tickCumulative: last.tickCumulative + int48(tick) * int48(uint48(delta)),
                 secondsPerLiquidityCumulativeX128: last.secondsPerLiquidityCumulativeX128
                     + ((uint144(delta) << 128) / (liquidity > 0 ? liquidity : 1)),
