@@ -28,7 +28,7 @@ Uniswap V4 hook that automatically routes swaps involving Juicebox project token
 | Function | What it does |
 |----------|-------------|
 | `calculateExpectedTokensWithCurrency(projectId, paymentToken, paymentAmount)` | Estimates project tokens from paying `paymentAmount` of `paymentToken`. Accounts for ruleset weight, currency conversion via `JBPrices`, and reserved rate deduction. |
-| `calculateExpectedOutputFromSelling(projectId, tokenAmountIn, outputToken, terminal)` | Estimates terminal tokens from cashing out `tokenAmountIn` project tokens. Uses `terminal.STORE().currentReclaimableSurplusOf()` and deducts 2.5% protocol fee. |
+| `calculateExpectedOutputFromSelling(projectId, tokenAmountIn, outputToken, terminal)` | Estimates terminal tokens from cashing out `tokenAmountIn` project tokens. Uses `terminal.STORE().currentReclaimableSurplusOf()` and deducts the protocol fee read dynamically via `IJBFeeTerminal(terminal).FEE()`. |
 | `estimateUniswapOutput(poolId, key, amountIn, zeroForOne)` | Estimates V4 swap output using TWAP sqrtPrice (30-min window). Falls back to spot price if TWAP unavailable. Deducts pool fee. |
 | `estimateUniswapV3Output(token0, token1, amountIn, zeroForOne)` | Estimates V3 swap output. Discovers best pool via `_findBestV3Pool` across all 4 fee tiers, uses 1-hour TWAP. |
 | `observeTWAP(poolId, secondsAgo, tick, index, liquidity, cardinality)` | Returns arithmetic mean tick over `secondsAgo` for a V4 pool's oracle. |
@@ -75,7 +75,7 @@ Uniswap V4 hook that automatically routes swaps involving Juicebox project token
 
 | Struct | Key Fields | Used In |
 |--------|------------|---------|
-| `Oracle.Observation` | `uint32 blockTimestamp`, `int24 prevTick`, `int48 tickCumulative`, `uint144 secondsPerLiquidityCumulativeX128`, `bool initialized` | `observations` mapping (per PoolId, ring buffer of 65,535) |
+| `Oracle.Observation` | `uint32 blockTimestamp`, `int24 prevTick`, `int56 tickCumulative`, `uint136 secondsPerLiquidityCumulativeX128`, `bool initialized` | `observations` mapping (per PoolId, ring buffer of 65,535) |
 | `ObservationState` | `uint16 index`, `uint16 cardinality`, `uint16 cardinalityNext` | `states` mapping (per PoolId), tracks write position and buffer capacity |
 
 ## Events
@@ -125,7 +125,7 @@ Uniswap V4 hook that automatically routes swaps involving Juicebox project token
 8. **Slippage validation differs by route.** V4 swaps validate `amountOutMin` in `_afterSwap`. V3 and JB routes validate during execution in `_beforeSwap` (via the swap/pay/cashOut call itself or explicit checks).
 9. **The hook has `receive() external payable {}`** to accept ETH during WETH unwrapping and terminal cash outs.
 10. **Deployment requires HookMiner.** The hook address must have specific bits set to match the permission flags. Use `HookMiner.find()` to discover a valid salt.
-11. **Juicebox cash out estimation deducts 2.5% protocol fee** (`25/1000`). This matches `JBConstants.MAX_FEE = 1000` and the default fee of 25.
+11. **Juicebox cash out estimation deducts the protocol fee dynamically** by reading `IJBFeeTerminal(terminal).FEE()` and dividing by `JBConstants.MAX_FEE` (1000). The estimate is conservative: if the hook is feeless, the estimate is slightly low, routing to Uniswap instead.
 12. **If `DIRECTORY.primaryTerminalOf()` returns address(0)** for a project token, the Juicebox route is skipped silently. This happens when a project hasn't set up a terminal for the swap's input/output token.
 13. **V3 callback validation uses factory lookup** -- `V3_FACTORY.getPool(token0, token1, fee)` must return the `msg.sender`. This prevents arbitrary contracts from triggering token transfers via the callback.
 14. **`via_ir = true` is required** in foundry.toml due to stack depth from V4 core dependencies. Without it, compilation may fail with "stack too deep" errors.
