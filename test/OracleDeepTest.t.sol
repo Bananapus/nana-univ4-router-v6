@@ -157,6 +157,11 @@ contract MockJBMultiTerminal_Oracle {
     uint256 public overridePayReturnAmount;
     bool public useOverridePayReturn;
 
+    /// @notice JB protocol fee (2.5% = 25 out of MAX_FEE 1000).
+    function FEE() external pure returns (uint256) {
+        return 25;
+    }
+
     function setProjectToken(uint256 projectId, address projectToken) external {
         projectTokens[projectId] = projectToken;
     }
