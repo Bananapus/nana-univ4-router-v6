@@ -4,7 +4,7 @@ pragma solidity ^0.8.16;
 import "forge-std/Test.sol";
 import {Oracle} from "../../src/libraries/Oracle.sol";
 
-/// @notice Regression test for L-40: Oracle tickCumulative widened from int48 to int56.
+/// @notice Oracle tickCumulative widened from int48 to int56.
 /// @dev The old int48 field overflowed after ~44 hours at max tick (887272).
 /// After widening to int56, the overflow threshold extends to ~1.4 years at max tick.
 /// This test verifies that accumulation at max tick for durations that would have

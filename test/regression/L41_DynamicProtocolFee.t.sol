@@ -5,7 +5,7 @@ import "forge-std/Test.sol";
 import {FullMath} from "@uniswap/v4-core/src/libraries/FullMath.sol";
 import {JBConstants} from "@bananapus/core-v6/src/libraries/JBConstants.sol";
 
-/// @notice Regression test for L-41: dynamic protocol fee read from terminal.
+/// @notice Dynamic protocol fee read from terminal.
 /// @dev The old code hardcoded `grossReclaim - mulDiv(grossReclaim, 25, 1000)`.
 /// The fix reads FEE() from the terminal and uses JBConstants.MAX_FEE as the
 /// denominator, so the estimate stays correct if the fee ever changes.
