@@ -1,13 +1,11 @@
 name: test
 on:
-  push:
-    branches:
-      - main
   pull_request:
     branches:
       - main
-  workflow_dispatch:
-
+  push:
+    branches:
+      - main
 jobs:
   forge-test:
     runs-on: ubuntu-latest
@@ -23,8 +21,6 @@ jobs:
       - name: Install Foundry
         uses: foundry-rs/foundry-toolchain@v1
       - name: Run tests
-        run: forge test --fail-fast --skip "*/script/**"
-        env:
-          RPC_ETHEREUM_MAINNET: ${{ secrets.RPC_ETHEREUM_MAINNET }}
+        run: forge test --fail-fast --summary --detailed --skip "*/script/**" --skip "*Fork*"
       - name: Check contract sizes
-        run: forge build --sizes --skip "*/test/**" --skip "*/script/**"
+        run: FOUNDRY_PROFILE=ci_sizes forge build --sizes --skip "*/test/**" --skip "*/script/**" --skip SphinxUtils

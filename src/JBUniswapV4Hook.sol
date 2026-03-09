@@ -1,57 +1,46 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.24;
 
-import {BaseHook} from "@uniswap/v4-periphery/src/utils/BaseHook.sol";
+import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
+import {IERC20Metadata} from "@openzeppelin/contracts/token/ERC20/extensions/IERC20Metadata.sol";
+import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 import {CurrencySettler} from "@openzeppelin/uniswap-hooks/src/utils/CurrencySettler.sol";
-import {Hooks} from "@uniswap/v4-core/src/libraries/Hooks.sol";
+import {IUniswapV3SwapCallback} from "@uniswap/v3-core/contracts/interfaces/callback/IUniswapV3SwapCallback.sol";
 import {IPoolManager} from "@uniswap/v4-core/src/interfaces/IPoolManager.sol";
-import {PoolKey} from "@uniswap/v4-core/src/types/PoolKey.sol";
-import {PoolId, PoolIdLibrary} from "@uniswap/v4-core/src/types/PoolId.sol";
+import {FixedPoint96} from "@uniswap/v4-core/src/libraries/FixedPoint96.sol";
+import {FullMath} from "@uniswap/v4-core/src/libraries/FullMath.sol";
+import {Hooks} from "@uniswap/v4-core/src/libraries/Hooks.sol";
+import {StateLibrary} from "@uniswap/v4-core/src/libraries/StateLibrary.sol";
+import {TickMath} from "@uniswap/v4-core/src/libraries/TickMath.sol";
+import {BalanceDelta, BalanceDeltaLibrary} from "@uniswap/v4-core/src/types/BalanceDelta.sol";
 import {
     BeforeSwapDelta,
     BeforeSwapDeltaLibrary,
     toBeforeSwapDelta
 } from "@uniswap/v4-core/src/types/BeforeSwapDelta.sol";
-import {BalanceDelta, BalanceDeltaLibrary} from "@uniswap/v4-core/src/types/BalanceDelta.sol";
 import {Currency} from "@uniswap/v4-core/src/types/Currency.sol";
+import {PoolKey} from "@uniswap/v4-core/src/types/PoolKey.sol";
+import {PoolId, PoolIdLibrary} from "@uniswap/v4-core/src/types/PoolId.sol";
 import {SwapParams, ModifyLiquidityParams} from "@uniswap/v4-core/src/types/PoolOperation.sol";
-import {StateLibrary} from "@uniswap/v4-core/src/libraries/StateLibrary.sol";
-import {FullMath} from "@uniswap/v4-core/src/libraries/FullMath.sol";
-import {FixedPoint96} from "@uniswap/v4-core/src/libraries/FixedPoint96.sol";
-import {TickMath} from "@uniswap/v4-core/src/libraries/TickMath.sol";
-import {IERC20Metadata} from "@openzeppelin/contracts/token/ERC20/extensions/IERC20Metadata.sol";
-import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
-import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
-
-// Import WETH interface
-import {IWETH} from "./interfaces/IWETH.sol";
-
-// Uniswap v3 interfaces
-import {IUniswapV3Factory} from "./interfaces/IUniswapV3Factory.sol";
-import {IUniswapV3Pool} from "./interfaces/IUniswapV3Pool.sol";
-import {IUniswapV3SwapCallback} from "@uniswap/v3-core/contracts/interfaces/callback/IUniswapV3SwapCallback.sol";
-
-// v3 oracle data is read via interface calls, no library imports needed
-
-// Import Oracle library for TWAP
-import {Oracle} from "./libraries/Oracle.sol";
-
-// Import Juicebox protocol interfaces
-import {IJBTokens} from "@bananapus/core-v6/src/interfaces/IJBTokens.sol";
-import {IJBToken} from "@bananapus/core-v6/src/interfaces/IJBToken.sol";
-import {IJBDirectory} from "@bananapus/core-v6/src/interfaces/IJBDirectory.sol";
-import {IJBMultiTerminal} from "@bananapus/core-v6/src/interfaces/IJBMultiTerminal.sol";
-import {IJBFeeTerminal} from "@bananapus/core-v6/src/interfaces/IJBFeeTerminal.sol";
+import {BaseHook} from "@uniswap/v4-periphery/src/utils/BaseHook.sol";
 import {IJBController} from "@bananapus/core-v6/src/interfaces/IJBController.sol";
-import {IJBTerminal} from "@bananapus/core-v6/src/interfaces/IJBTerminal.sol";
-
+import {IJBDirectory} from "@bananapus/core-v6/src/interfaces/IJBDirectory.sol";
+import {IJBFeeTerminal} from "@bananapus/core-v6/src/interfaces/IJBFeeTerminal.sol";
+import {IJBMultiTerminal} from "@bananapus/core-v6/src/interfaces/IJBMultiTerminal.sol";
 import {IJBPrices} from "@bananapus/core-v6/src/interfaces/IJBPrices.sol";
+import {IJBTerminal} from "@bananapus/core-v6/src/interfaces/IJBTerminal.sol";
 import {IJBTerminalStore} from "@bananapus/core-v6/src/interfaces/IJBTerminalStore.sol";
-
+import {IJBToken} from "@bananapus/core-v6/src/interfaces/IJBToken.sol";
+import {IJBTokens} from "@bananapus/core-v6/src/interfaces/IJBTokens.sol";
+import {JBConstants} from "@bananapus/core-v6/src/libraries/JBConstants.sol";
+import {JBRulesetMetadataResolver} from "@bananapus/core-v6/src/libraries/JBRulesetMetadataResolver.sol";
 import {JBRuleset} from "@bananapus/core-v6/src/structs/JBRuleset.sol";
 import {JBRulesetMetadata} from "@bananapus/core-v6/src/structs/JBRulesetMetadata.sol";
-import {JBRulesetMetadataResolver} from "@bananapus/core-v6/src/libraries/JBRulesetMetadataResolver.sol";
-import {JBConstants} from "@bananapus/core-v6/src/libraries/JBConstants.sol";
+
+import {IWETH} from "./interfaces/IWETH.sol";
+import {IUniswapV3Factory} from "./interfaces/IUniswapV3Factory.sol";
+import {IUniswapV3Pool} from "./interfaces/IUniswapV3Pool.sol";
+import {Oracle} from "./libraries/Oracle.sol";
 
 /// @title JBUniswapV4Hook
 /// @notice Official Juicebox integration for Uniswap v4 that provides intelligent price comparison and optimal routing
@@ -69,33 +58,33 @@ contract JBUniswapV4Hook is BaseHook, IUniswapV3SwapCallback {
     // --------------------------- custom errors ------------------------- //
     //*********************************************************************//
 
-    /// @notice Reverts when an exact-output swap is attempted
-    /// @dev Only exact-input swaps are supported
-    error JBUniswapV4Hook_ExactOutputSwapsNotSupported();
-
-    /// @notice Reverts when secondsAgo is zero in _consult()
-    error JBUniswapV4Hook_SecondsAgoCannotBeZero();
-
-    /// @notice Reverts when observation cardinality is zero
-    error JBUniswapV4Hook_ObservationCardinalityZero();
-
-    /// @notice Reverts when v3 pool is not found
-    error JBUniswapV4Hook_V3PoolNotFound();
-
-    /// @notice Reverts when v3 pool is locked
-    error JBUniswapV4Hook_V3PoolLocked();
-
-    /// @notice Reverts when swap callback has no valid swap (both deltas <= 0)
-    error JBUniswapV4Hook_NoSwap();
-
-    /// @notice Reverts when swap callback is called from invalid sender
-    error JBUniswapV4Hook_InvalidCallback();
-
-    /// @notice Reverts when amountOutMin is not provided in hookData
+    /// @notice Reverts when amountOutMin is not provided in hookData.
     error JBUniswapV4Hook_AmountOutMinRequired();
 
-    /// @notice Reverts when swap output is below minimum required amount
+    /// @notice Reverts when an exact-output swap is attempted.
+    /// @dev Only exact-input swaps are supported.
+    error JBUniswapV4Hook_ExactOutputSwapsNotSupported();
+
+    /// @notice Reverts when swap output is below minimum required amount.
     error JBUniswapV4Hook_InsufficientOutput();
+
+    /// @notice Reverts when swap callback is called from invalid sender.
+    error JBUniswapV4Hook_InvalidCallback();
+
+    /// @notice Reverts when swap callback has no valid swap (both deltas <= 0).
+    error JBUniswapV4Hook_NoSwap();
+
+    /// @notice Reverts when observation cardinality is zero.
+    error JBUniswapV4Hook_ObservationCardinalityZero();
+
+    /// @notice Reverts when secondsAgo is zero in _consult().
+    error JBUniswapV4Hook_SecondsAgoCannotBeZero();
+
+    /// @notice Reverts when v3 pool is locked.
+    error JBUniswapV4Hook_V3PoolLocked();
+
+    /// @notice Reverts when v3 pool is not found.
+    error JBUniswapV4Hook_V3PoolNotFound();
 
     //*********************************************************************//
     // ---------------------------- structs ------------------------------ //
@@ -210,25 +199,41 @@ contract JBUniswapV4Hook is BaseHook, IUniswapV3SwapCallback {
     // ------------------------- public views ---------------------------- //
     //*********************************************************************//
 
-    /// @notice Get the hook permissions for Uniswap v4
-    /// @return permissions The hook permissions struct
-    function getHookPermissions() public pure override returns (Hooks.Permissions memory) {
-        return Hooks.Permissions({
-            beforeInitialize: false,
-            afterInitialize: true, // Initialize oracle observations
-            beforeAddLiquidity: false,
-            afterAddLiquidity: true, // Record oracle observations
-            beforeRemoveLiquidity: false,
-            afterRemoveLiquidity: true, // Record oracle observations
-            beforeSwap: true,
-            afterSwap: true, // Record oracle observations
-            beforeDonate: false,
-            afterDonate: false,
-            beforeSwapReturnDelta: true, // Enable to override swap behavior
-            afterSwapReturnDelta: false,
-            afterAddLiquidityReturnDelta: false,
-            afterRemoveLiquidityReturnDelta: false
-        });
+    /// @notice Calculate expected output from selling JB tokens
+    /// @param projectId The Juicebox project ID
+    /// @param tokenAmountIn The amount of JB tokens being sold
+    /// @param outputToken The token to receive (e.g., ETH, USDC)
+    /// @param terminal The terminal from which the selling is happening.
+    /// @return expectedOutput The expected amount of output tokens received
+    function calculateExpectedOutputFromSelling(
+        uint256 projectId,
+        uint256 tokenAmountIn,
+        address outputToken,
+        IJBTerminal terminal
+    )
+        public
+        view
+        returns (uint256 expectedOutput)
+    {
+        // Normalize output token to Juicebox's native token representation
+        outputToken = _normalizeToken(outputToken);
+
+        // Get the terminal store for the project
+        try IJBMultiTerminal(address(terminal)).STORE() returns (IJBTerminalStore store) {
+            // Get the current reclaimable surplus for the project (gross, before fees)
+            uint256 grossReclaim = store.currentReclaimableSurplusOf(
+                projectId,
+                tokenAmountIn,
+                uint32(uint160(outputToken)), // the currency id of the output token
+                _getTokenDecimals(outputToken)
+            );
+            // Deduct JB protocol fee dynamically read from the terminal.
+            // Conservative: if hook is feeless, estimate is slightly low → routes to Uniswap (still good).
+            uint256 fee = IJBFeeTerminal(address(terminal)).FEE();
+            return grossReclaim - FullMath.mulDiv(grossReclaim, fee, JBConstants.MAX_FEE);
+        } catch {
+            return 0;
+        }
     }
 
     /// @notice Calculate expected tokens for a given payment amount in any currency
@@ -313,43 +318,6 @@ contract JBUniswapV4Hook is BaseHook, IUniswapV3SwapCallback {
         }
     }
 
-    /// @notice Calculate expected output from selling JB tokens
-    /// @param projectId The Juicebox project ID
-    /// @param tokenAmountIn The amount of JB tokens being sold
-    /// @param outputToken The token to receive (e.g., ETH, USDC)
-    /// @param terminal The terminal from which the selling is happening.
-    /// @return expectedOutput The expected amount of output tokens received
-    function calculateExpectedOutputFromSelling(
-        uint256 projectId,
-        uint256 tokenAmountIn,
-        address outputToken,
-        IJBTerminal terminal
-    )
-        public
-        view
-        returns (uint256 expectedOutput)
-    {
-        // Normalize output token to Juicebox's native token representation
-        outputToken = _normalizeToken(outputToken);
-
-        // Get the terminal store for the project
-        try IJBMultiTerminal(address(terminal)).STORE() returns (IJBTerminalStore store) {
-            // Get the current reclaimable surplus for the project (gross, before fees)
-            uint256 grossReclaim = store.currentReclaimableSurplusOf(
-                projectId,
-                tokenAmountIn,
-                uint32(uint160(outputToken)), // the currency id of the output token
-                _getTokenDecimals(outputToken)
-            );
-            // Deduct JB protocol fee dynamically read from the terminal.
-            // Conservative: if hook is feeless, estimate is slightly low → routes to Uniswap (still good).
-            uint256 fee = IJBFeeTerminal(address(terminal)).FEE();
-            return grossReclaim - FullMath.mulDiv(grossReclaim, fee, JBConstants.MAX_FEE);
-        } catch {
-            return 0;
-        }
-    }
-
     /// @notice Estimate expected output tokens from a Uniswap swap using TWAP
     /// @dev Uses time-weighted average price to prevent manipulation
     /// @param poolId The pool ID
@@ -406,6 +374,50 @@ contract JBUniswapV4Hook is BaseHook, IUniswapV3SwapCallback {
         return estimatedOut;
     }
 
+    /// @notice Estimate expected output tokens from a Uniswap v3 swap using TWAP
+    /// @param token0 First token in the pair
+    /// @param token1 Second token in the pair
+    /// @param amountIn The input amount
+    /// @param zeroForOne Whether swapping token0 for token1
+    /// @return estimatedOut The estimated output amount
+    function estimateUniswapV3Output(
+        address token0,
+        address token1,
+        uint256 amountIn,
+        bool zeroForOne
+    )
+        external
+        view
+        returns (uint256 estimatedOut)
+    {
+        // Determine input/output tokens based on swap direction
+        address inputToken = zeroForOne ? token0 : token1;
+        address outputToken = zeroForOne ? token1 : token0;
+        (estimatedOut,,) = _getQuote({projectToken: outputToken, amountIn: amountIn, terminalToken: inputToken});
+        return estimatedOut;
+    }
+
+    /// @notice Get the hook permissions for Uniswap v4
+    /// @return permissions The hook permissions struct
+    function getHookPermissions() public pure override returns (Hooks.Permissions memory) {
+        return Hooks.Permissions({
+            beforeInitialize: false,
+            afterInitialize: true, // Initialize oracle observations
+            beforeAddLiquidity: false,
+            afterAddLiquidity: true, // Record oracle observations
+            beforeRemoveLiquidity: false,
+            afterRemoveLiquidity: true, // Record oracle observations
+            beforeSwap: true,
+            afterSwap: true, // Record oracle observations
+            beforeDonate: false,
+            afterDonate: false,
+            beforeSwapReturnDelta: true, // Enable to override swap behavior
+            afterSwapReturnDelta: false,
+            afterAddLiquidityReturnDelta: false,
+            afterRemoveLiquidityReturnDelta: false
+        });
+    }
+
     /// @notice Observe TWAP tick
     /// @param poolId The pool ID
     /// @param secondsAgo Seconds in the past to calculate TWAP from
@@ -453,27 +465,39 @@ contract JBUniswapV4Hook is BaseHook, IUniswapV3SwapCallback {
         arithmeticMeanTick = int24((tickCumulativeCurrent - tickCumulativePast) / int56(uint56(secondsAgo)));
     }
 
-    /// @notice Estimate expected output tokens from a Uniswap v3 swap using TWAP
-    /// @param token0 First token in the pair
-    /// @param token1 Second token in the pair
-    /// @param amountIn The input amount
-    /// @param zeroForOne Whether swapping token0 for token1
-    /// @return estimatedOut The estimated output amount
-    function estimateUniswapV3Output(
-        address token0,
-        address token1,
-        uint256 amountIn,
-        bool zeroForOne
+    /// @notice Calculates time-weighted means of tick and liquidity for a given Uniswap V3 pool
+    /// @param pool The pool that we want to observe
+    /// @param secondsAgo Number of seconds in the past from which to calculate the time-weighted means
+    /// @return arithmeticMeanTick The arithmetic mean tick from (block.timestamp - secondsAgo) to block.timestamp
+    /// @return harmonicMeanLiquidity The harmonic mean liquidity from (block.timestamp - secondsAgo) to block.timestamp
+    function _consult(
+        IUniswapV3Pool pool,
+        uint32 secondsAgo
     )
         external
         view
-        returns (uint256 estimatedOut)
+        returns (int24 arithmeticMeanTick, uint128 harmonicMeanLiquidity)
     {
-        // Determine input/output tokens based on swap direction
-        address inputToken = zeroForOne ? token0 : token1;
-        address outputToken = zeroForOne ? token1 : token0;
-        (estimatedOut,,) = _getQuote({projectToken: outputToken, amountIn: amountIn, terminalToken: inputToken});
-        return estimatedOut;
+        if (secondsAgo == 0) revert JBUniswapV4Hook_SecondsAgoCannotBeZero();
+
+        uint32[] memory secondsAgos = new uint32[](2);
+        secondsAgos[0] = secondsAgo;
+        secondsAgos[1] = 0;
+
+        (int56[] memory tickCumulatives, uint160[] memory secondsPerLiquidityCumulativeX128s) =
+            pool.observe(secondsAgos);
+
+        int56 tickCumulativesDelta = tickCumulatives[1] - tickCumulatives[0];
+        uint160 secondsPerLiquidityCumulativesDelta =
+            secondsPerLiquidityCumulativeX128s[1] - secondsPerLiquidityCumulativeX128s[0];
+
+        arithmeticMeanTick = int24(tickCumulativesDelta / int56(uint56(secondsAgo)));
+        // Always round to negative infinity
+        if (tickCumulativesDelta < 0 && (tickCumulativesDelta % int56(uint56(secondsAgo)) != 0)) arithmeticMeanTick--;
+
+        // We are multiplying here instead of shifting to ensure that harmonicMeanLiquidity doesn't overflow uint128
+        uint192 secondsAgoX160 = uint192(secondsAgo) * type(uint160).max;
+        harmonicMeanLiquidity = uint128(secondsAgoX160 / (uint192(secondsPerLiquidityCumulativesDelta) << 32));
     }
 
     /// @notice Find the V3 pool with highest liquidity across all fee tiers.
@@ -501,6 +525,28 @@ contract JBUniswapV4Hook is BaseHook, IUniswapV3SwapCallback {
                 continue;
             }
         }
+    }
+
+    /// @notice Given a pool, it returns the number of seconds ago of the oldest stored observation
+    /// @param pool Address of Uniswap V3 pool that we want to observe
+    /// @return secondsAgo The number of seconds ago of the oldest observation stored for the pool
+    // slither-disable-next-line unused-return
+    function _getOldestObservationSecondsAgo(IUniswapV3Pool pool) external view returns (uint32 secondsAgo) {
+        // slither-disable-next-line unused-return
+        (,, uint16 observationIndex, uint16 observationCardinality,,,) = pool.slot0();
+        if (observationCardinality == 0) revert JBUniswapV4Hook_ObservationCardinalityZero();
+
+        // slither-disable-next-line unused-return,weak-prng
+        (uint32 observationTimestamp,,, bool initialized) =
+            pool.observations((observationIndex + 1) % observationCardinality);
+
+        // The next index might not be initialized if the cardinality is in the process of increasing
+        // In this case the oldest observation is always in index 0
+        if (!initialized) {
+            (observationTimestamp,,,) = pool.observations(0);
+        }
+
+        secondsAgo = uint32(block.timestamp) - observationTimestamp;
     }
 
     /// @notice Get a quote based on the TWAP from the best V3 pool
@@ -588,63 +634,6 @@ contract JBUniswapV4Hook is BaseHook, IUniswapV3SwapCallback {
         }
     }
 
-    /// @notice Calculates time-weighted means of tick and liquidity for a given Uniswap V3 pool
-    /// @param pool The pool that we want to observe
-    /// @param secondsAgo Number of seconds in the past from which to calculate the time-weighted means
-    /// @return arithmeticMeanTick The arithmetic mean tick from (block.timestamp - secondsAgo) to block.timestamp
-    /// @return harmonicMeanLiquidity The harmonic mean liquidity from (block.timestamp - secondsAgo) to block.timestamp
-    function _consult(
-        IUniswapV3Pool pool,
-        uint32 secondsAgo
-    )
-        external
-        view
-        returns (int24 arithmeticMeanTick, uint128 harmonicMeanLiquidity)
-    {
-        if (secondsAgo == 0) revert JBUniswapV4Hook_SecondsAgoCannotBeZero();
-
-        uint32[] memory secondsAgos = new uint32[](2);
-        secondsAgos[0] = secondsAgo;
-        secondsAgos[1] = 0;
-
-        (int56[] memory tickCumulatives, uint160[] memory secondsPerLiquidityCumulativeX128s) =
-            pool.observe(secondsAgos);
-
-        int56 tickCumulativesDelta = tickCumulatives[1] - tickCumulatives[0];
-        uint160 secondsPerLiquidityCumulativesDelta =
-            secondsPerLiquidityCumulativeX128s[1] - secondsPerLiquidityCumulativeX128s[0];
-
-        arithmeticMeanTick = int24(tickCumulativesDelta / int56(uint56(secondsAgo)));
-        // Always round to negative infinity
-        if (tickCumulativesDelta < 0 && (tickCumulativesDelta % int56(uint56(secondsAgo)) != 0)) arithmeticMeanTick--;
-
-        // We are multiplying here instead of shifting to ensure that harmonicMeanLiquidity doesn't overflow uint128
-        uint192 secondsAgoX160 = uint192(secondsAgo) * type(uint160).max;
-        harmonicMeanLiquidity = uint128(secondsAgoX160 / (uint192(secondsPerLiquidityCumulativesDelta) << 32));
-    }
-
-    /// @notice Given a pool, it returns the number of seconds ago of the oldest stored observation
-    /// @param pool Address of Uniswap V3 pool that we want to observe
-    /// @return secondsAgo The number of seconds ago of the oldest observation stored for the pool
-    // slither-disable-next-line unused-return
-    function _getOldestObservationSecondsAgo(IUniswapV3Pool pool) external view returns (uint32 secondsAgo) {
-        // slither-disable-next-line unused-return
-        (,, uint16 observationIndex, uint16 observationCardinality,,,) = pool.slot0();
-        if (observationCardinality == 0) revert JBUniswapV4Hook_ObservationCardinalityZero();
-
-        // slither-disable-next-line unused-return,weak-prng
-        (uint32 observationTimestamp,,, bool initialized) =
-            pool.observations((observationIndex + 1) % observationCardinality);
-
-        // The next index might not be initialized if the cardinality is in the process of increasing
-        // In this case the oldest observation is always in index 0
-        if (!initialized) {
-            (observationTimestamp,,,) = pool.observations(0);
-        }
-
-        secondsAgo = uint32(block.timestamp) - observationTimestamp;
-    }
-
     /// @notice Given a tick and a token amount, calculates the amount of token received in exchange
     /// @param tick Tick value used to calculate the quote
     /// @param baseAmount Amount of token to be converted
@@ -681,188 +670,24 @@ contract JBUniswapV4Hook is BaseHook, IUniswapV3SwapCallback {
     // ---------------------- internal functions ---------------------- //
     //*********************************************************************//
 
-    /// @notice Get the TWAP sqrt price for a pool
-    /// @param poolId The pool ID
-    /// @return sqrtPriceX96 The TWAP sqrt price, or 0 if not enough observations
-    function _getTWAPSqrtPrice(PoolId poolId) internal view returns (uint160) {
-        ObservationState memory state = states[poolId];
-
-        // Need at least 2 observations for TWAP
-        if (state.cardinality < 2) {
-            return 0;
-        }
-
-        // Get current pool state for observation
-        // getSlot0 returns: sqrtPriceX96, tick, protocolFee, lpFee (no liquidity)
-        // slither-disable-next-line unused-return
-        (, int24 tick,,) = poolManager.getSlot0(poolId);
-        // Get current liquidity from the dedicated accessor
-        uint128 liquidity = poolManager.getLiquidity(poolId);
-
-        uint32 currentTime = uint32(block.timestamp);
-
-        // Calculate the target time (TWAP_PERIOD seconds ago)
-        uint32 oldestAllowedTime = currentTime > TWAP_PERIOD ? currentTime - TWAP_PERIOD : 0;
-
-        // Get oldest observation timestamp
-        // slither-disable-next-line weak-prng
-        Oracle.Observation memory oldestObs = observations[poolId][(state.index + 1) % state.cardinality];
-        if (!oldestObs.initialized) {
-            oldestObs = observations[poolId][0];
-        }
-
-        // If we don't have observations old enough, return 0
-        if (oldestObs.blockTimestamp > oldestAllowedTime) {
-            return 0;
-        }
-
-        // Observe the TWAP
-        int24 arithmeticMeanTick = this.observeTWAP({
-            poolId: poolId,
-            secondsAgo: TWAP_PERIOD,
-            tick: tick,
-            index: state.index,
-            liquidity: liquidity,
-            cardinality: state.cardinality
-        });
-
-        // Convert tick to sqrtPriceX96
-        return TickMath.getSqrtPriceAtTick(arithmeticMeanTick);
-    }
-
-    /// @notice Creates a BeforeSwapDelta from input and output amounts
-    /// @param amountIn The input amount
-    /// @param amountOut The output amount
-    /// @return delta The BeforeSwapDelta representing the swap
-    function _createSwapDelta(uint256 amountIn, uint256 amountOut) internal pure returns (BeforeSwapDelta) {
-        // The hook takes the input amount and settles the output amount
-        // For both buying and selling: take inputCurrency, settle outputCurrency
-        return
-            toBeforeSwapDelta({
-                deltaSpecified: int128(uint128(amountIn)), deltaUnspecified: -int128(uint128(amountOut))
-            });
-    }
-
-    /// @notice Settles output tokens back to PoolManager
-    /// @param outputCurrency The output currency to settle
-    /// @param amount The amount to settle
-    /// @dev Uses OpenZeppelin's CurrencySettler library to ensure correct settlement order
-    /// @dev This handles sync -> transfer -> settle in the correct order for flash-accounting safety
-    function _settleOutput(Currency outputCurrency, uint256 amount) internal {
-        // Use CurrencySettler library to ensure correct settlement order and flash-accounting safety
-        // payer = address(this) since we're settling tokens we received
-        // burn = false since we're transferring ERC-20 tokens, not burning ERC-6909 tokens
-        CurrencySettler.settle({
-            currency: outputCurrency, poolManager: poolManager, payer: address(this), amount: amount, burn: false
-        });
-    }
-
-    /// @notice Normalizes a token address to Juicebox's native token representation for pricing
-    /// @dev For price quoting, only native ETH is normalized to JB_NATIVE_TOKEN. WETH is treated
-    ///      as a distinct currency and must have its own Juicebox configuration if used.
-    /// @param token The token address to normalize
-    /// @return normalizedToken The normalized token address (JB_NATIVE_TOKEN only for native ETH)
-    function _normalizeToken(address token) internal view returns (address) {
-        return token == UNISWAP_NATIVE_ETH ? JB_NATIVE_TOKEN : token;
-    }
-
-    /// @notice Normalizes a token address for terminal interactions
-    /// @dev Only normalizes native ETH to JB_NATIVE_TOKEN. WETH is only used when routing through v3,
-    ///      not when routing through Juicebox, so we don't need to handle WETH normalization here.
-    /// @param token The token address to normalize
-    /// @return normalizedToken The normalized token address (JB_NATIVE_TOKEN only for native ETH)
-    function _normalizeTokenForTerminal(address token) internal view returns (address) {
-        return token == UNISWAP_NATIVE_ETH ? JB_NATIVE_TOKEN : token;
-    }
-
-    /// @notice Converts native ETH address to WETH for Uniswap v3 operations
-    /// @dev v3 pools use WETH, not address(0), so we need to map native ETH to WETH
-    /// @param token The token address (may be address(0) for native ETH)
-    /// @return v3Token The token address to use for v3 operations (WETH if input was address(0))
-    function _convertToV3Token(address token) internal view returns (address) {
-        return token == UNISWAP_NATIVE_ETH ? WETH : token;
-    }
-
-    /// @notice Gets token decimals, defaulting to 18 if unavailable
-    /// @param token The token address
-    /// @return decimals The token decimals (defaults to 18)
-    function _getTokenDecimals(address token) internal view returns (uint8) {
-        if (token == JB_NATIVE_TOKEN) {
-            return 18; // Native ETH has 18 decimals
-        }
-        try IERC20Metadata(token).decimals() returns (uint8 decimals) {
-            return decimals;
-        } catch {
-            return 18; // Default to 18 if unavailable
-        }
-    }
-
-    /// @notice Calculates expected tokens with currency conversion
-    /// @dev Normalizes payment amount to 18 decimals, then calculates tokens based on weight and price conversion
-    /// @param tokensPerBaseCurrency The project's weight (tokens per base currency unit)
-    /// @param paymentAmount The payment amount in the token's native decimals
-    /// @param paymentTokenDecimals The decimals of the payment token
-    /// @param baseCurrencyPerPaymentToken The price conversion rate (base currency per payment token, scaled by 1e18)
-    /// @return expectedTokens The expected number of tokens to be received
-    function _calculateTokensWithCurrency(
-        uint256 tokensPerBaseCurrency,
-        uint256 paymentAmount,
-        uint8 paymentTokenDecimals,
-        uint256 baseCurrencyPerPaymentToken
+    /// @notice Hook called after liquidity is added to record price observations
+    /// @param key The pool key
+    /// @return selector The function selector
+    /// @return delta The delta to return (zero in our case)
+    function _afterAddLiquidity(
+        address,
+        PoolKey calldata key,
+        ModifyLiquidityParams calldata,
+        BalanceDelta,
+        BalanceDelta,
+        bytes calldata
     )
         internal
-        pure
-        returns (uint256 expectedTokens)
+        override
+        returns (bytes4, BalanceDelta)
     {
-        // Normalize payment amount to 18 decimals
-        uint256 paymentAmount18 =
-            paymentTokenDecimals == 18 ? paymentAmount : (paymentAmount * 1e18) / (10 ** paymentTokenDecimals);
-
-        // Calculate tokens: if price conversion is 1:1, simplify; otherwise apply price conversion
-        if (baseCurrencyPerPaymentToken == 1e18) {
-            // Direct calculation: (weight * paymentAmount18) / 1e18
-            expectedTokens = FullMath.mulDiv(tokensPerBaseCurrency, paymentAmount18, 1e18);
-        } else {
-            // Two-step calculation: first multiply by weight, then apply price conversion
-            uint256 intermediate = FullMath.mulDiv(tokensPerBaseCurrency, paymentAmount18, 1e18);
-            expectedTokens = FullMath.mulDiv(intermediate, baseCurrencyPerPaymentToken, 1e18);
-        }
-    }
-
-    /// @notice Gets the primary terminal for a project and token
-    /// @param projectId The project ID
-    /// @param token The token address
-    /// @return terminal The primary terminal, or address(0) if not found
-    function _getPrimaryTerminal(uint256 projectId, address token) internal view returns (IJBTerminal) {
-        // Only normalize native ETH to JB_NATIVE_TOKEN for terminal lookup
-        // WETH is only used when routing through v3, not when routing through Juicebox
-        address normalized = _normalizeTokenForTerminal(token);
-        try DIRECTORY.primaryTerminalOf({projectId: projectId, token: normalized}) returns (IJBTerminal t) {
-            return t;
-        } catch {
-            return IJBTerminal(address(0));
-        }
-    }
-
-    /// @notice Calculates token ordering for Uniswap v3 (token0 < token1)
-    /// @param tokenA First token
-    /// @param tokenB Second token
-    /// @return token0 The smaller token address
-    /// @return token1 The larger token address
-    /// @return zeroForOne Whether swapping token0 for token1
-    function _getTokenOrdering(
-        address tokenA,
-        address tokenB
-    )
-        internal
-        pure
-        returns (address token0, address token1, bool zeroForOne)
-    {
-        if (tokenA < tokenB) {
-            return (tokenA, tokenB, true);
-        } else {
-            return (tokenB, tokenA, false);
-        }
+        _recordObservation(key.toId());
+        return (BaseHook.afterAddLiquidity.selector, BalanceDelta.wrap(0));
     }
 
     /// @notice Hook called after pool initialization to set up oracle
@@ -881,47 +706,24 @@ contract JBUniswapV4Hook is BaseHook, IUniswapV3SwapCallback {
         return BaseHook.afterInitialize.selector;
     }
 
-    /// @notice Records an oracle observation and grows cardinality if needed
-    /// @param poolId The pool ID
-    function _recordObservation(PoolId poolId) internal {
-        // Get current pool state
-        // getSlot0 returns: sqrtPriceX96, tick, protocolFee, lpFee (no liquidity)
-        // slither-disable-next-line unused-return
-        (, int24 tick,,) = poolManager.getSlot0(poolId);
-        // Get current liquidity from the dedicated accessor
-        uint128 liquidity = poolManager.getLiquidity(poolId);
-
-        ObservationState memory state = states[poolId];
-
-        // Auto-grow cardinality when at capacity to enable TWAP functionality
-        // Grow when we're about to wrap around (index == cardinality - 1) and cardinality == cardinalityNext
-        uint16 newCardinalityNext = state.cardinalityNext;
-        // slither-disable-next-line incorrect-equality
-        if (state.cardinality == state.cardinalityNext && state.index == state.cardinality - 1) {
-            // Double the cardinality, capped at a reasonable maximum (e.g., 256 for 30-minute TWAP with 1-hour window)
-            // This allows storing ~256 observations = ~128 hours of data at 1 observation per 30 minutes
-            uint16 targetCardinality = state.cardinalityNext < 128
-                ? state.cardinalityNext * 2
-                : (state.cardinalityNext < 256 ? 256 : state.cardinalityNext);
-
-            // Grow the oracle array
-            newCardinalityNext = observations[poolId].grow({current: state.cardinalityNext, next: targetCardinality});
-        }
-
-        // Write new observation
-        (uint16 indexUpdated, uint16 cardinalityUpdated) = observations[poolId].write({
-            index: state.index,
-            blockTimestamp: uint32(block.timestamp),
-            tick: tick,
-            liquidity: liquidity,
-            cardinality: state.cardinality,
-            cardinalityNext: newCardinalityNext
-        });
-
-        // Update state
-        states[poolId] = ObservationState({
-            index: indexUpdated, cardinality: cardinalityUpdated, cardinalityNext: newCardinalityNext
-        });
+    /// @notice Hook called after liquidity is removed to record price observations
+    /// @param key The pool key
+    /// @return selector The function selector
+    /// @return delta The delta to return (zero in our case)
+    function _afterRemoveLiquidity(
+        address,
+        PoolKey calldata key,
+        ModifyLiquidityParams calldata,
+        BalanceDelta,
+        BalanceDelta,
+        bytes calldata
+    )
+        internal
+        override
+        returns (bytes4, BalanceDelta)
+    {
+        _recordObservation(key.toId());
+        return (BaseHook.afterRemoveLiquidity.selector, BalanceDelta.wrap(0));
     }
 
     /// @notice Hook called after swap to record price observations and validate slippage for V4 swaps
@@ -968,46 +770,6 @@ contract JBUniswapV4Hook is BaseHook, IUniswapV3SwapCallback {
 
         _recordObservation(key.toId());
         return (BaseHook.afterSwap.selector, 0);
-    }
-
-    /// @notice Hook called after liquidity is added to record price observations
-    /// @param key The pool key
-    /// @return selector The function selector
-    /// @return delta The delta to return (zero in our case)
-    function _afterAddLiquidity(
-        address,
-        PoolKey calldata key,
-        ModifyLiquidityParams calldata,
-        BalanceDelta,
-        BalanceDelta,
-        bytes calldata
-    )
-        internal
-        override
-        returns (bytes4, BalanceDelta)
-    {
-        _recordObservation(key.toId());
-        return (BaseHook.afterAddLiquidity.selector, BalanceDelta.wrap(0));
-    }
-
-    /// @notice Hook called after liquidity is removed to record price observations
-    /// @param key The pool key
-    /// @return selector The function selector
-    /// @return delta The delta to return (zero in our case)
-    function _afterRemoveLiquidity(
-        address,
-        PoolKey calldata key,
-        ModifyLiquidityParams calldata,
-        BalanceDelta,
-        BalanceDelta,
-        bytes calldata
-    )
-        internal
-        override
-        returns (bytes4, BalanceDelta)
-    {
-        _recordObservation(key.toId());
-        return (BaseHook.afterRemoveLiquidity.selector, BalanceDelta.wrap(0));
     }
 
     /// @notice Routes swaps to the best option among V4, V3, and Juicebox
@@ -1190,6 +952,219 @@ contract JBUniswapV4Hook is BaseHook, IUniswapV3SwapCallback {
         return (BaseHook.beforeSwap.selector, BeforeSwapDeltaLibrary.ZERO_DELTA, 0);
     }
 
+    /// @notice Calculates expected tokens with currency conversion
+    /// @dev Normalizes payment amount to 18 decimals, then calculates tokens based on weight and price conversion
+    /// @param tokensPerBaseCurrency The project's weight (tokens per base currency unit)
+    /// @param paymentAmount The payment amount in the token's native decimals
+    /// @param paymentTokenDecimals The decimals of the payment token
+    /// @param baseCurrencyPerPaymentToken The price conversion rate (base currency per payment token, scaled by 1e18)
+    /// @return expectedTokens The expected number of tokens to be received
+    function _calculateTokensWithCurrency(
+        uint256 tokensPerBaseCurrency,
+        uint256 paymentAmount,
+        uint8 paymentTokenDecimals,
+        uint256 baseCurrencyPerPaymentToken
+    )
+        internal
+        pure
+        returns (uint256 expectedTokens)
+    {
+        // Normalize payment amount to 18 decimals
+        uint256 paymentAmount18 =
+            paymentTokenDecimals == 18 ? paymentAmount : (paymentAmount * 1e18) / (10 ** paymentTokenDecimals);
+
+        // Calculate tokens: if price conversion is 1:1, simplify; otherwise apply price conversion
+        if (baseCurrencyPerPaymentToken == 1e18) {
+            // Direct calculation: (weight * paymentAmount18) / 1e18
+            expectedTokens = FullMath.mulDiv(tokensPerBaseCurrency, paymentAmount18, 1e18);
+        } else {
+            // Two-step calculation: first multiply by weight, then apply price conversion
+            uint256 intermediate = FullMath.mulDiv(tokensPerBaseCurrency, paymentAmount18, 1e18);
+            expectedTokens = FullMath.mulDiv(intermediate, baseCurrencyPerPaymentToken, 1e18);
+        }
+    }
+
+    /// @notice Converts native ETH address to WETH for Uniswap v3 operations
+    /// @dev v3 pools use WETH, not address(0), so we need to map native ETH to WETH
+    /// @param token The token address (may be address(0) for native ETH)
+    /// @return v3Token The token address to use for v3 operations (WETH if input was address(0))
+    function _convertToV3Token(address token) internal view returns (address) {
+        return token == UNISWAP_NATIVE_ETH ? WETH : token;
+    }
+
+    /// @notice Creates a BeforeSwapDelta from input and output amounts
+    /// @param amountIn The input amount
+    /// @param amountOut The output amount
+    /// @return delta The BeforeSwapDelta representing the swap
+    function _createSwapDelta(uint256 amountIn, uint256 amountOut) internal pure returns (BeforeSwapDelta) {
+        // The hook takes the input amount and settles the output amount
+        // For both buying and selling: take inputCurrency, settle outputCurrency
+        return
+            toBeforeSwapDelta({
+                deltaSpecified: int128(uint128(amountIn)), deltaUnspecified: -int128(uint128(amountOut))
+            });
+    }
+
+    /// @notice Gets the primary terminal for a project and token
+    /// @param projectId The project ID
+    /// @param token The token address
+    /// @return terminal The primary terminal, or address(0) if not found
+    function _getPrimaryTerminal(uint256 projectId, address token) internal view returns (IJBTerminal) {
+        // Only normalize native ETH to JB_NATIVE_TOKEN for terminal lookup
+        // WETH is only used when routing through v3, not when routing through Juicebox
+        address normalized = _normalizeTokenForTerminal(token);
+        try DIRECTORY.primaryTerminalOf({projectId: projectId, token: normalized}) returns (IJBTerminal t) {
+            return t;
+        } catch {
+            return IJBTerminal(address(0));
+        }
+    }
+
+    /// @notice Get the TWAP sqrt price for a pool
+    /// @param poolId The pool ID
+    /// @return sqrtPriceX96 The TWAP sqrt price, or 0 if not enough observations
+    function _getTWAPSqrtPrice(PoolId poolId) internal view returns (uint160) {
+        ObservationState memory state = states[poolId];
+
+        // Need at least 2 observations for TWAP
+        if (state.cardinality < 2) {
+            return 0;
+        }
+
+        // Get current pool state for observation
+        // getSlot0 returns: sqrtPriceX96, tick, protocolFee, lpFee (no liquidity)
+        // slither-disable-next-line unused-return
+        (, int24 tick,,) = poolManager.getSlot0(poolId);
+        // Get current liquidity from the dedicated accessor
+        uint128 liquidity = poolManager.getLiquidity(poolId);
+
+        uint32 currentTime = uint32(block.timestamp);
+
+        // Calculate the target time (TWAP_PERIOD seconds ago)
+        uint32 oldestAllowedTime = currentTime > TWAP_PERIOD ? currentTime - TWAP_PERIOD : 0;
+
+        // Get oldest observation timestamp
+        // slither-disable-next-line weak-prng
+        Oracle.Observation memory oldestObs = observations[poolId][(state.index + 1) % state.cardinality];
+        if (!oldestObs.initialized) {
+            oldestObs = observations[poolId][0];
+        }
+
+        // If we don't have observations old enough, return 0
+        if (oldestObs.blockTimestamp > oldestAllowedTime) {
+            return 0;
+        }
+
+        // Observe the TWAP
+        int24 arithmeticMeanTick = this.observeTWAP({
+            poolId: poolId,
+            secondsAgo: TWAP_PERIOD,
+            tick: tick,
+            index: state.index,
+            liquidity: liquidity,
+            cardinality: state.cardinality
+        });
+
+        // Convert tick to sqrtPriceX96
+        return TickMath.getSqrtPriceAtTick(arithmeticMeanTick);
+    }
+
+    /// @notice Gets token decimals, defaulting to 18 if unavailable
+    /// @param token The token address
+    /// @return decimals The token decimals (defaults to 18)
+    function _getTokenDecimals(address token) internal view returns (uint8) {
+        if (token == JB_NATIVE_TOKEN) {
+            return 18; // Native ETH has 18 decimals
+        }
+        try IERC20Metadata(token).decimals() returns (uint8 decimals) {
+            return decimals;
+        } catch {
+            return 18; // Default to 18 if unavailable
+        }
+    }
+
+    /// @notice Calculates token ordering for Uniswap v3 (token0 < token1)
+    /// @param tokenA First token
+    /// @param tokenB Second token
+    /// @return token0 The smaller token address
+    /// @return token1 The larger token address
+    /// @return zeroForOne Whether swapping token0 for token1
+    function _getTokenOrdering(
+        address tokenA,
+        address tokenB
+    )
+        internal
+        pure
+        returns (address token0, address token1, bool zeroForOne)
+    {
+        if (tokenA < tokenB) {
+            return (tokenA, tokenB, true);
+        } else {
+            return (tokenB, tokenA, false);
+        }
+    }
+
+    /// @notice Normalizes a token address to Juicebox's native token representation for pricing
+    /// @dev For price quoting, only native ETH is normalized to JB_NATIVE_TOKEN. WETH is treated
+    ///      as a distinct currency and must have its own Juicebox configuration if used.
+    /// @param token The token address to normalize
+    /// @return normalizedToken The normalized token address (JB_NATIVE_TOKEN only for native ETH)
+    function _normalizeToken(address token) internal view returns (address) {
+        return token == UNISWAP_NATIVE_ETH ? JB_NATIVE_TOKEN : token;
+    }
+
+    /// @notice Normalizes a token address for terminal interactions
+    /// @dev Only normalizes native ETH to JB_NATIVE_TOKEN. WETH is only used when routing through v3,
+    ///      not when routing through Juicebox, so we don't need to handle WETH normalization here.
+    /// @param token The token address to normalize
+    /// @return normalizedToken The normalized token address (JB_NATIVE_TOKEN only for native ETH)
+    function _normalizeTokenForTerminal(address token) internal view returns (address) {
+        return token == UNISWAP_NATIVE_ETH ? JB_NATIVE_TOKEN : token;
+    }
+
+    /// @notice Records an oracle observation and grows cardinality if needed
+    /// @param poolId The pool ID
+    function _recordObservation(PoolId poolId) internal {
+        // Get current pool state
+        // getSlot0 returns: sqrtPriceX96, tick, protocolFee, lpFee (no liquidity)
+        // slither-disable-next-line unused-return
+        (, int24 tick,,) = poolManager.getSlot0(poolId);
+        // Get current liquidity from the dedicated accessor
+        uint128 liquidity = poolManager.getLiquidity(poolId);
+
+        ObservationState memory state = states[poolId];
+
+        // Auto-grow cardinality when at capacity to enable TWAP functionality
+        // Grow when we're about to wrap around (index == cardinality - 1) and cardinality == cardinalityNext
+        uint16 newCardinalityNext = state.cardinalityNext;
+        // slither-disable-next-line incorrect-equality
+        if (state.cardinality == state.cardinalityNext && state.index == state.cardinality - 1) {
+            // Double the cardinality, capped at a reasonable maximum (e.g., 256 for 30-minute TWAP with 1-hour window)
+            // This allows storing ~256 observations = ~128 hours of data at 1 observation per 30 minutes
+            uint16 targetCardinality = state.cardinalityNext < 128
+                ? state.cardinalityNext * 2
+                : (state.cardinalityNext < 256 ? 256 : state.cardinalityNext);
+
+            // Grow the oracle array
+            newCardinalityNext = observations[poolId].grow({current: state.cardinalityNext, next: targetCardinality});
+        }
+
+        // Write new observation
+        (uint16 indexUpdated, uint16 cardinalityUpdated) = observations[poolId].write({
+            index: state.index,
+            blockTimestamp: uint32(block.timestamp),
+            tick: tick,
+            liquidity: liquidity,
+            cardinality: state.cardinality,
+            cardinalityNext: newCardinalityNext
+        });
+
+        // Update state
+        states[poolId] = ObservationState({
+            index: indexUpdated, cardinality: cardinalityUpdated, cardinalityNext: newCardinalityNext
+        });
+    }
+
     /// @notice Routes a swap through Juicebox terminal instead of Uniswap
     /// @param projectId The Juicebox project ID
     /// @param inputCurrency The input currency (native ETH or ERC20)
@@ -1346,6 +1321,20 @@ contract JBUniswapV4Hook is BaseHook, IUniswapV3SwapCallback {
         // Settle output back to PoolManager
         _settleOutput({outputCurrency: outputCurrency, amount: outputReceived});
         return outputReceived;
+    }
+
+    /// @notice Settles output tokens back to PoolManager
+    /// @param outputCurrency The output currency to settle
+    /// @param amount The amount to settle
+    /// @dev Uses OpenZeppelin's CurrencySettler library to ensure correct settlement order
+    /// @dev This handles sync -> transfer -> settle in the correct order for flash-accounting safety
+    function _settleOutput(Currency outputCurrency, uint256 amount) internal {
+        // Use CurrencySettler library to ensure correct settlement order and flash-accounting safety
+        // payer = address(this) since we're settling tokens we received
+        // burn = false since we're transferring ERC-20 tokens, not burning ERC-6909 tokens
+        CurrencySettler.settle({
+            currency: outputCurrency, poolManager: poolManager, payer: address(this), amount: amount, burn: false
+        });
     }
 
     /// @notice Callback for Uniswap v3 swaps to pay for the swap
