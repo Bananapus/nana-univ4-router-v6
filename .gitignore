@@ -28,6 +28,9 @@ backup/
 
 publish.sh
 
+.claude/
+
+
 # Audit/nemesis output
 .audit/
 .audit-logs/
