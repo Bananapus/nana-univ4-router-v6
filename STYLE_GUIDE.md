@@ -459,7 +459,7 @@ CI checks formatting via `forge fmt --check`.
 | `NPM_TOKEN` | npm publish access (used by `publish.yml`) |
 | `RPC_ETHEREUM_MAINNET` | Ethereum mainnet RPC URL for fork tests (used by `test.yml`) |
 
-Fork tests (`*Fork*.t.sol`) gracefully skip via `vm.skip(true)` when no RPC URL is available, so CI passes even without the secret — but fork coverage requires it.
+Fork tests require `RPC_ETHEREUM_MAINNET` — they fail if it's missing.
 
 ### Branching
 
