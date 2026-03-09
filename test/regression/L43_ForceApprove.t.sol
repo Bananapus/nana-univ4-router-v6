@@ -6,7 +6,7 @@ import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 import {MockERC20} from "../mock/MockERC20.sol";
 
-/// @notice Regression test for L-43: forceApprove instead of safeIncreaseAllowance.
+/// @notice forceApprove instead of safeIncreaseAllowance.
 /// @dev safeIncreaseAllowance adds to the existing allowance. If a previous terminal
 /// call reverts after partial token consumption, leftover allowance accumulates on the
 /// next routing attempt. forceApprove sets an exact allowance regardless of the current

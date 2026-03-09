@@ -4,7 +4,7 @@ pragma solidity ^0.8.24;
 import {Test} from "forge-std/Test.sol";
 import {BalanceDelta, toBalanceDelta, BalanceDeltaLibrary} from "@uniswap/v4-core/src/types/BalanceDelta.sol";
 
-/// @title H-18 Regression: afterSwap slippage check must handle V4's negative output convention
+/// @title afterSwap slippage check must handle V4's negative output convention
 /// @notice In Uniswap V4, output amounts in BalanceDelta are negative (credits to the user).
 /// The old code checked `outputAmount > 0` which was never true for actual V4 swaps,
 /// meaning the slippage check was effectively disabled.
