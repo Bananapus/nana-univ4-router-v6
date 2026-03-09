@@ -104,7 +104,7 @@ Uniswap V4 hook that automatically routes swaps involving Juicebox project token
 |----------|-------|---------|
 | `TWAP_PERIOD` | 1800 (30 min) | V4 TWAP lookback window |
 | `STANDARD_TWAP_WINDOW` | 3600 (1 hour) | V3 TWAP lookback window |
-| `JB_NATIVE_TOKEN` | `0x...EEEe` | Juicebox native ETH sentinel |
+| `JB_NATIVE_TOKEN` | `0x000000000000000000000000000000000000EEEe` | Juicebox native ETH sentinel |
 | `UNISWAP_NATIVE_ETH` | `address(0)` | Uniswap native ETH sentinel |
 | `_FEE_TIERS` | `[3000, 500, 10000, 100]` | V3 fee tiers scanned (0.3%, 0.05%, 1%, 0.01%) |
 | `V3_MIN_SQRT_RATIO` | `4295128739` | V3 min sqrtPriceX96 for swap bounds |
@@ -120,7 +120,7 @@ Uniswap V4 hook that automatically routes swaps involving Juicebox project token
 3. **`_consult` and `_getOldestObservationSecondsAgo` are declared `external`, not `internal`.** They are called via `this._consult()` / `this._getOldestObservationSecondsAgo()` so they can be wrapped in try/catch. Test mocks cannot call them as internal helpers.
 4. **TWAP falls back to spot price silently.** If fewer than 2 observations or less than `TWAP_PERIOD` seconds of data exist, `_getTWAPSqrtPrice` returns 0 and the estimator uses `getSlot0` spot price. No revert, no event.
 5. **V3 routing scans all 4 fee tiers** (`3000, 500, 10000, 100`) and picks the pool with the highest in-range liquidity. If no V3 pool exists for any tier, V3 routing is skipped entirely.
-6. **Native ETH vs WETH normalization has distinct paths.** For Juicebox terminal calls, `address(0)` maps to `JB_NATIVE_TOKEN` (`0x...EEEe`). For V3 calls, `address(0)` maps to `WETH`. These are NOT interchangeable. WETH itself is NOT normalized to native -- only `address(0)` is.
+6. **Native ETH vs WETH normalization has distinct paths.** For Juicebox terminal calls, `address(0)` maps to `JB_NATIVE_TOKEN` (`0x000000000000000000000000000000000000EEEe`). For V3 calls, `address(0)` maps to `WETH`. These are NOT interchangeable. WETH itself is NOT normalized to native -- only `address(0)` is.
 7. **Oracle auto-grows cardinality** when the buffer fills: doubles up to 128, then jumps to 256 max. The gas cost is paid by whoever triggers the observation write that fills the buffer.
 8. **Slippage validation differs by route.** V4 swaps validate `amountOutMin` in `_afterSwap`. V3 and JB routes validate during execution in `_beforeSwap` (via the swap/pay/cashOut call itself or explicit checks).
 9. **The hook has `receive() external payable {}`** to accept ETH during WETH unwrapping and terminal cash outs.
