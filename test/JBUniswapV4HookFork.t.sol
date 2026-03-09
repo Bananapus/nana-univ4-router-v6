@@ -90,32 +90,25 @@ contract JBUniswapV4HookForkTest is Test {
     // Test user with mainnet ETH
     address testUser = address(0xBEEF);
 
-    /// @notice Get RPC URL from foundry.toml rpc_endpoints, environment variable, or use default
-    /// @dev Priority: 1) foundry.toml rpc_endpoints.mainnet (reads ${MAINNET_RPC_URL} from .env)
-    ///               2) MAINNET_RPC_URL environment variable
-    ///               3) DEFAULT_MAINNET_RPC constant
-    /// @dev To use .env file: Set MAINNET_RPC_URL in .env, foundry.toml will read it via ${MAINNET_RPC_URL}
-    function _getRpcUrl() internal view returns (string memory) {
-        // First try environment variable (works if exported or loaded from .env)
-        try vm.envString("MAINNET_RPC_URL") returns (string memory rpcUrl) {
-            return rpcUrl;
-        } catch {
-            // Fall back to default
-            return "";
-        }
-    }
-
+    /// @notice Get RPC URL from foundry.toml rpc_endpoints or environment variable.
+    /// @dev Priority: 1) foundry.toml rpc_endpoints.ethereum (reads ${RPC_ETHEREUM_MAINNET})
+    ///               2) RPC_ETHEREUM_MAINNET environment variable
+    ///               3) Skip the test
     function setUp() public {
-        // Fork mainnet at a recent block
-        // Try to use foundry.toml's rpc_endpoints.mainnet first (reads from .env via ${MAINNET_RPC_URL})
-        // If that fails, fall back to direct URL from environment variable or default
-        try vm.createSelectFork("mainnet") {
-        // Successfully used foundry.toml endpoint (which reads from .env)
-        }
+        // Try foundry.toml's rpc_endpoints.ethereum first (reads ${RPC_ETHEREUM_MAINNET} from env/.env)
+        try vm.createSelectFork("ethereum") {}
         catch {
-            // Fall back to direct URL
-            string memory rpcUrl = _getRpcUrl();
-            vm.createSelectFork(rpcUrl);
+            // Fall back to direct env var
+            try vm.envString("RPC_ETHEREUM_MAINNET") returns (string memory rpcUrl) {
+                if (bytes(rpcUrl).length == 0) {
+                    vm.skip(true);
+                    return;
+                }
+                vm.createSelectFork(rpcUrl);
+            } catch {
+                vm.skip(true);
+                return;
+            }
         }
 
         // Mark mainnet contracts as persistent so they can be called in fork tests
