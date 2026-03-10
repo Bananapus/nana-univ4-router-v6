@@ -1,6 +1,2 @@
 forge-std/=lib/forge-std/src/
 hookmate/=lib/hookmate/src/
-v4-core/=node_modules/@uniswap/v4-core/
-v4-periphery/=node_modules/@uniswap/v4-periphery/
-permit2/=node_modules/@uniswap/v4-periphery/lib/permit2/
-solmate/=node_modules/solmate/
