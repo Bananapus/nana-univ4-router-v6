@@ -29,8 +29,6 @@ import {IUniswapV3SwapCallback} from "@uniswap/v3-core/contracts/interfaces/call
 // Import Juicebox interfaces and structs from the hook file
 import {
     IJBTokens,
-    IJBMultiTerminal,
-    IJBController,
     IJBPrices,
     IJBDirectory,
     IJBTerminalStore

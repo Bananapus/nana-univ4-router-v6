@@ -9,7 +9,7 @@ import {JBConstants} from "@bananapus/core-v6/src/libraries/JBConstants.sol";
 /// @dev The old code hardcoded `grossReclaim - mulDiv(grossReclaim, 25, 1000)`.
 /// The fix reads FEE() from the terminal and uses JBConstants.MAX_FEE as the
 /// denominator, so the estimate stays correct if the fee ever changes.
-contract L41_DynamicProtocolFee is Test {
+contract DynamicProtocolFee is Test {
     /// @notice Replicate the fixed fee deduction logic.
     function _deductFeeDynamic(uint256 grossReclaim, uint256 fee) internal pure returns (uint256) {
         return grossReclaim - FullMath.mulDiv(grossReclaim, fee, JBConstants.MAX_FEE);

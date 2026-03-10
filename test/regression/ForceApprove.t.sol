@@ -11,7 +11,7 @@ import {MockERC20} from "../mock/MockERC20.sol";
 /// call reverts after partial token consumption, leftover allowance accumulates on the
 /// next routing attempt. forceApprove sets an exact allowance regardless of the current
 /// value, preventing allowance accumulation.
-contract L43_ForceApprove is Test {
+contract ForceApprove is Test {
     using SafeERC20 for IERC20;
 
     MockERC20 token;
