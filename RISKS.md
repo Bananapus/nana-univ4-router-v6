@@ -6,10 +6,8 @@ Deep implementation-level risk analysis of `JBUniswapV4Hook` and `Oracle`.
 
 1. **Uniswap V4 PoolManager** -- The hook executes within V4's PoolManager context. All take/settle flash-accounting relies on PoolManager enforcing balance invariants. A PoolManager bug would compromise all hooked pools.
 2. **TWAP Oracle Integrity** -- Oracle accuracy depends on sufficient observation history and pool activity. New or low-activity pools have unreliable TWAPs. The hook falls back to spot price when TWAP is unavailable (`_getTWAPSqrtPrice` returns 0, line 1026-1056).
-3. **V3 Pool Price Reference** -- Uses V3 pools as one of three price sources. V3 pool manipulation over the TWAP window could bias routing decisions. Mitigated by the 1-hour V3 TWAP window (`STANDARD_TWAP_WINDOW`, line 132).
-4. **Juicebox Core Protocol** -- Relies on `IJBController.currentRulesetOf()` for weight/reserved rate, `IJBTerminalStore.currentReclaimableSurplusOf()` for cashout estimates, and `IJBPrices.pricePerUnitOf()` for currency conversion. Bugs in any of these affect routing accuracy.
-5. **V3 Factory Authenticity** -- The V3 callback validates callers via `V3_FACTORY.getPool()` (line 1352). If the V3 factory is compromised or returns attacker-controlled addresses, the callback validation fails.
-6. **ERC-20 Token Compliance** -- Uses `SafeERC20` (OpenZeppelin) and `forceApprove` for all token interactions. Non-standard tokens (fee-on-transfer, rebasing) may cause accounting mismatches in the take/settle cycle.
+3. **Juicebox Core Protocol** -- Relies on `IJBController.currentRulesetOf()` for weight/reserved rate, `IJBTerminalStore.currentReclaimableSurplusOf()` for cashout estimates, and `IJBPrices.pricePerUnitOf()` for currency conversion. Bugs in any of these affect routing accuracy.
+4. **ERC-20 Token Compliance** -- Uses `SafeERC20` (OpenZeppelin) and `forceApprove` for all token interactions. Non-standard tokens (fee-on-transfer, rebasing) may cause accounting mismatches in the take/settle cycle.
 
 ## Risk Inventory
 
@@ -50,7 +48,7 @@ If the external call in step 2 reverts, tokens taken in step 1 would be stranded
 2. Sustaining the manipulated price for 30+ minutes
 3. Swapping at the now-biased TWAP price
 
-**Why mitigated:** Sustaining price manipulation for 30 minutes costs the attacker significant capital in arbitrage losses. The three-way comparison (V4 TWAP, V3 TWAP, JB weight) means an attacker would need to manipulate at least two of three price sources simultaneously.
+**Why mitigated:** Sustaining price manipulation for 30 minutes costs the attacker significant capital in arbitrage losses. The two-way comparison (V4 TWAP vs JB weight) means an attacker would need to manipulate the TWAP to be worse than JB minting, which is bounded by ruleset weight.
 
 **Residual risk:** Low-liquidity pools where the cost of TWAP manipulation is low. Pools with < 2 observations fall back to spot price (line 1030), which is trivially manipulable.
 
@@ -78,21 +76,6 @@ During this fallback window, an attacker could:
 - `OracleDeepTest.t.sol`: `test_TWAPSqrtPrice_OldestObsTooRecent_ReturnsZero` -- verifies transient window
 - `OracleDeepTest.t.sol`: `test_TWAPSqrtPrice_SufficientAge_ReturnsNonZero` -- verifies resolution
 
-### MEDIUM -- V3 Pool Selection Heuristic
-
-**Severity:** MEDIUM (economic suboptimality, not fund loss) | **Status:** Known | **Tested:** Partially
-
-**Location:** `_findBestV3Pool` (lines 508-528)
-
-**Description:** The hook selects the V3 pool with the highest in-range liquidity across 4 fee tiers (3000, 500, 10000, 100 bps). For small swaps, a pool with lower liquidity but a lower fee tier could yield more output tokens. The hook may route through a suboptimal V3 pool or incorrectly compare V3 output against V4/JB.
-
-**Audit finding:** NM-005 confirmed this as LOW severity. The subsequent TWAP-based estimation provides a secondary validation layer.
-
-**Test coverage:**
-- `V3RoutingEdgeCases.t.sol`: `test_V3Pool_DoesNotExist_ReturnsZeroEstimate` -- edge case handling
-- `V3RoutingEdgeCases.t.sol`: `test_V3Quote_ZeroLiquidity_ReturnsZero` -- zero liquidity handling
-- No test compares routing accuracy across fee tiers
-
 ## MEV / Sandwich Attack Vectors
 
 ### Vector 1: Sandwich on JB Routing Decision
@@ -108,15 +91,7 @@ An attacker observing a pending swap through a hooked pool could:
 
 **Mitigation:** The `amountOutMin` parameter (hookData, line 795-798) provides a hard floor. If the routed output falls below `amountOutMin`, the swap reverts (`JBUniswapV4Hook_InsufficientOutput`, lines 764-765, 942-943).
 
-### Vector 2: V3 Route Sandwich
-
-**Risk:** LOW | **Tested:** No
-
-When the hook routes through V3, it executes a real V3 swap (lines 1293-1300). An attacker could sandwich the V3 swap independently. However, the V3 swap uses `sqrtPriceLimitX96` set to near-extremes (line 1298: `V3_MIN_SQRT_RATIO + 1` or `V3_MAX_SQRT_RATIO - 1`), which provides no V3-level slippage protection beyond what `amountOutMin` enforces in the hook's `_beforeSwap` (line 942).
-
-**Mitigation:** `amountOutMin` enforcement in `_beforeSwap` (line 942) catches any V3 output below the user's minimum. The TWAP-based estimate (not spot) is used for routing, so the decision itself resists single-block manipulation.
-
-### Vector 3: JB Terminal Interaction Sandwich
+### Vector 2: JB Terminal Interaction Sandwich
 
 **Risk:** LOW | **Tested:** No
 
@@ -131,13 +106,10 @@ The JB minting rate is determined by the project's ruleset weight, which is not 
 | `_beforeSwap` (lines 783-953) | `TOKENS.projectIdOf`, `DIRECTORY.controllerOf`, `PRICES.pricePerUnitOf`, `V3_FACTORY.getPool`, JB terminal `pay`/`cashOutTokensOf`, V3 `pool.swap` | Oracle state NOT yet updated (observation recorded in `_afterSwap`) | V4 PoolManager lock (only one unlock at a time). All external calls wrapped in try-catch for view calls. | LOW -- PoolManager prevents reentrant swaps. |
 | `_afterSwap` (lines 736-773) | `poolManager.getSlot0`, `poolManager.getLiquidity` | Swap fully settled | Internal calls to PoolManager only (trusted) | LOW |
 | `_routeThroughJuicebox` (lines 1178-1242) | `poolManager.take`, JB `terminal.pay`/`cashOutTokensOf`, `_settleOutput` | Tokens taken from PM | Atomic within V4 unlock. JB terminal call happens after take but before settle. | MEDIUM -- JB terminal is external/untrusted. But PoolManager enforces balance at unlock end. |
-| `_routeThroughV3` (lines 1254-1324) | `poolManager.take`, V3 `pool.swap`, `IWETH.deposit`/`withdraw`, `_settleOutput` | Tokens taken from PM, potentially wrapped to WETH | V3 pool validated via factory. Callback validates sender. | LOW -- V3 swap is synchronous with validated callback. |
-| `uniswapV3SwapCallback` (lines 1344-1371) | `IERC20.safeTransfer` | Called during V3 swap execution | `V3_FACTORY.getPool()` sender validation (line 1352) | LOW -- only authentic V3 pools can trigger. |
 
 **No explicit reentrancy guard** (no `ReentrancyGuard`). Protection relies entirely on:
 1. V4 PoolManager's single-unlock constraint (cannot re-enter unlock while unlock is active)
 2. Atomic flash-accounting (PoolManager reverts if balances don't reconcile)
-3. V3 callback sender validation
 
 ## Oracle-Specific Risks
 
@@ -233,12 +205,10 @@ Slippage protection operates at three levels:
 | Dependency | Risk | Impact if Compromised |
 |------------|------|-----------------------|
 | Uniswap V4 PoolManager | Single point of failure for all hooked pools | Total loss of pool funds |
-| Uniswap V3 Factory | V3 pool lookup and callback validation | Attacker could spoof V3 callback, stealing tokens from hook during V3-routed swaps |
 | JB Directory | Terminal and controller resolution | Attacker could redirect routing to malicious terminal |
 | JB Prices | Currency conversion for JB estimates | Incorrect price data leads to suboptimal routing (not fund loss) |
 | JB Controller | Ruleset weight and metadata | Incorrect weight leads to overestimating JB minting rate |
 | JB Terminal | Payment and cashout execution | Malicious terminal could consume tokens without returning output (but PoolManager flash-accounting would revert the entire swap) |
-| WETH contract | ETH wrapping for V3 routing | Malicious WETH could trap ETH (but only during V3 routes involving native ETH) |
 | OpenZeppelin SafeERC20 | Token transfer safety | Standard library -- well-audited, minimal risk |
 
 ## Cancun / EVM Dependency
@@ -262,8 +232,7 @@ The Nemesis audit (March 2026) analyzed 34 functions across ~1,780 lines in 2 co
 
 **Key audit conclusions:**
 - No exploitable vulnerabilities found
-- Flash-accounting balance is correct for all routing paths (V4, V3, JB)
+- Flash-accounting balance is correct for all routing paths (V4, JB)
 - Oracle state management is consistent with atomic updates
-- V3 callback validation is secure
 - No state persists between transactions (minimal attack surface)
 - Multi-transaction journey tracing found no cross-call contamination

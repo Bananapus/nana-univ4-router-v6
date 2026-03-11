@@ -33,11 +33,11 @@ contract AddLiquidityScript is BaseScript, LiquidityHelpers {
 
     function run() external {
         PoolKey memory poolKey = PoolKey({
-            currency0: currency0, currency1: currency1, fee: lpFee, tickSpacing: tickSpacing, hooks: hookContract
+            currency0: CURRENCY0, currency1: CURRENCY1, fee: lpFee, tickSpacing: tickSpacing, hooks: HOOK_CONTRACT
         });
         bytes memory hookData = new bytes(0);
 
-        (uint160 sqrtPriceX96,,,) = poolManager.getSlot0(poolKey.toId());
+        (uint160 sqrtPriceX96,,,) = POOL_MANAGER.getSlot0(poolKey.toId());
 
         int24 currentTick = TickMath.getTickAtSqrtPrice(sqrtPriceX96);
 
@@ -58,7 +58,7 @@ contract AddLiquidityScript is BaseScript, LiquidityHelpers {
         uint256 amount1Max = token1Amount + 1 wei;
 
         (bytes memory actions, bytes[] memory mintParams) = _mintLiquidityParams(
-            poolKey, tickLower, tickUpper, liquidity, amount0Max, amount1Max, deployerAddress, hookData
+            poolKey, tickLower, tickUpper, liquidity, amount0Max, amount1Max, DEPLOYER_ADDRESS, hookData
         );
 
         // multicall parameters
@@ -66,17 +66,17 @@ contract AddLiquidityScript is BaseScript, LiquidityHelpers {
 
         // Mint Liquidity
         params[0] = abi.encodeWithSelector(
-            positionManager.modifyLiquidities.selector, abi.encode(actions, mintParams), block.timestamp + 60
+            POSITION_MANAGER.modifyLiquidities.selector, abi.encode(actions, mintParams), block.timestamp + 60
         );
 
         // If the pool is an ETH pair, native tokens are to be transferred
-        uint256 valueToPass = currency0.isAddressZero() ? amount0Max : 0;
+        uint256 valueToPass = CURRENCY0.isAddressZero() ? amount0Max : 0;
 
         vm.startBroadcast();
         tokenApprovals();
 
         // Add liquidity to existing pool
-        positionManager.multicall{value: valueToPass}(params);
+        POSITION_MANAGER.multicall{value: valueToPass}(params);
         vm.stopBroadcast();
     }
 }

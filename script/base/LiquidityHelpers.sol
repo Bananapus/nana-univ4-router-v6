@@ -38,14 +38,14 @@ contract LiquidityHelpers is BaseScript {
     }
 
     function tokenApprovals() public {
-        if (!currency0.isAddressZero()) {
-            token0.approve(address(permit2), type(uint256).max);
-            permit2.approve(address(token0), address(positionManager), type(uint160).max, type(uint48).max);
+        if (!CURRENCY0.isAddressZero()) {
+            TOKEN0.approve(address(PERMIT2), type(uint256).max);
+            PERMIT2.approve(address(TOKEN0), address(POSITION_MANAGER), type(uint160).max, type(uint48).max);
         }
 
-        if (!currency1.isAddressZero()) {
-            token1.approve(address(permit2), type(uint256).max);
-            permit2.approve(address(token1), address(positionManager), type(uint160).max, type(uint48).max);
+        if (!CURRENCY1.isAddressZero()) {
+            TOKEN1.approve(address(PERMIT2), type(uint256).max);
+            PERMIT2.approve(address(TOKEN1), address(POSITION_MANAGER), type(uint160).max, type(uint48).max);
         }
     }
 

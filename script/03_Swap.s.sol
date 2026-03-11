@@ -8,22 +8,22 @@ import {BaseScript} from "./base/BaseScript.sol";
 contract SwapScript is BaseScript {
     function run() external {
         PoolKey memory poolKey = PoolKey({
-            currency0: currency0,
-            currency1: currency1,
+            currency0: CURRENCY0,
+            currency1: CURRENCY1,
             fee: 3000,
             tickSpacing: 60,
-            hooks: hookContract // This must match the pool
+            hooks: HOOK_CONTRACT // This must match the pool
         });
         bytes memory hookData = new bytes(0);
 
         vm.startBroadcast();
 
         // We'll approve both, just for testing.
-        token1.approve(address(swapRouter), type(uint256).max);
-        token0.approve(address(swapRouter), type(uint256).max);
+        TOKEN1.approve(address(SWAP_ROUTER), type(uint256).max);
+        TOKEN0.approve(address(SWAP_ROUTER), type(uint256).max);
 
         // Execute swap
-        swapRouter.swapExactTokensForTokens({
+        SWAP_ROUTER.swapExactTokensForTokens({
             amountIn: 1e18,
             amountOutMin: 0, // Very bad, but we want to allow for unlimited price impact
             zeroForOne: true,

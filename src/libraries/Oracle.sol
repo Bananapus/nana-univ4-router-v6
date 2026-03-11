@@ -345,10 +345,11 @@ library Oracle {
                 // we're in the middle
                 uint32 observationTimeDelta = atOrAfter.blockTimestamp - beforeOrAt.blockTimestamp;
                 uint32 targetDelta = target - beforeOrAt.blockTimestamp;
+                // forge-lint: disable-start(divide-before-multiply)
                 return (
                     beforeOrAt.tickCumulative
                         + ((atOrAfter.tickCumulative - beforeOrAt.tickCumulative) / int56(uint56(observationTimeDelta)))
-                        * int56(uint56(targetDelta)),
+                            * int56(uint56(targetDelta)),
                     beforeOrAt.secondsPerLiquidityCumulativeX128
                         + uint136(
                             (uint256(
@@ -358,6 +359,7 @@ library Oracle {
                                     * targetDelta) / observationTimeDelta
                         )
                 );
+                // forge-lint: disable-end(divide-before-multiply)
             }
         }
     }
