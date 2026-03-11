@@ -6,7 +6,7 @@ import {Vm} from "forge-std/Vm.sol";
 
 import {JBUniswapV4Hook} from "../../src/JBUniswapV4Hook.sol";
 
-import {SphinxConstants, NetworkInfo} from "@sphinx-labs/contracts/SphinxConstants.sol";
+import {SphinxConstants, NetworkInfo} from "@sphinx-labs/contracts/contracts/foundry/SphinxConstants.sol";
 
 struct Univ4RouterDeployment {
     JBUniswapV4Hook hook;
