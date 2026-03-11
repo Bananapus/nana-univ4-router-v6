@@ -39,8 +39,16 @@ contract EasyPosmTest is Test, Deployers {
         (currency0, currency1) = deployCurrencyPair();
 
         // Create the pool
-        key = PoolKey(currency0, currency1, 3000, 60, IHooks(address(0)));
-        nativeKey = PoolKey(Currency.wrap(address(0)), currency1, 3000, 60, IHooks(address(0)));
+        key = PoolKey({
+            currency0: currency0, currency1: currency1, fee: 3000, tickSpacing: 60, hooks: IHooks(address(0))
+        });
+        nativeKey = PoolKey({
+            currency0: Currency.wrap(address(0)),
+            currency1: currency1,
+            fee: 3000,
+            tickSpacing: 60,
+            hooks: IHooks(address(0))
+        });
 
         poolManager.initialize(key, Constants.SQRT_PRICE_1_1);
         poolManager.initialize(nativeKey, Constants.SQRT_PRICE_1_1);
@@ -58,6 +66,7 @@ contract EasyPosmTest is Test, Deployers {
             Constants.SQRT_PRICE_1_1,
             TickMath.getSqrtPriceAtTick(tickLower),
             TickMath.getSqrtPriceAtTick(tickUpper),
+            // forge-lint: disable-next-line(unsafe-typecast)
             uint128(liquidityToMint)
         );
 
@@ -72,7 +81,9 @@ contract EasyPosmTest is Test, Deployers {
             block.timestamp + 1,
             Constants.ZERO_BYTES
         );
+        // forge-lint: disable-next-line(unsafe-typecast)
         assertEq(delta.amount0(), -int128(uint128(amount0 + 1 wei)));
+        // forge-lint: disable-next-line(unsafe-typecast)
         assertEq(delta.amount1(), -int128(uint128(amount1 + 1 wei)));
     }
 
@@ -84,6 +95,7 @@ contract EasyPosmTest is Test, Deployers {
             Constants.SQRT_PRICE_1_1,
             TickMath.getSqrtPriceAtTick(tickLower),
             TickMath.getSqrtPriceAtTick(tickUpper),
+            // forge-lint: disable-next-line(unsafe-typecast)
             uint128(liquidityToMint)
         );
 
@@ -99,7 +111,9 @@ contract EasyPosmTest is Test, Deployers {
             block.timestamp + 1,
             Constants.ZERO_BYTES
         );
+        // forge-lint: disable-next-line(unsafe-typecast)
         assertEq(delta.amount0(), -int128(uint128(amount0 + 1 wei)));
+        // forge-lint: disable-next-line(unsafe-typecast)
         assertEq(delta.amount1(), -int128(uint128(amount1 + 1 wei)));
     }
 
@@ -122,13 +136,16 @@ contract EasyPosmTest is Test, Deployers {
             Constants.SQRT_PRICE_1_1,
             TickMath.getSqrtPriceAtTick(tickLower),
             TickMath.getSqrtPriceAtTick(tickUpper),
+            // forge-lint: disable-next-line(unsafe-typecast)
             uint128(liquidityToAdd)
         );
 
         BalanceDelta delta = positionManager.increaseLiquidity(
             tokenId, liquidityToAdd, type(uint256).max, type(uint256).max, block.timestamp + 1, Constants.ZERO_BYTES
         );
+        // forge-lint: disable-next-line(unsafe-typecast)
         assertEq(delta.amount0(), -int128(uint128(amount0 + 1 wei)));
+        // forge-lint: disable-next-line(unsafe-typecast)
         assertEq(delta.amount1(), -int128(uint128(amount1 + 1 wei)));
     }
 
@@ -140,6 +157,7 @@ contract EasyPosmTest is Test, Deployers {
             Constants.SQRT_PRICE_1_1,
             TickMath.getSqrtPriceAtTick(tickLower),
             TickMath.getSqrtPriceAtTick(tickUpper),
+            // forge-lint: disable-next-line(unsafe-typecast)
             uint128(liquidityToMint)
         );
 
@@ -162,6 +180,7 @@ contract EasyPosmTest is Test, Deployers {
             Constants.SQRT_PRICE_1_1,
             TickMath.getSqrtPriceAtTick(tickLower),
             TickMath.getSqrtPriceAtTick(tickUpper),
+            // forge-lint: disable-next-line(unsafe-typecast)
             uint128(liquidityToIncrease)
         );
 
@@ -169,7 +188,9 @@ contract EasyPosmTest is Test, Deployers {
         delta = positionManager.increaseLiquidity(
             tokenId, liquidityToIncrease, amount0 + 1, amount1 + 1, block.timestamp + 1, Constants.ZERO_BYTES
         );
+        // forge-lint: disable-next-line(unsafe-typecast)
         assertEq(delta.amount0(), -int128(uint128(amount0 + 1 wei)));
+        // forge-lint: disable-next-line(unsafe-typecast)
         assertEq(delta.amount1(), -int128(uint128(amount1 + 1 wei)));
     }
 
@@ -192,13 +213,16 @@ contract EasyPosmTest is Test, Deployers {
             Constants.SQRT_PRICE_1_1,
             TickMath.getSqrtPriceAtTick(tickLower),
             TickMath.getSqrtPriceAtTick(tickUpper),
+            // forge-lint: disable-next-line(unsafe-typecast)
             uint128(liquidityToRemove)
         );
 
         BalanceDelta delta = positionManager.decreaseLiquidity(
             tokenId, liquidityToRemove, 0, 0, address(this), block.timestamp + 1, Constants.ZERO_BYTES
         );
+        // forge-lint: disable-next-line(unsafe-typecast)
         assertEq(delta.amount0(), int128(uint128(amount0)));
+        // forge-lint: disable-next-line(unsafe-typecast)
         assertEq(delta.amount1(), int128(uint128(amount1)));
     }
 

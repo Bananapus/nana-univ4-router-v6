@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.26;
 
-import "forge-std/Test.sol";
-import "forge-std/console.sol";
+import {Test} from "forge-std/Test.sol";
+import {console} from "forge-std/console.sol";
 
 import {PoolManager} from "@uniswap/v4-core/src/PoolManager.sol";
 import {IPoolManager} from "@uniswap/v4-core/src/interfaces/IPoolManager.sol";
@@ -225,7 +225,8 @@ contract MockJBMultiTerminal {
         } else {
             // Mock cash out: return the surplus amount proportional to the cash out count
             uint256 surplusAmount =
-                TERMINAL_STORE.currentReclaimableSurplusOf(projectId, 1 ether, uint32(uint160(tokenToReclaim)), 18);
+            // forge-lint: disable-next-line(unsafe-typecast)
+            TERMINAL_STORE.currentReclaimableSurplusOf(projectId, 1 ether, uint32(uint160(tokenToReclaim)), 18);
             outputAmount = (surplusAmount * cashOutCount) / 1e18;
         }
 
@@ -302,6 +303,7 @@ contract MockJBTerminalStore {
     function setSurplus(uint256 projectId, address token, uint256 surplusAmount) external {
         // Store surplus per token (1e18 = 1 token)
         // When called with cashOutCount, we'll return surplusAmount * cashOutCount / 1e18
+        // forge-lint: disable-next-line(unsafe-typecast)
         uint256 currency = uint32(uint160(token));
         surplusPerToken[projectId][currency] = surplusAmount;
     }
@@ -923,7 +925,10 @@ contract JuiceboxHookTest is Test {
 
         // Swap token1 for token0
         SwapParams memory params = SwapParams({
-            zeroForOne: false, amountSpecified: -int256(_amountIn), sqrtPriceLimitX96: TickMath.MAX_SQRT_PRICE - 1
+            zeroForOne: false,
+            // forge-lint: disable-next-line(unsafe-typecast)
+            amountSpecified: -int256(_amountIn),
+            sqrtPriceLimitX96: TickMath.MAX_SQRT_PRICE - 1
         });
 
         jbSwapRouter.swap(key, params, 0); // 1% slippage
@@ -955,7 +960,10 @@ contract JuiceboxHookTest is Test {
 
         // Swap token1 for token0 (buying JB token)
         SwapParams memory params = SwapParams({
-            zeroForOne: false, amountSpecified: -int256(_amountIn), sqrtPriceLimitX96: TickMath.MAX_SQRT_PRICE - 1
+            zeroForOne: false,
+            // forge-lint: disable-next-line(unsafe-typecast)
+            amountSpecified: -int256(_amountIn),
+            sqrtPriceLimitX96: TickMath.MAX_SQRT_PRICE - 1
         });
 
         jbSwapRouter.swap(key, params, 0); // 1% slippage
@@ -1306,7 +1314,10 @@ contract JuiceboxHookTest is Test {
 
             // Execute swap
             SwapParams memory params = SwapParams({
-                zeroForOne: false, amountSpecified: -int256(swapAmount), sqrtPriceLimitX96: TickMath.MAX_SQRT_PRICE - 1
+                zeroForOne: false,
+                // forge-lint: disable-next-line(unsafe-typecast)
+                amountSpecified: -int256(swapAmount),
+                sqrtPriceLimitX96: TickMath.MAX_SQRT_PRICE - 1
             });
 
             try swapRouter.swap(key, params, PoolSwapTest.TestSettings(false, false), abi.encode(uint256(100))) {} // 1%
@@ -1368,6 +1379,7 @@ contract JuiceboxHookTest is Test {
 
         SwapParams memory manipulationParams = SwapParams({
             zeroForOne: false,
+            // forge-lint: disable-next-line(unsafe-typecast)
             amountSpecified: -int256(manipulationAmount),
             sqrtPriceLimitX96: TickMath.MAX_SQRT_PRICE - 1
         });
@@ -1409,7 +1421,10 @@ contract JuiceboxHookTest is Test {
 
         // Execute swap
         SwapParams memory params = SwapParams({
-            zeroForOne: false, amountSpecified: -int256(swapAmount), sqrtPriceLimitX96: TickMath.MAX_SQRT_PRICE - 1
+            zeroForOne: false,
+            // forge-lint: disable-next-line(unsafe-typecast)
+            amountSpecified: -int256(swapAmount),
+            sqrtPriceLimitX96: TickMath.MAX_SQRT_PRICE - 1
         });
 
         // Record events to verify routing decision
@@ -1488,6 +1503,7 @@ contract JuiceboxHookTest is Test {
 
         SwapParams memory attackParams = SwapParams({
             zeroForOne: false,
+            // forge-lint: disable-next-line(unsafe-typecast)
             amountSpecified: -int256(attackerSwapAmount),
             sqrtPriceLimitX96: TickMath.MAX_SQRT_PRICE - 1
         });
@@ -1635,6 +1651,7 @@ contract JuiceboxHookTest is Test {
 
         SwapParams memory extremeParams = SwapParams({
             zeroForOne: false,
+            // forge-lint: disable-next-line(unsafe-typecast)
             amountSpecified: -int256(extremeSwapAmount),
             sqrtPriceLimitX96: TickMath.MAX_SQRT_PRICE - 1
         });
@@ -1710,7 +1727,10 @@ contract JuiceboxHookTest is Test {
 
         // Swap token0 for token1 (selling JB token)
         SwapParams memory params = SwapParams({
-            zeroForOne: true, amountSpecified: -int256(sellAmount), sqrtPriceLimitX96: TickMath.MIN_SQRT_PRICE + 1
+            zeroForOne: true,
+            // forge-lint: disable-next-line(unsafe-typecast)
+            amountSpecified: -int256(sellAmount),
+            sqrtPriceLimitX96: TickMath.MIN_SQRT_PRICE + 1
         });
 
         try jbSwapRouter.swap(key, params, 0) { // 1% slippage
@@ -1827,7 +1847,10 @@ contract JuiceboxHookTest is Test {
         uint256 sellAmount = 0.5 ether; // Sell 0.5 ether of JB tokens
 
         SwapParams memory sellParams = SwapParams({
-            zeroForOne: true, amountSpecified: -int256(sellAmount), sqrtPriceLimitX96: TickMath.MIN_SQRT_PRICE + 1
+            zeroForOne: true,
+            // forge-lint: disable-next-line(unsafe-typecast)
+            amountSpecified: -int256(sellAmount),
+            sqrtPriceLimitX96: TickMath.MIN_SQRT_PRICE + 1
         });
 
         jbSwapRouter.swap(key, sellParams, 0); // 1% slippage
@@ -1855,7 +1878,10 @@ contract JuiceboxHookTest is Test {
 
         // Swap token0 for token1 (selling JB token)
         SwapParams memory params = SwapParams({
-            zeroForOne: true, amountSpecified: -int256(sellAmount), sqrtPriceLimitX96: TickMath.MIN_SQRT_PRICE + 1
+            zeroForOne: true,
+            // forge-lint: disable-next-line(unsafe-typecast)
+            amountSpecified: -int256(sellAmount),
+            sqrtPriceLimitX96: TickMath.MIN_SQRT_PRICE + 1
         });
 
         try jbSwapRouter.swap(key, params, 0) { // 1% slippage

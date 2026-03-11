@@ -1,8 +1,7 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.26;
 
-import "forge-std/Test.sol";
-import "forge-std/console.sol";
+import {Test} from "forge-std/Test.sol";
 
 import {PoolManager} from "@uniswap/v4-core/src/PoolManager.sol";
 import {IPoolManager} from "@uniswap/v4-core/src/interfaces/IPoolManager.sol";
@@ -78,6 +77,7 @@ contract MockJBDirectory {
 contract MockJBPrices {
     mapping(uint256 => mapping(uint256 => mapping(uint256 => uint256))) public prices;
 
+    // forge-lint: disable-next-line(mixed-case-function)
     function DEFAULT_PROJECT_ID() external pure returns (uint256) {
         return 0;
     }
@@ -112,6 +112,7 @@ contract MockJBTerminalStore {
     mapping(uint256 => mapping(uint256 => uint256)) public surplusPerToken;
 
     function setSurplus(uint256 projectId, address token, uint256 surplusAmount) external {
+        // forge-lint: disable-next-line(unsafe-typecast)
         uint256 currency = uint32(uint160(token));
         surplusPerToken[projectId][currency] = surplusAmount;
     }
@@ -140,6 +141,7 @@ contract MockJBMultiTerminal {
 
     mapping(uint256 => address) public projectTokens;
 
+    // forge-lint: disable-next-line(mixed-case-variable)
     MockJBTerminalStore public TERMINAL_STORE;
 
     uint256 public overridePayReturnAmount;
@@ -148,6 +150,7 @@ contract MockJBMultiTerminal {
     bool public useOverrideCashOutReturn;
 
     /// @notice JB protocol fee (2.5% = 25 out of MAX_FEE 1000).
+    // forge-lint: disable-next-line(mixed-case-function)
     function FEE() external pure returns (uint256) {
         return 25;
     }
@@ -236,7 +239,8 @@ contract MockJBMultiTerminal {
             outputAmount = overrideCashOutReturnAmount;
         } else {
             uint256 surplusAmount =
-                TERMINAL_STORE.currentReclaimableSurplusOf(projectId, 1 ether, uint32(uint160(tokenToReclaim)), 18);
+            // forge-lint: disable-next-line(unsafe-typecast)
+            TERMINAL_STORE.currentReclaimableSurplusOf(projectId, 1 ether, uint32(uint160(tokenToReclaim)), 18);
             outputAmount = (surplusAmount * cashOutCount) / 1e18;
         }
 

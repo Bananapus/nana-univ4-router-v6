@@ -17,6 +17,7 @@ contract JuiceboxSwapRouter {
     using CurrencyLibrary for Currency;
     using CurrencySettler for Currency;
 
+    // forge-lint: disable-next-line(screaming-snake-case-immutable)
     IPoolManager public immutable poolManager;
 
     // Track the current sender for hooks to query
@@ -58,8 +59,12 @@ contract JuiceboxSwapRouter {
         // Encode amountOutMin in hookData (required parameter)
         bytes memory hookData = abi.encode(amountOutMin);
 
-        delta =
-            abi.decode(poolManager.unlock(abi.encode(CallbackData(msg.sender, key, params, hookData))), (BalanceDelta));
+        delta = abi.decode(
+            poolManager.unlock(
+                abi.encode(CallbackData({sender: msg.sender, key: key, params: params, hookData: hookData}))
+            ),
+            (BalanceDelta)
+        );
 
         // Clear msgSender
         _msgSender = address(0);
@@ -103,9 +108,11 @@ contract JuiceboxSwapRouter {
         // Adjust deltas by the pre-deposited amount
         if (data.params.zeroForOne) {
             // We pre-deposited currency0
+            // forge-lint: disable-next-line(unsafe-typecast)
             delta0 += int256(inputAmount);
         } else {
             // We pre-deposited currency1
+            // forge-lint: disable-next-line(unsafe-typecast)
             delta1 += int256(inputAmount);
         }
 
@@ -117,9 +124,11 @@ contract JuiceboxSwapRouter {
             uint256 outputAmount;
             if (data.params.zeroForOne) {
                 // Swapping currency0 for currency1: output is delta1 (positive)
+                // forge-lint: disable-next-line(unsafe-typecast)
                 outputAmount = delta1 > 0 ? uint256(delta1) : 0;
             } else {
                 // Swapping currency1 for currency0: output is delta0 (positive)
+                // forge-lint: disable-next-line(unsafe-typecast)
                 outputAmount = delta0 > 0 ? uint256(delta0) : 0;
             }
 
@@ -130,17 +139,21 @@ contract JuiceboxSwapRouter {
 
         // Now settle only the remaining delta
         if (delta0 < 0) {
+            // forge-lint: disable-next-line(unsafe-typecast)
             data.key.currency0.settle(poolManager, data.sender, uint256(-delta0), false);
         }
         if (delta1 < 0) {
+            // forge-lint: disable-next-line(unsafe-typecast)
             data.key.currency1.settle(poolManager, data.sender, uint256(-delta1), false);
         }
 
         // Take any credits from PoolManager
         if (delta0 > 0) {
+            // forge-lint: disable-next-line(unsafe-typecast)
             data.key.currency0.take(poolManager, data.sender, uint256(delta0), false);
         }
         if (delta1 > 0) {
+            // forge-lint: disable-next-line(unsafe-typecast)
             data.key.currency1.take(poolManager, data.sender, uint256(delta1), false);
         }
 

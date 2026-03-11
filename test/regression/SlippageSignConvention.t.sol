@@ -14,6 +14,7 @@ contract SlippageSignConventionTest is Test {
         int128 rawOutput = zeroForOne ? BalanceDeltaLibrary.amount1(delta) : BalanceDeltaLibrary.amount0(delta);
 
         if (rawOutput != 0) {
+            // forge-lint: disable-next-line(unsafe-typecast)
             uint256 outputAmount = rawOutput < 0 ? uint256(int256(-rawOutput)) : uint256(int256(rawOutput));
             if (outputAmount < amountOutMin) {
                 return true; // would revert
@@ -26,6 +27,7 @@ contract SlippageSignConventionTest is Test {
     function _checkSlippageOld(bool zeroForOne, BalanceDelta delta, uint256 amountOutMin) internal pure returns (bool) {
         int128 outputAmount = zeroForOne ? BalanceDeltaLibrary.amount1(delta) : BalanceDeltaLibrary.amount0(delta);
 
+        // forge-lint: disable-next-line(unsafe-typecast)
         if (outputAmount > 0 && uint256(int256(outputAmount)) < amountOutMin) {
             return true; // would revert
         }

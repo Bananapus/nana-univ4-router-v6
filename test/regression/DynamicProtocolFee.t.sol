@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.16;
 
-import "forge-std/Test.sol";
+import {Test} from "forge-std/Test.sol";
 import {FullMath} from "@uniswap/v4-core/src/libraries/FullMath.sol";
 import {JBConstants} from "@bananapus/core-v6/src/libraries/JBConstants.sol";
 

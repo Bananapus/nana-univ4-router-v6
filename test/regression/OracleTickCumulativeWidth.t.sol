@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.16;
 
-import "forge-std/Test.sol";
+import {Test} from "forge-std/Test.sol";
 import {Oracle} from "../../src/libraries/Oracle.sol";
 
 /// @notice Oracle tickCumulative widened from int48 to int56.

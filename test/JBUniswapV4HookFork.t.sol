@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.26;
 
-import "forge-std/Test.sol";
-import "forge-std/console.sol";
+import {Test, Vm} from "forge-std/Test.sol";
+import {console} from "forge-std/console.sol";
 
 import {PoolManager} from "@uniswap/v4-core/src/PoolManager.sol";
 import {IPoolManager} from "@uniswap/v4-core/src/interfaces/IPoolManager.sol";
@@ -422,7 +422,10 @@ contract JBUniswapV4HookForkTest is Test {
 
         // Execute a small WETH -> BAN swap (currency1 -> currency0)
         SwapParams memory params = SwapParams({
-            zeroForOne: false, amountSpecified: -int256(amountIn), sqrtPriceLimitX96: TickMath.MAX_SQRT_PRICE - 1
+            zeroForOne: false,
+            // forge-lint: disable-next-line(unsafe-typecast)
+            amountSpecified: -int256(amountIn),
+            sqrtPriceLimitX96: TickMath.MAX_SQRT_PRICE - 1
         });
         jbSwapRouter.swap(key, params, 0); // 1% slippage
         vm.stopPrank();
@@ -492,7 +495,10 @@ contract JBUniswapV4HookForkTest is Test {
         vm.recordLogs();
         uint256 amountIn = 1 ether;
         SwapParams memory testSwap = SwapParams({
-            zeroForOne: false, amountSpecified: -int256(amountIn), sqrtPriceLimitX96: TickMath.MAX_SQRT_PRICE - 1
+            zeroForOne: false,
+            // forge-lint: disable-next-line(unsafe-typecast)
+            amountSpecified: -int256(amountIn),
+            sqrtPriceLimitX96: TickMath.MAX_SQRT_PRICE - 1
         });
         try jbSwapRouter.swap(key, testSwap, 0) { // 1% slippage
             (uint8 route, uint256 expectedTokens) = _getLastBestRouteFromLogs();
@@ -544,7 +550,10 @@ contract JBUniswapV4HookForkTest is Test {
         vm.recordLogs();
         uint256 amountIn = 1000 ether;
         SwapParams memory testSwap = SwapParams({
-            zeroForOne: true, amountSpecified: -int256(amountIn), sqrtPriceLimitX96: TickMath.MIN_SQRT_PRICE + 1
+            zeroForOne: true,
+            // forge-lint: disable-next-line(unsafe-typecast)
+            amountSpecified: -int256(amountIn),
+            sqrtPriceLimitX96: TickMath.MIN_SQRT_PRICE + 1
         });
         try jbSwapRouter.swap(key, testSwap, 0) { // 1% slippage
             (uint8 route, uint256 expectedTokens) = _getLastBestRouteFromLogs();
@@ -635,6 +644,7 @@ contract JBUniswapV4HookForkTest is Test {
         vm.recordLogs();
         SwapParams memory testSwap = SwapParams({
             zeroForOne: true, // Native ETH -> NANA
+            // forge-lint: disable-next-line(unsafe-typecast)
             amountSpecified: -int256(amountIn),
             sqrtPriceLimitX96: TickMath.MAX_SQRT_PRICE - 1
         });
@@ -752,7 +762,10 @@ contract JBUniswapV4HookForkTest is Test {
 
         vm.recordLogs();
         SwapParams memory testSwap = SwapParams({
-            zeroForOne: true, amountSpecified: -int256(amountIn), sqrtPriceLimitX96: TickMath.MIN_SQRT_PRICE + 1
+            zeroForOne: true,
+            // forge-lint: disable-next-line(unsafe-typecast)
+            amountSpecified: -int256(amountIn),
+            sqrtPriceLimitX96: TickMath.MIN_SQRT_PRICE + 1
         });
 
         try jbSwapRouter.swap(useKey, testSwap, 0) { // 1% slippage
@@ -876,6 +889,7 @@ contract JBUniswapV4HookForkTest is Test {
 
         SwapParams memory buySwap = SwapParams({
             zeroForOne: true, // Native ETH -> NANA
+            // forge-lint: disable-next-line(unsafe-typecast)
             amountSpecified: -int256(buyAmount),
             sqrtPriceLimitX96: TickMath.MAX_SQRT_PRICE - 1
         });
@@ -947,6 +961,7 @@ contract JBUniswapV4HookForkTest is Test {
         uint256 buyAmount = 2 ether;
         SwapParams memory buySwap = SwapParams({
             zeroForOne: false, // WETH -> NANA
+            // forge-lint: disable-next-line(unsafe-typecast)
             amountSpecified: -int256(buyAmount),
             sqrtPriceLimitX96: TickMath.MAX_SQRT_PRICE - 1
         });
@@ -1025,6 +1040,7 @@ contract JBUniswapV4HookForkTest is Test {
 
         SwapParams memory sellSwap = SwapParams({
             zeroForOne: true, // NANA -> WETH
+            // forge-lint: disable-next-line(unsafe-typecast)
             amountSpecified: -int256(sellAmount),
             sqrtPriceLimitX96: TickMath.MIN_SQRT_PRICE + 1
         });
@@ -1121,7 +1137,10 @@ contract JBUniswapV4HookForkTest is Test {
 
         // Swap currency1 (WETH) -> currency0 (NANA), so zeroForOne = false
         SwapParams memory params = SwapParams({
-            zeroForOne: false, amountSpecified: -int256(amountIn), sqrtPriceLimitX96: TickMath.MAX_SQRT_PRICE - 1
+            zeroForOne: false,
+            // forge-lint: disable-next-line(unsafe-typecast)
+            amountSpecified: -int256(amountIn),
+            sqrtPriceLimitX96: TickMath.MAX_SQRT_PRICE - 1
         });
 
         // Estimate expected output
@@ -1151,7 +1170,10 @@ contract JBUniswapV4HookForkTest is Test {
 
         // Swap currency1 (WETH) -> currency0 (NANA), so zeroForOne = false
         SwapParams memory params = SwapParams({
-            zeroForOne: false, amountSpecified: -int256(amountIn), sqrtPriceLimitX96: TickMath.MAX_SQRT_PRICE - 1
+            zeroForOne: false,
+            // forge-lint: disable-next-line(unsafe-typecast)
+            amountSpecified: -int256(amountIn),
+            sqrtPriceLimitX96: TickMath.MAX_SQRT_PRICE - 1
         });
 
         // Estimate expected output

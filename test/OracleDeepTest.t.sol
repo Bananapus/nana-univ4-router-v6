@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.26;
 
-import "forge-std/Test.sol";
-import "forge-std/console.sol";
+import {Test} from "forge-std/Test.sol";
+import {console} from "forge-std/console.sol";
 
 import {PoolManager} from "@uniswap/v4-core/src/PoolManager.sol";
 import {IPoolManager} from "@uniswap/v4-core/src/interfaces/IPoolManager.sol";
@@ -112,6 +112,7 @@ contract MockJBTerminalStore_Oracle {
     mapping(uint256 => mapping(uint256 => uint256)) public surplusPerToken;
 
     function setSurplus(uint256 projectId, address token, uint256 surplusAmount) external {
+        // forge-lint: disable-next-line(unsafe-typecast)
         uint256 currency = uint32(uint160(token));
         surplusPerToken[projectId][currency] = surplusAmount;
     }
@@ -217,7 +218,8 @@ contract MockJBMultiTerminal_Oracle {
 
         uint256 outputAmount;
         uint256 surplusAmount =
-            TERMINAL_STORE.currentReclaimableSurplusOf(projectId, 1 ether, uint32(uint160(tokenToReclaim)), 18);
+        // forge-lint: disable-next-line(unsafe-typecast)
+        TERMINAL_STORE.currentReclaimableSurplusOf(projectId, 1 ether, uint32(uint160(tokenToReclaim)), 18);
         outputAmount = (surplusAmount * cashOutCount) / 1e18;
 
         require(outputAmount >= minTokensReclaimed, "Insufficient tokens reclaimed");
