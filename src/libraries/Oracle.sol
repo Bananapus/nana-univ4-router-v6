@@ -349,7 +349,7 @@ library Oracle {
                 return (
                     beforeOrAt.tickCumulative
                         + ((atOrAfter.tickCumulative - beforeOrAt.tickCumulative) / int56(uint56(observationTimeDelta)))
-                            * int56(uint56(targetDelta)),
+                        * int56(uint56(targetDelta)),
                     beforeOrAt.secondsPerLiquidityCumulativeX128
                         + uint136(
                             (uint256(

@@ -46,8 +46,7 @@ contract DeployJBUniswapV4Hook is Script {
         );
 
         // Prepare constructor arguments.
-        bytes memory constructorArgs =
-            abi.encode(IPoolManager(poolManager), core.tokens, core.directory, core.prices);
+        bytes memory constructorArgs = abi.encode(IPoolManager(poolManager), core.tokens, core.directory, core.prices);
 
         // Find a valid hook address using HookMiner.
         (address hookAddress, bytes32 salt) =

@@ -23,12 +23,7 @@ import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 
 // Import Juicebox interfaces
-import {
-    IJBTokens,
-    IJBController,
-    IJBPrices,
-    IJBDirectory
-} from "../src/JBUniswapV4Hook.sol";
+import {IJBTokens, IJBController, IJBPrices, IJBDirectory} from "../src/JBUniswapV4Hook.sol";
 import {IJBTerminal} from "@bananapus/core-v6/src/interfaces/IJBTerminal.sol";
 import {IJBToken} from "@bananapus/core-v6/src/interfaces/IJBToken.sol";
 import {JBRuleset} from "@bananapus/core-v6/src/structs/JBRuleset.sol";
@@ -193,7 +188,6 @@ contract JBUniswapV4HookForkTest is Test {
             );
             vm.stopPrank();
         }
-
     }
 
     // Integer sqrt via Babylonian method for uint256
@@ -331,9 +325,7 @@ contract JBUniswapV4HookForkTest is Test {
         }
 
         // Verify that at least one route returns a valid estimate
-        assertTrue(
-            v4Output > 0 || juiceboxOutput > 0, "At least one route should return a valid estimate"
-        );
+        assertTrue(v4Output > 0 || juiceboxOutput > 0, "At least one route should return a valid estimate");
 
         // Log the comparison for debugging
         console.log("V4 Output:", v4Output);
@@ -383,9 +375,7 @@ contract JBUniswapV4HookForkTest is Test {
             }
         }
 
-        assertTrue(
-            v4Output > 0 || juiceboxOutput > 0, "At least one route should return a valid estimate"
-        );
+        assertTrue(v4Output > 0 || juiceboxOutput > 0, "At least one route should return a valid estimate");
 
         console.log("V4 Output (WETH):", v4Output);
         console.log("Juicebox Output (WETH):", juiceboxOutput);
@@ -1179,6 +1169,5 @@ contract JBUniswapV4HookForkTest is Test {
 
         vm.stopPrank();
     }
-
 }
 

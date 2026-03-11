@@ -45,8 +45,7 @@ contract DeployScript is Script {
         );
 
         // Prepare constructor arguments.
-        bytes memory constructorArgs =
-            abi.encode(IPoolManager(poolManager), core.tokens, core.directory, core.prices);
+        bytes memory constructorArgs = abi.encode(IPoolManager(poolManager), core.tokens, core.directory, core.prices);
 
         // Mine a valid hook address.
         (address hookAddress, bytes32 salt) =

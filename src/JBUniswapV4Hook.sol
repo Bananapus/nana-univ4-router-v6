@@ -65,7 +65,6 @@ contract JBUniswapV4Hook is BaseHook {
     /// @notice Reverts when secondsAgo is zero in observeTWAP().
     error JBUniswapV4Hook_SecondsAgoCannotBeZero();
 
-
     //*********************************************************************//
     // ---------------------------- structs ------------------------------ //
     //*********************************************************************//
@@ -637,7 +636,11 @@ contract JBUniswapV4Hook is BaseHook {
         bool juiceboxBetterThanV4 =
             jbTerminalAvailable && juiceboxExpectedOutput > uniswapV4ExpectedTokens && juiceboxExpectedOutput > 0;
 
-        emit BestRouteSelected(poolId, juiceboxBetterThanV4 ? 1 : 0, juiceboxBetterThanV4 ? juiceboxExpectedOutput : uniswapV4ExpectedTokens);
+        emit BestRouteSelected(
+            poolId,
+            juiceboxBetterThanV4 ? 1 : 0,
+            juiceboxBetterThanV4 ? juiceboxExpectedOutput : uniswapV4ExpectedTokens
+        );
 
         // If Juicebox gives better output, route through Juicebox
         if (juiceboxBetterThanV4) {
@@ -701,11 +704,11 @@ contract JBUniswapV4Hook is BaseHook {
     function _createSwapDelta(uint256 amountIn, uint256 amountOut) internal pure returns (BeforeSwapDelta) {
         // The hook takes the input amount and settles the output amount
         // For both buying and selling: take inputCurrency, settle outputCurrency
-        return
-            toBeforeSwapDelta({
-                // forge-lint: disable-next-line(unsafe-typecast)
-                deltaSpecified: int128(uint128(amountIn)), deltaUnspecified: -int128(uint128(amountOut))
-            });
+        return toBeforeSwapDelta({
+            // forge-lint: disable-next-line(unsafe-typecast)
+            deltaSpecified: int128(uint128(amountIn)),
+            deltaUnspecified: -int128(uint128(amountOut))
+        });
     }
 
     /// @notice Gets the primary terminal for a project and token
@@ -925,5 +928,4 @@ contract JBUniswapV4Hook is BaseHook {
             currency: outputCurrency, poolManager: poolManager, payer: address(this), amount: amount, burn: false
         });
     }
-
 }

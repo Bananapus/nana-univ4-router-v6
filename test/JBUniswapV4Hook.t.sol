@@ -22,12 +22,7 @@ import {JBUniswapV4Hook} from "../src/JBUniswapV4Hook.sol";
 import {MockERC20, MockERC20WithDecimals} from "./mock/MockERC20.sol";
 import {JuiceboxSwapRouter} from "./utils/JuiceboxSwapRouter.sol";
 // Import Juicebox interfaces and structs from the hook file
-import {
-    IJBTokens,
-    IJBPrices,
-    IJBDirectory,
-    IJBTerminalStore
-} from "../src/JBUniswapV4Hook.sol";
+import {IJBTokens, IJBPrices, IJBDirectory, IJBTerminalStore} from "../src/JBUniswapV4Hook.sol";
 import {IJBTerminal} from "@bananapus/core-v6/src/interfaces/IJBTerminal.sol";
 import {JBRuleset} from "@bananapus/core-v6/src/structs/JBRuleset.sol";
 import {JBRulesetMetadata} from "@bananapus/core-v6/src/structs/JBRulesetMetadata.sol";
