@@ -368,6 +368,7 @@ contract JBUniswapV4Hook is BaseHook {
         PoolId poolId = key.toId();
         ObservationState memory state = states[poolId];
 
+        // slither-disable-next-line unused-return
         (, int24 tick,,) = poolManager.getSlot0(poolId);
         uint128 liquidity = poolManager.getLiquidity(poolId);
 
