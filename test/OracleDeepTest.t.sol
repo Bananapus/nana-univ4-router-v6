@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.26;
 
-import "forge-std/Test.sol";
-import "forge-std/console.sol";
+import {Test} from "forge-std/Test.sol";
+import {console} from "forge-std/console.sol";
 
 import {PoolManager} from "@uniswap/v4-core/src/PoolManager.sol";
 import {IPoolManager} from "@uniswap/v4-core/src/interfaces/IPoolManager.sol";
@@ -16,26 +16,11 @@ import {PoolId, PoolIdLibrary} from "@uniswap/v4-core/src/types/PoolId.sol";
 import {Currency, CurrencyLibrary} from "@uniswap/v4-core/src/types/Currency.sol";
 import {TickMath} from "@uniswap/v4-core/src/libraries/TickMath.sol";
 import {Hooks} from "@uniswap/v4-core/src/libraries/Hooks.sol";
-import {FullMath} from "@uniswap/v4-core/src/libraries/FullMath.sol";
 
 import {JBUniswapV4Hook} from "../src/JBUniswapV4Hook.sol";
-import {MockERC20, MockERC20WithDecimals} from "./mock/MockERC20.sol";
-import {MockWETH} from "./mock/MockWETH.sol";
+import {MockERC20} from "./mock/MockERC20.sol";
 import {JuiceboxSwapRouter} from "./utils/JuiceboxSwapRouter.sol";
-import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
-import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
-import {IUniswapV3SwapCallback} from "@uniswap/v3-core/contracts/interfaces/callback/IUniswapV3SwapCallback.sol";
-
-import {
-    IJBTokens,
-    IJBMultiTerminal,
-    IJBController,
-    IJBPrices,
-    IJBDirectory,
-    IJBTerminalStore
-} from "../src/JBUniswapV4Hook.sol";
-import {IJBTerminal} from "@bananapus/core-v6/src/interfaces/IJBTerminal.sol";
-import {IUniswapV3Factory} from "../src/interfaces/IUniswapV3Factory.sol";
+import {IJBTokens, IJBPrices, IJBDirectory, IJBTerminalStore} from "../src/JBUniswapV4Hook.sol";
 import {JBRuleset} from "@bananapus/core-v6/src/structs/JBRuleset.sol";
 import {JBRulesetMetadata} from "@bananapus/core-v6/src/structs/JBRulesetMetadata.sol";
 import {JBRulesetMetadataResolver} from "@bananapus/core-v6/src/libraries/JBRulesetMetadataResolver.sol";
@@ -127,6 +112,7 @@ contract MockJBTerminalStore_Oracle {
     mapping(uint256 => mapping(uint256 => uint256)) public surplusPerToken;
 
     function setSurplus(uint256 projectId, address token, uint256 surplusAmount) external {
+        // forge-lint: disable-next-line(unsafe-typecast)
         uint256 currency = uint32(uint160(token));
         surplusPerToken[projectId][currency] = surplusAmount;
     }
@@ -232,7 +218,8 @@ contract MockJBMultiTerminal_Oracle {
 
         uint256 outputAmount;
         uint256 surplusAmount =
-            TERMINAL_STORE.currentReclaimableSurplusOf(projectId, 1 ether, uint32(uint160(tokenToReclaim)), 18);
+        // forge-lint: disable-next-line(unsafe-typecast)
+        TERMINAL_STORE.currentReclaimableSurplusOf(projectId, 1 ether, uint32(uint160(tokenToReclaim)), 18);
         outputAmount = (surplusAmount * cashOutCount) / 1e18;
 
         require(outputAmount >= minTokensReclaimed, "Insufficient tokens reclaimed");
@@ -298,169 +285,6 @@ contract MockJBController_Oracle {
     }
 }
 
-contract MockUniswapV3Pool_Oracle {
-    using SafeERC20 for IERC20;
-
-    address public immutable token0;
-    address public immutable token1;
-    uint24 public immutable fee;
-
-    bool public unlocked = true;
-    uint160 public sqrtPriceX96;
-    int24 public tick;
-    uint128 public liquidity;
-    uint256 public priceMultiplier;
-
-    constructor(address _token0, address _token1, uint24 _fee) {
-        token0 = _token0;
-        token1 = _token1;
-        fee = _fee;
-        sqrtPriceX96 = 79_228_162_514_264_337_593_543_950_336;
-        tick = 0;
-        priceMultiplier = 1e18;
-    }
-
-    function setLiquidity(uint128 _liquidity) external {
-        liquidity = _liquidity;
-    }
-
-    function slot0()
-        external
-        view
-        returns (
-            uint160 _sqrtPriceX96,
-            int24 _tick,
-            uint16 observationIndex,
-            uint16 observationCardinality,
-            uint16 observationCardinalityNext,
-            uint8 feeProtocol,
-            bool _unlocked
-        )
-    {
-        return (sqrtPriceX96, tick, 0, 2, 2, 0, unlocked);
-    }
-
-    function observe(uint32[] calldata secondsAgos)
-        external
-        view
-        returns (int56[] memory tickCumulatives, uint160[] memory secondsPerLiquidityCumulativeX128s)
-    {
-        uint256 length = secondsAgos.length;
-        tickCumulatives = new int56[](length);
-        secondsPerLiquidityCumulativeX128s = new uint160[](length);
-
-        uint32 currentTime = uint32(block.timestamp);
-        for (uint256 i = 0; i < length; i++) {
-            uint32 timeAgo = secondsAgos[i];
-            uint32 observationTime = currentTime > timeAgo ? currentTime - timeAgo : 0;
-            int56 tickValue = int56(int24(tick));
-            tickCumulatives[i] = tickValue * int56(uint56(observationTime));
-            if (liquidity > 0 && timeAgo > 0) {
-                uint256 pastTime = observationTime;
-                secondsPerLiquidityCumulativeX128s[i] = uint160((pastTime << 128) / uint256(liquidity));
-            } else if (liquidity > 0) {
-                secondsPerLiquidityCumulativeX128s[i] = uint160((uint256(currentTime) << 128) / uint256(liquidity));
-            } else {
-                secondsPerLiquidityCumulativeX128s[i] = 0;
-            }
-        }
-    }
-
-    function observations(uint256 index)
-        external
-        view
-        returns (
-            uint32 blockTimestamp,
-            int56 tickCumulative,
-            uint160 secondsPerLiquidityCumulativeX128,
-            bool initialized
-        )
-    {
-        if (index == 0) {
-            uint32 currentTimestamp = uint32(block.timestamp);
-            int56 currentCumulative = int56(tick) * int56(uint56(currentTimestamp));
-            return (currentTimestamp, currentCumulative, 0, true);
-        } else {
-            uint32 currentTime = uint32(block.timestamp);
-            uint32 oldTimestamp;
-            if (currentTime >= 7200) {
-                oldTimestamp = currentTime - 7200;
-            } else if (currentTime >= 3600) {
-                oldTimestamp = currentTime - 3600;
-            } else {
-                oldTimestamp = currentTime > 3600 ? currentTime - 3600 : 1;
-            }
-            int56 oldCumulative = int56(tick) * int56(uint56(oldTimestamp));
-            return (oldTimestamp, oldCumulative, 0, true);
-        }
-    }
-
-    function swap(
-        address recipient,
-        bool zeroForOne,
-        int256 amountSpecified,
-        uint160,
-        bytes calldata data
-    )
-        external
-        returns (int256 amount0, int256 amount1)
-    {
-        require(unlocked, "Pool locked");
-        require(amountSpecified > 0, "Exact input required");
-
-        uint256 amountIn = uint256(amountSpecified);
-        uint256 amountOut;
-
-        if (zeroForOne) {
-            uint256 amountAfterFee = amountIn * (1_000_000 - fee) / 1_000_000;
-            amountOut = (amountAfterFee * priceMultiplier) / 1e18;
-            amount0 = int256(amountIn);
-            amount1 = -int256(amountOut);
-        } else {
-            uint256 amountAfterFee = amountIn * (1_000_000 - fee) / 1_000_000;
-            amountOut = (amountAfterFee * 1e18) / priceMultiplier;
-            amount0 = -int256(amountOut);
-            amount1 = int256(amountIn);
-        }
-
-        IUniswapV3SwapCallback(msg.sender).uniswapV3SwapCallback(amount0, amount1, data);
-
-        if (zeroForOne) {
-            require(IERC20(token1).balanceOf(address(this)) >= amountOut, "Insufficient token1 in pool");
-            IERC20(token1).safeTransfer(recipient, amountOut);
-        } else {
-            require(IERC20(token0).balanceOf(address(this)) >= amountOut, "Insufficient token0 in pool");
-            IERC20(token0).safeTransfer(recipient, amountOut);
-        }
-
-        return (amount0, amount1);
-    }
-}
-
-contract MockUniswapV3Factory_Oracle is IUniswapV3Factory {
-    mapping(address => mapping(address => mapping(uint24 => address))) public pools;
-
-    function getPool(address tokenA, address tokenB, uint24 _fee) external view returns (address pool) {
-        (address t0, address t1) = tokenA < tokenB ? (tokenA, tokenB) : (tokenB, tokenA);
-        return pools[t0][t1][_fee];
-    }
-
-    function createPool(address tokenA, address tokenB, uint24 _fee) external returns (address pool) {
-        (address t0, address t1) = tokenA < tokenB ? (tokenA, tokenB) : (tokenB, tokenA);
-        require(pools[t0][t1][_fee] == address(0), "Pool exists");
-        pool = address(new MockUniswapV3Pool_Oracle(t0, t1, _fee));
-        pools[t0][t1][_fee] = pool;
-        return pool;
-    }
-
-    function enableFeeAmount(uint24, int24) external {}
-
-    function setPool(address tokenA, address tokenB, uint24 _fee, address pool) external {
-        (address t0, address t1) = tokenA < tokenB ? (tokenA, tokenB) : (tokenB, tokenA);
-        pools[t0][t1][_fee] = pool;
-    }
-}
-
 // ============================================================
 // Oracle Deep Test
 // ============================================================
@@ -479,9 +303,6 @@ contract OracleDeepTest is Test {
     MockJBController_Oracle mockJBController;
     MockJBPrices_Oracle mockJBPrices;
     MockJBTerminalStore_Oracle mockJBTerminalStore;
-    MockUniswapV3Factory_Oracle mockV3Factory;
-    MockUniswapV3Pool_Oracle mockV3Pool;
-
     PoolManager manager;
     PoolSwapTest swapRouter;
     JuiceboxSwapRouter jbSwapRouter;
@@ -517,9 +338,6 @@ contract OracleDeepTest is Test {
         mockJBDirectory.setMockController(address(mockJBController));
         mockJBMultiTerminal.setTerminalStore(address(mockJBTerminalStore));
 
-        // Deploy mock v3 factory
-        mockV3Factory = new MockUniswapV3Factory_Oracle();
-
         // Calculate the required hook flags
         uint160 flags = uint160(
             Hooks.AFTER_INITIALIZE_FLAG | Hooks.BEFORE_SWAP_FLAG | Hooks.AFTER_SWAP_FLAG
@@ -527,15 +345,11 @@ contract OracleDeepTest is Test {
                 | Hooks.AFTER_REMOVE_LIQUIDITY_FLAG
         );
 
-        address testWETH = address(0x1234567890123456789012345678901234567890);
-
         bytes memory constructorArgs = abi.encode(
             IPoolManager(address(manager)),
             IJBTokens(address(mockJBTokens)),
             IJBDirectory(address(mockJBDirectory)),
-            IJBPrices(address(mockJBPrices)),
-            IUniswapV3Factory(address(mockV3Factory)),
-            testWETH
+            IJBPrices(address(mockJBPrices))
         );
 
         (, bytes32 salt) = HookMiner.find(address(this), flags, type(JBUniswapV4Hook).creationCode, constructorArgs);
@@ -544,9 +358,7 @@ contract OracleDeepTest is Test {
             IPoolManager(address(manager)),
             IJBTokens(address(mockJBTokens)),
             IJBDirectory(address(mockJBDirectory)),
-            IJBPrices(address(mockJBPrices)),
-            IUniswapV3Factory(address(mockV3Factory)),
-            testWETH
+            IJBPrices(address(mockJBPrices))
         );
 
         // Deploy test tokens
@@ -556,12 +368,6 @@ contract OracleDeepTest is Test {
         if (address(token0) > address(token1)) {
             (token0, token1) = (token1, token0);
         }
-
-        // Create v3 pool for token0/token1 pair
-        mockV3Pool = MockUniswapV3Pool_Oracle(mockV3Factory.createPool(address(token0), address(token1), 10_000));
-        mockV3Pool.setLiquidity(1000e18);
-        token0.mint(address(mockV3Pool), 10_000 ether);
-        token1.mint(address(mockV3Pool), 10_000 ether);
 
         // Set up a Juicebox project for token0
         mockJBTokens.setProjectId(address(token0), 123);

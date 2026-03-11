@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.16;
 
-import "forge-std/Test.sol";
+import {Test} from "forge-std/Test.sol";
 import {Oracle} from "../../src/libraries/Oracle.sol";
 
 /// @notice Oracle tickCumulative widened from int48 to int56.
@@ -9,7 +9,7 @@ import {Oracle} from "../../src/libraries/Oracle.sol";
 /// After widening to int56, the overflow threshold extends to ~1.4 years at max tick.
 /// This test verifies that accumulation at max tick for durations that would have
 /// overflowed int48 now works correctly with int56.
-contract L40_OracleTickCumulativeWidth is Test {
+contract OracleTickCumulativeWidth is Test {
     /// @notice Verify that the Observation struct fits in a single 256-bit storage slot.
     /// Layout: uint32 + int24 + int56 + uint136 + bool = 32 + 24 + 56 + 136 + 8 = 256
     function test_observationStructFitsSingleSlot() public pure {

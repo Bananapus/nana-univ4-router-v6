@@ -31,7 +31,7 @@ contract CreatePoolAndAddLiquidityScript is BaseScript, LiquidityHelpers {
 
     function run() external {
         PoolKey memory poolKey = PoolKey({
-            currency0: currency0, currency1: currency1, fee: lpFee, tickSpacing: tickSpacing, hooks: hookContract
+            currency0: CURRENCY0, currency1: CURRENCY1, fee: lpFee, tickSpacing: tickSpacing, hooks: HOOK_CONTRACT
         });
 
         bytes memory hookData = new bytes(0);
@@ -55,29 +55,29 @@ contract CreatePoolAndAddLiquidityScript is BaseScript, LiquidityHelpers {
         uint256 amount1Max = token1Amount + 1;
 
         (bytes memory actions, bytes[] memory mintParams) = _mintLiquidityParams(
-            poolKey, tickLower, tickUpper, liquidity, amount0Max, amount1Max, deployerAddress, hookData
+            poolKey, tickLower, tickUpper, liquidity, amount0Max, amount1Max, DEPLOYER_ADDRESS, hookData
         );
 
         // multicall parameters
         bytes[] memory params = new bytes[](2);
 
         // Initialize Pool
-        params[0] = abi.encodeWithSelector(positionManager.initializePool.selector, poolKey, startingPrice, hookData);
+        params[0] = abi.encodeWithSelector(POSITION_MANAGER.initializePool.selector, poolKey, startingPrice, hookData);
 
         // Mint Liquidity
         params[1] = abi.encodeWithSelector(
-            positionManager.modifyLiquidities.selector, abi.encode(actions, mintParams), block.timestamp + 3600
+            POSITION_MANAGER.modifyLiquidities.selector, abi.encode(actions, mintParams), block.timestamp + 3600
         );
 
         uint256 valueToPass = 0;
-        if (currency0.isAddressZero()) valueToPass += amount0Max;
-        if (currency1.isAddressZero()) valueToPass += amount1Max;
+        if (CURRENCY0.isAddressZero()) valueToPass += amount0Max;
+        if (CURRENCY1.isAddressZero()) valueToPass += amount1Max;
 
         vm.startBroadcast();
         tokenApprovals();
 
         // Multicall to atomically create pool & add liquidity
-        positionManager.multicall{value: valueToPass}(params);
+        POSITION_MANAGER.multicall{value: valueToPass}(params);
         vm.stopBroadcast();
     }
 }

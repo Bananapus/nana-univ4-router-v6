@@ -8,12 +8,13 @@ import {BalanceDelta, toBalanceDelta, BalanceDeltaLibrary} from "@uniswap/v4-cor
 /// @notice In Uniswap V4, output amounts in BalanceDelta are negative (credits to the user).
 /// The old code checked `outputAmount > 0` which was never true for actual V4 swaps,
 /// meaning the slippage check was effectively disabled.
-contract H18_SlippageSignConventionTest is Test {
+contract SlippageSignConventionTest is Test {
     /// @notice Replicates the fixed slippage check logic from _afterSwap
     function _checkSlippage(bool zeroForOne, BalanceDelta delta, uint256 amountOutMin) internal pure returns (bool) {
         int128 rawOutput = zeroForOne ? BalanceDeltaLibrary.amount1(delta) : BalanceDeltaLibrary.amount0(delta);
 
         if (rawOutput != 0) {
+            // forge-lint: disable-next-line(unsafe-typecast)
             uint256 outputAmount = rawOutput < 0 ? uint256(int256(-rawOutput)) : uint256(int256(rawOutput));
             if (outputAmount < amountOutMin) {
                 return true; // would revert
@@ -26,6 +27,7 @@ contract H18_SlippageSignConventionTest is Test {
     function _checkSlippageOld(bool zeroForOne, BalanceDelta delta, uint256 amountOutMin) internal pure returns (bool) {
         int128 outputAmount = zeroForOne ? BalanceDeltaLibrary.amount1(delta) : BalanceDeltaLibrary.amount0(delta);
 
+        // forge-lint: disable-next-line(unsafe-typecast)
         if (outputAmount > 0 && uint256(int256(outputAmount)) < amountOutMin) {
             return true; // would revert
         }

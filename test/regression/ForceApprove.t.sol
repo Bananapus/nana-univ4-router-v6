@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.16;
 
-import "forge-std/Test.sol";
+import {Test} from "forge-std/Test.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 import {MockERC20} from "../mock/MockERC20.sol";
@@ -11,7 +11,7 @@ import {MockERC20} from "../mock/MockERC20.sol";
 /// call reverts after partial token consumption, leftover allowance accumulates on the
 /// next routing attempt. forceApprove sets an exact allowance regardless of the current
 /// value, preventing allowance accumulation.
-contract L43_ForceApprove is Test {
+contract ForceApprove is Test {
     using SafeERC20 for IERC20;
 
     MockERC20 token;
@@ -55,6 +55,7 @@ contract L43_ForceApprove is Test {
         // Simulate partial consumption: spender uses 30, leaving 70.
         token.mint(address(this), 100);
         vm.prank(spender);
+        // forge-lint: disable-next-line(erc20-unchecked-transfer)
         token.transferFrom(address(this), spender, 30);
         assertEq(token.allowance(address(this), spender), 70, "70 allowance remaining after partial use");
 
