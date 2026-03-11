@@ -357,15 +357,14 @@ contract JBUniswapV4Hook is BaseHook {
     /// @param key The pool key
     /// @param secondsAgos Array of time periods (in seconds) to look back
     /// @return tickCumulatives Cumulative tick values at each time period
-    /// @return secondsPerLiquidityCumulativeX128s Cumulative seconds per liquidity at each time period (cast to
-    /// uint160)
+    /// @return secondsPerLiquidityCumulativeX128s Cumulative seconds per liquidity at each time period.
     function observe(
         PoolKey calldata key,
         uint32[] calldata secondsAgos
     )
         external
         view
-        returns (int56[] memory tickCumulatives, uint160[] memory secondsPerLiquidityCumulativeX128s)
+        returns (int56[] memory tickCumulatives, uint136[] memory secondsPerLiquidityCumulativeX128s)
     {
         PoolId poolId = key.toId();
         ObservationState memory state = states[poolId];
@@ -373,8 +372,7 @@ contract JBUniswapV4Hook is BaseHook {
         (, int24 tick,,) = poolManager.getSlot0(poolId);
         uint128 liquidity = poolManager.getLiquidity(poolId);
 
-        // Delegate to Oracle library (returns uint136[])
-        (int56[] memory rawTickCumulatives, uint136[] memory rawSecondsPerLiq) = observations[poolId].observe({
+        (tickCumulatives, secondsPerLiquidityCumulativeX128s) = observations[poolId].observe({
             time: uint32(block.timestamp),
             secondsAgos: secondsAgos,
             tick: tick,
@@ -382,13 +380,6 @@ contract JBUniswapV4Hook is BaseHook {
             liquidity: liquidity,
             cardinality: state.cardinality
         });
-
-        // Cast uint136[] → uint160[] for IGeomeanOracle compatibility
-        tickCumulatives = rawTickCumulatives;
-        secondsPerLiquidityCumulativeX128s = new uint160[](rawSecondsPerLiq.length);
-        for (uint256 i; i < rawSecondsPerLiq.length; i++) {
-            secondsPerLiquidityCumulativeX128s[i] = uint160(rawSecondsPerLiq[i]);
-        }
     }
 
     /// @notice Observe TWAP tick
