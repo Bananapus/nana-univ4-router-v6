@@ -708,6 +708,8 @@ contract JBUniswapV4Hook is BaseHook {
         return toBeforeSwapDelta({
             // forge-lint: disable-next-line(unsafe-typecast)
             deltaSpecified: int128(uint128(amountIn)),
+            // Safe: amountOut is a swap output bounded by pool liquidity, fits in uint128/int128.
+            // forge-lint: disable-next-line(unsafe-typecast)
             deltaUnspecified: -int128(uint128(amountOut))
         });
     }
