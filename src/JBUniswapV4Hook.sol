@@ -175,25 +175,14 @@ contract JBUniswapV4Hook is BaseHook {
 
         // Get the terminal store for the project
         try IJBMultiTerminal(address(terminal)).STORE() returns (IJBTerminalStore store) {
-            // Build a single-element terminal array for the surplus calculation.
-            IJBTerminal[] memory terminals = new IJBTerminal[](1);
-            terminals[0] = terminal;
-
-            // Get the terminal's accounting contexts for this project.
-            JBAccountingContext[] memory accountingContexts;
-            try terminal.accountingContextsOf(projectId) returns (JBAccountingContext[] memory contexts) {
-                accountingContexts = contexts;
-            } catch {
-                return 0;
-            }
-
-            // Get the current reclaimable surplus for the project (gross, before fees)
+            // Get the current reclaimable surplus for the project (gross, before fees).
+            // Pass empty terminals/accountingContexts so the store uses total surplus across all terminals.
             uint256 grossReclaim;
             try store.currentReclaimableSurplusOf({
                 projectId: projectId,
                 cashOutCount: tokenAmountIn,
-                terminals: terminals,
-                accountingContexts: accountingContexts,
+                terminals: new IJBTerminal[](0),
+                accountingContexts: new JBAccountingContext[](0),
                 decimals: _getTokenDecimals(outputToken),
                 // forge-lint: disable-next-line(unsafe-typecast)
                 currency: uint32(uint160(outputToken))
