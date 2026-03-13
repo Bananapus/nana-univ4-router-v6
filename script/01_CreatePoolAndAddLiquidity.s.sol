@@ -38,25 +38,32 @@ contract CreatePoolAndAddLiquidityScript is BaseScript, LiquidityHelpers {
 
         int24 currentTick = TickMath.getTickAtSqrtPrice(startingPrice);
 
-        tickLower = truncateTickSpacing((currentTick - 750 * tickSpacing), tickSpacing);
-        tickUpper = truncateTickSpacing((currentTick + 750 * tickSpacing), tickSpacing);
+        tickLower = truncateTickSpacing({tick: (currentTick - 750 * tickSpacing), tickSpacing: tickSpacing});
+        tickUpper = truncateTickSpacing({tick: (currentTick + 750 * tickSpacing), tickSpacing: tickSpacing});
 
         // Converts token amounts to liquidity units
-        uint128 liquidity = LiquidityAmounts.getLiquidityForAmounts(
-            startingPrice,
-            TickMath.getSqrtPriceAtTick(tickLower),
-            TickMath.getSqrtPriceAtTick(tickUpper),
-            token0Amount,
-            token1Amount
-        );
+        uint128 liquidity = LiquidityAmounts.getLiquidityForAmounts({
+            sqrtRatioX96: startingPrice,
+            sqrtRatioAX96: TickMath.getSqrtPriceAtTick(tickLower),
+            sqrtRatioBX96: TickMath.getSqrtPriceAtTick(tickUpper),
+            amount0: token0Amount,
+            amount1: token1Amount
+        });
 
         // slippage limits
         uint256 amount0Max = token0Amount + 1;
         uint256 amount1Max = token1Amount + 1;
 
-        (bytes memory actions, bytes[] memory mintParams) = _mintLiquidityParams(
-            poolKey, tickLower, tickUpper, liquidity, amount0Max, amount1Max, DEPLOYER_ADDRESS, hookData
-        );
+        (bytes memory actions, bytes[] memory mintParams) = _mintLiquidityParams({
+            poolKey: poolKey,
+            tickLower: tickLower,
+            tickUpper: tickUpper,
+            liquidity: liquidity,
+            amount0Max: amount0Max,
+            amount1Max: amount1Max,
+            recipient: DEPLOYER_ADDRESS,
+            hookData: hookData
+        });
 
         // multicall parameters
         bytes[] memory params = new bytes[](2);

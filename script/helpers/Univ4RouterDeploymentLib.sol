@@ -29,7 +29,7 @@ library Univ4RouterDeploymentLib {
 
         for (uint256 _i; _i < networks.length; _i++) {
             if (networks[_i].chainId == chainId) {
-                return getDeployment(path, networks[_i].name);
+                return getDeployment({path: path, networkName: networks[_i].name});
             }
         }
 
@@ -44,8 +44,11 @@ library Univ4RouterDeploymentLib {
         view
         returns (Univ4RouterDeployment memory deployment)
     {
-        deployment.hook =
-            JBUniswapV4Hook(payable(_getDeploymentAddress(path, PROJECT_NAME, networkName, "JBUniswapV4Hook")));
+        deployment.hook = JBUniswapV4Hook(
+            payable(_getDeploymentAddress({
+                    path: path, projectName: PROJECT_NAME, networkName: networkName, contractName: "JBUniswapV4Hook"
+                }))
+        );
     }
 
     /// @notice Get the address of a contract that was deployed by the Deploy script.
@@ -66,6 +69,6 @@ library Univ4RouterDeploymentLib {
         string memory deploymentJson =
         // forge-lint: disable-next-line(unsafe-cheatcode)
         VM.readFile(string.concat(path, projectName, "/", networkName, "/", contractName, ".json"));
-        return stdJson.readAddress(deploymentJson, ".address");
+        return stdJson.readAddress({json: deploymentJson, key: ".address"});
     }
 }
