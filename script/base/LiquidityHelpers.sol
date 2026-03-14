@@ -12,8 +12,8 @@ contract LiquidityHelpers is BaseScript {
 
     function _mintLiquidityParams(
         PoolKey memory poolKey,
-        int24 _tickLower,
-        int24 _tickUpper,
+        int24 tickLower,
+        int24 tickUpper,
         uint256 liquidity,
         uint256 amount0Max,
         uint256 amount1Max,
@@ -29,7 +29,7 @@ contract LiquidityHelpers is BaseScript {
         );
 
         bytes[] memory params = new bytes[](4);
-        params[0] = abi.encode(poolKey, _tickLower, _tickUpper, liquidity, amount0Max, amount1Max, recipient, hookData);
+        params[0] = abi.encode(poolKey, tickLower, tickUpper, liquidity, amount0Max, amount1Max, recipient, hookData);
         params[1] = abi.encode(poolKey.currency0, poolKey.currency1);
         params[2] = abi.encode(poolKey.currency0, recipient);
         params[3] = abi.encode(poolKey.currency1, recipient);
@@ -39,13 +39,23 @@ contract LiquidityHelpers is BaseScript {
 
     function tokenApprovals() public {
         if (!CURRENCY0.isAddressZero()) {
-            TOKEN0.approve(address(PERMIT2), type(uint256).max);
-            PERMIT2.approve(address(TOKEN0), address(POSITION_MANAGER), type(uint160).max, type(uint48).max);
+            TOKEN0.approve({spender: address(PERMIT2), value: type(uint256).max});
+            PERMIT2.approve({
+                token: address(TOKEN0),
+                spender: address(POSITION_MANAGER),
+                amount: type(uint160).max,
+                expiration: type(uint48).max
+            });
         }
 
         if (!CURRENCY1.isAddressZero()) {
-            TOKEN1.approve(address(PERMIT2), type(uint256).max);
-            PERMIT2.approve(address(TOKEN1), address(POSITION_MANAGER), type(uint160).max, type(uint48).max);
+            TOKEN1.approve({spender: address(PERMIT2), value: type(uint256).max});
+            PERMIT2.approve({
+                token: address(TOKEN1),
+                spender: address(POSITION_MANAGER),
+                amount: type(uint160).max,
+                expiration: type(uint48).max
+            });
         }
     }
 

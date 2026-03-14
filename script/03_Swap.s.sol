@@ -19,8 +19,8 @@ contract SwapScript is BaseScript {
         vm.startBroadcast();
 
         // We'll approve both, just for testing.
-        TOKEN1.approve(address(SWAP_ROUTER), type(uint256).max);
-        TOKEN0.approve(address(SWAP_ROUTER), type(uint256).max);
+        TOKEN1.approve({spender: address(SWAP_ROUTER), value: type(uint256).max});
+        TOKEN0.approve({spender: address(SWAP_ROUTER), value: type(uint256).max});
 
         // Execute swap
         SWAP_ROUTER.swapExactTokensForTokens({

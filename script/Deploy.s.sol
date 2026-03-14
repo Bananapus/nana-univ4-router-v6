@@ -48,15 +48,20 @@ contract DeployScript is Script {
         bytes memory constructorArgs = abi.encode(IPoolManager(poolManager), core.tokens, core.directory, core.prices);
 
         // Mine a valid hook address.
-        (address hookAddress, bytes32 salt) =
-            HookMiner.find(deployer, flags, type(JBUniswapV4Hook).creationCode, constructorArgs);
+        (address hookAddress, bytes32 salt) = HookMiner.find({
+            deployer: deployer,
+            flags: flags,
+            creationCode: type(JBUniswapV4Hook).creationCode,
+            constructorArgs: constructorArgs
+        });
 
         console2.log("Deploying JBUniswapV4Hook to:", hookAddress);
 
         vm.startBroadcast(deployerPrivateKey);
 
-        JBUniswapV4Hook hook =
-            new JBUniswapV4Hook{salt: salt}(IPoolManager(poolManager), core.tokens, core.directory, core.prices);
+        JBUniswapV4Hook hook = new JBUniswapV4Hook{salt: salt}({
+            poolManager: IPoolManager(poolManager), tokens: core.tokens, directory: core.directory, prices: core.prices
+        });
 
         console2.log("JBUniswapV4Hook deployed at:", address(hook));
 

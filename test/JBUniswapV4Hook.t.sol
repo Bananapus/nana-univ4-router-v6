@@ -24,6 +24,7 @@ import {JuiceboxSwapRouter} from "./utils/JuiceboxSwapRouter.sol";
 // Import Juicebox interfaces and structs from the hook file
 import {IJBTokens, IJBPrices, IJBDirectory, IJBTerminalStore} from "../src/JBUniswapV4Hook.sol";
 import {IJBTerminal} from "@bananapus/core-v6/src/interfaces/IJBTerminal.sol";
+import {JBAccountingContext} from "@bananapus/core-v6/src/structs/JBAccountingContext.sol";
 import {JBRuleset} from "@bananapus/core-v6/src/structs/JBRuleset.sol";
 import {JBRulesetMetadata} from "@bananapus/core-v6/src/structs/JBRulesetMetadata.sol";
 import {JBRulesetMetadataResolver} from "@bananapus/core-v6/src/libraries/JBRulesetMetadataResolver.sol";
@@ -239,6 +240,10 @@ contract MockJBMultiTerminal {
 
         return outputAmount;
     }
+
+    function accountingContextsOf(uint256) external pure returns (JBAccountingContext[] memory contexts) {
+        return contexts;
+    }
 }
 
 contract MockJBController {
@@ -324,6 +329,23 @@ contract MockJBTerminalStore {
         if (surplusPerTokenValue == 0) return 0;
 
         // Calculate: (surplusPerToken * cashOutCount) / 1e18
+        return (surplusPerTokenValue * cashOutCount) / 1e18;
+    }
+
+    function currentReclaimableSurplusOf(
+        uint256 projectId,
+        uint256 cashOutCount,
+        IJBTerminal[] calldata, /* terminals */
+        JBAccountingContext[] calldata, /* accountingContexts */
+        uint256, /* decimals */
+        uint256 currency
+    )
+        external
+        view
+        returns (uint256)
+    {
+        uint256 surplusPerTokenValue = surplusPerToken[projectId][currency];
+        if (surplusPerTokenValue == 0) return 0;
         return (surplusPerTokenValue * cashOutCount) / 1e18;
     }
 }
@@ -1938,6 +1960,41 @@ contract JuiceboxHookTest is Test {
         assertEq(expectedOutput, expectedNet, "Should scale with token amount minus fee");
     }
 
+    /// Given a terminal whose store's currentReclaimableSurplusOf reverts
+    /// When calculateExpectedOutputFromSelling is called
+    /// Then it should return 0 (graceful fallback) instead of reverting
+    function testCalculateExpectedOutputFromSelling_StoreReverts_ReturnsZero() public {
+        // Deploy a reverting store and a terminal that returns it
+        RevertingMockStore revertingStore = new RevertingMockStore();
+        RevertingStoreTerminal revertingTerminal = new RevertingStoreTerminal(address(revertingStore));
+
+        uint256 result = hook.calculateExpectedOutputFromSelling({
+            projectId: 123,
+            tokenAmountIn: 1 ether,
+            outputToken: address(token1),
+            terminal: IJBTerminal(address(revertingTerminal))
+        });
+
+        assertEq(result, 0, "Should return 0 when store reverts");
+    }
+
+    /// Given a terminal whose STORE() call itself reverts
+    /// When calculateExpectedOutputFromSelling is called
+    /// Then it should return 0 (graceful fallback)
+    function testCalculateExpectedOutputFromSelling_NoStore_ReturnsZero() public {
+        // Deploy a terminal that reverts on STORE() — the outer try-catch catches it
+        RevertingStoreCallTerminal noStoreTerminal = new RevertingStoreCallTerminal();
+
+        uint256 result = hook.calculateExpectedOutputFromSelling({
+            projectId: 123,
+            tokenAmountIn: 1 ether,
+            outputToken: address(token1),
+            terminal: IJBTerminal(address(noStoreTerminal))
+        });
+
+        assertEq(result, 0, "Should return 0 when STORE() reverts");
+    }
+
     // ============================================
     // amountOutMin Tests
     // ============================================
@@ -2103,5 +2160,46 @@ contract JuiceboxHookTest is Test {
         // Should have received tokens
         assertGt(token0Received, 0, "Should receive tokens");
         assertEq(token0Received, 1000 ether, "Should receive expected amount");
+    }
+}
+
+/// @dev Mock store whose currentReclaimableSurplusOf always reverts
+contract RevertingMockStore {
+    function currentReclaimableSurplusOf(
+        uint256,
+        uint256,
+        IJBTerminal[] calldata,
+        JBAccountingContext[] calldata,
+        uint256,
+        uint256
+    )
+        external
+        pure
+    {
+        revert("store: forced revert");
+    }
+}
+
+/// @dev Mock terminal that returns a reverting store from STORE()
+contract RevertingStoreTerminal {
+    address public immutable store;
+
+    constructor(address _store) {
+        store = _store;
+    }
+
+    function STORE() external view returns (address) {
+        return store;
+    }
+
+    function FEE() external pure returns (uint256) {
+        return 25;
+    }
+}
+
+/// @dev Mock terminal whose STORE() reverts
+contract RevertingStoreCallTerminal {
+    function STORE() external pure {
+        revert("terminal: no store");
     }
 }

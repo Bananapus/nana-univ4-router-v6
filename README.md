@@ -53,9 +53,10 @@ The oracle is a ring buffer of up to 65,535 observations per pool. Cardinality a
 4. Return user-receivable token count
 
 **Selling project tokens** (cashing out):
-1. Query `terminal.STORE().currentReclaimableSurplusOf()` for the bonding curve reclaim amount
-2. Deduct 2.5% protocol fee (25/1000)
+1. Query `terminal.STORE().currentReclaimableSurplusOf()` with empty terminals/accountingContexts so the store uses total surplus across all terminals
+2. Deduct protocol fee (read dynamically from terminal via `IJBFeeTerminal.FEE()`)
 3. Return net output
+4. All external calls are wrapped in try-catch -- if any call reverts, the estimate returns 0 and the swap falls back to V4
 
 ## Architecture
 
@@ -92,8 +93,8 @@ forge install
 | Command | Description |
 |---------|-------------|
 | `forge build` | Compile contracts (requires solc ^0.8.24, Cancun EVM) |
-| `forge test` | Run all tests (~9,000 lines across 7 test files) |
-| `forge test --match-contract JBUniswapV4HookTest` | Run unit tests only |
+| `forge test` | Run all tests |
+| `forge test --match-contract JuiceboxHookTest` | Run unit tests only |
 | `forge test --match-contract ThreeWayRoutingTest` | Run routing comparison tests |
 | `forge test --match-contract JBUniswapV4HookForkTest` | Run fork tests (needs `MAINNET_RPC_URL`) |
 | `forge test -vvv` | Run tests with full trace |
@@ -166,6 +167,8 @@ Deployment scripts support:
 - **TWAP manipulation**: With low cardinality (few observations), the TWAP window may be shorter than intended. The auto-grow mechanism mitigates this over time, but early pools are more vulnerable.
 - **Spot price fallback**: When TWAP data is insufficient, spot price is used silently. This removes manipulation protection for that swap.
 - **Juicebox route depends on terminal availability**: If `DIRECTORY.primaryTerminalOf()` returns address(0), the JB route is skipped entirely.
+- **Surplus estimation uses total surplus**: The sell-side estimate always uses total surplus across all terminals (empty arrays to `currentReclaimableSurplusOf`). This may overestimate reclaim value for projects that don't use `useTotalSurplusForCashOuts`.
+- **External call failures are silent**: If the terminal store or any JB protocol call reverts during sell estimation, the hook returns 0 and falls back to V4 routing. No event is emitted for the failure.
 
 ## License
 

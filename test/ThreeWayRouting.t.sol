@@ -21,6 +21,8 @@ import {MockERC20} from "./mock/MockERC20.sol";
 import {JuiceboxSwapRouter} from "./utils/JuiceboxSwapRouter.sol";
 // Import Juicebox interfaces and structs from the hook file
 import {IJBTokens, IJBPrices, IJBDirectory, IJBTerminalStore} from "../src/JBUniswapV4Hook.sol";
+import {IJBTerminal} from "@bananapus/core-v6/src/interfaces/IJBTerminal.sol";
+import {JBAccountingContext} from "@bananapus/core-v6/src/structs/JBAccountingContext.sol";
 import {JBRuleset} from "@bananapus/core-v6/src/structs/JBRuleset.sol";
 import {JBRulesetMetadata} from "@bananapus/core-v6/src/structs/JBRulesetMetadata.sol";
 import {JBRulesetMetadataResolver} from "@bananapus/core-v6/src/libraries/JBRulesetMetadataResolver.sol";
@@ -122,6 +124,23 @@ contract MockJBTerminalStore {
         uint256 cashOutCount,
         uint256 currency,
         uint256 /* decimals */
+    )
+        external
+        view
+        returns (uint256)
+    {
+        uint256 surplusPerTokenValue = surplusPerToken[projectId][currency];
+        if (surplusPerTokenValue == 0) return 0;
+        return (surplusPerTokenValue * cashOutCount) / 1e18;
+    }
+
+    function currentReclaimableSurplusOf(
+        uint256 projectId,
+        uint256 cashOutCount,
+        IJBTerminal[] calldata, /* terminals */
+        JBAccountingContext[] calldata, /* accountingContexts */
+        uint256, /* decimals */
+        uint256 currency
     )
         external
         view
@@ -251,6 +270,10 @@ contract MockJBMultiTerminal {
         }
 
         return outputAmount;
+    }
+
+    function accountingContextsOf(uint256) external pure returns (JBAccountingContext[] memory contexts) {
+        return contexts;
     }
 }
 

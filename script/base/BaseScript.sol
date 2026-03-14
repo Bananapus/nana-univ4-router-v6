@@ -41,14 +41,14 @@ contract BaseScript is Script {
 
         (CURRENCY0, CURRENCY1) = getCurrencies();
 
-        vm.label(address(TOKEN0), "Token0");
-        vm.label(address(TOKEN1), "Token1");
+        vm.label({account: address(TOKEN0), newLabel: "Token0"});
+        vm.label({account: address(TOKEN1), newLabel: "Token1"});
 
-        vm.label(address(DEPLOYER_ADDRESS), "Deployer");
-        vm.label(address(POOL_MANAGER), "PoolManager");
-        vm.label(address(POSITION_MANAGER), "PositionManager");
-        vm.label(address(SWAP_ROUTER), "SwapRouter");
-        vm.label(address(HOOK_CONTRACT), "HookContract");
+        vm.label({account: address(DEPLOYER_ADDRESS), newLabel: "Deployer"});
+        vm.label({account: address(POOL_MANAGER), newLabel: "PoolManager"});
+        vm.label({account: address(POSITION_MANAGER), newLabel: "PositionManager"});
+        vm.label({account: address(SWAP_ROUTER), newLabel: "SwapRouter"});
+        vm.label({account: address(HOOK_CONTRACT), newLabel: "HookContract"});
     }
 
     function getCurrencies() public pure returns (Currency, Currency) {

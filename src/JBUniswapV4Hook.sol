@@ -32,6 +32,7 @@ import {IJBToken} from "@bananapus/core-v6/src/interfaces/IJBToken.sol";
 import {IJBTokens} from "@bananapus/core-v6/src/interfaces/IJBTokens.sol";
 import {JBConstants} from "@bananapus/core-v6/src/libraries/JBConstants.sol";
 import {JBRulesetMetadataResolver} from "@bananapus/core-v6/src/libraries/JBRulesetMetadataResolver.sol";
+import {JBAccountingContext} from "@bananapus/core-v6/src/structs/JBAccountingContext.sol";
 import {JBRuleset} from "@bananapus/core-v6/src/structs/JBRuleset.sol";
 import {JBRulesetMetadata} from "@bananapus/core-v6/src/structs/JBRulesetMetadata.sol";
 
@@ -174,18 +175,28 @@ contract JBUniswapV4Hook is BaseHook {
 
         // Get the terminal store for the project
         try IJBMultiTerminal(address(terminal)).STORE() returns (IJBTerminalStore store) {
-            // Get the current reclaimable surplus for the project (gross, before fees)
-            uint256 grossReclaim = store.currentReclaimableSurplusOf(
-                projectId,
-                tokenAmountIn,
+            // Get the current reclaimable surplus for the project (gross, before fees).
+            // Pass empty terminals/accountingContexts so the store uses total surplus across all terminals.
+            uint256 grossReclaim;
+            try store.currentReclaimableSurplusOf({
+                projectId: projectId,
+                cashOutCount: tokenAmountIn,
+                terminals: new IJBTerminal[](0),
+                accountingContexts: new JBAccountingContext[](0),
+                decimals: _getTokenDecimals(outputToken),
                 // forge-lint: disable-next-line(unsafe-typecast)
-                uint32(uint160(outputToken)), // the currency id of the output token
-                _getTokenDecimals(outputToken)
-            );
+                currency: uint32(uint160(outputToken))
+            }) returns (
+                uint256 reclaim
+            ) {
+                grossReclaim = reclaim;
+            } catch {
+                return 0;
+            }
             // Deduct JB protocol fee dynamically read from the terminal.
             // Conservative: if hook is feeless, estimate is slightly low → routes to Uniswap (still good).
             uint256 fee = IJBFeeTerminal(address(terminal)).FEE();
-            return grossReclaim - FullMath.mulDiv(grossReclaim, fee, JBConstants.MAX_FEE);
+            return grossReclaim - FullMath.mulDiv({a: grossReclaim, b: fee, denominator: JBConstants.MAX_FEE});
         } catch {
             return 0;
         }
@@ -264,11 +275,11 @@ contract JBUniswapV4Hook is BaseHook {
         // Reserved tokens go to team/contributors, not to the payer
         // Formula: actualTokens = estimatedTokens * (MAX_RESERVED_PERCENT - reservedPercent) / MAX_RESERVED_PERCENT
         if (reservedPercent > 0) {
-            expectedTokens = FullMath.mulDiv(
-                estimatedTokens,
-                uint256(JBConstants.MAX_RESERVED_PERCENT - reservedPercent),
-                uint256(JBConstants.MAX_RESERVED_PERCENT)
-            );
+            expectedTokens = FullMath.mulDiv({
+                a: estimatedTokens,
+                b: uint256(JBConstants.MAX_RESERVED_PERCENT - reservedPercent),
+                denominator: uint256(JBConstants.MAX_RESERVED_PERCENT)
+            });
         } else {
             expectedTokens = estimatedTokens;
         }
@@ -309,23 +320,23 @@ contract JBUniswapV4Hook is BaseHook {
         if (sqrtPriceX96TWAP <= type(uint128).max) {
             uint256 ratioX192 = uint256(sqrtPriceX96TWAP) * sqrtPriceX96TWAP;
             if (zeroForOne) {
-                estimatedOut = FullMath.mulDiv(amountIn, ratioX192, 1 << 192);
+                estimatedOut = FullMath.mulDiv({a: amountIn, b: ratioX192, denominator: 1 << 192});
             } else {
-                estimatedOut = FullMath.mulDiv(amountIn, 1 << 192, ratioX192);
+                estimatedOut = FullMath.mulDiv({a: amountIn, b: 1 << 192, denominator: ratioX192});
             }
         } else {
-            uint256 ratioX128 = FullMath.mulDiv(sqrtPriceX96TWAP, sqrtPriceX96TWAP, 1 << 64);
+            uint256 ratioX128 = FullMath.mulDiv({a: sqrtPriceX96TWAP, b: sqrtPriceX96TWAP, denominator: 1 << 64});
             if (zeroForOne) {
-                estimatedOut = FullMath.mulDiv(amountIn, ratioX128, 1 << 128);
+                estimatedOut = FullMath.mulDiv({a: amountIn, b: ratioX128, denominator: 1 << 128});
             } else {
-                estimatedOut = FullMath.mulDiv(amountIn, 1 << 128, ratioX128);
+                estimatedOut = FullMath.mulDiv({a: amountIn, b: 1 << 128, denominator: ratioX128});
             }
         }
 
         // Apply fee from pool key
         // fee is in hundredths of a bip, so 3000 = 0.3%
         if (key.fee > 0) {
-            estimatedOut = estimatedOut - FullMath.mulDiv(estimatedOut, key.fee, 1_000_000);
+            estimatedOut = estimatedOut - FullMath.mulDiv({a: estimatedOut, b: key.fee, denominator: 1_000_000});
         }
 
         return estimatedOut;
@@ -690,11 +701,11 @@ contract JBUniswapV4Hook is BaseHook {
         // Calculate tokens: if price conversion is 1:1, simplify; otherwise apply price conversion
         if (baseCurrencyPerPaymentToken == 1e18) {
             // Direct calculation: (weight * paymentAmount18) / 1e18
-            expectedTokens = FullMath.mulDiv(tokensPerBaseCurrency, paymentAmount18, 1e18);
+            expectedTokens = FullMath.mulDiv({a: tokensPerBaseCurrency, b: paymentAmount18, denominator: 1e18});
         } else {
             // Two-step calculation: first multiply by weight, then apply price conversion
-            uint256 intermediate = FullMath.mulDiv(tokensPerBaseCurrency, paymentAmount18, 1e18);
-            expectedTokens = FullMath.mulDiv(intermediate, baseCurrencyPerPaymentToken, 1e18);
+            uint256 intermediate = FullMath.mulDiv({a: tokensPerBaseCurrency, b: paymentAmount18, denominator: 1e18});
+            expectedTokens = FullMath.mulDiv({a: intermediate, b: baseCurrencyPerPaymentToken, denominator: 1e18});
         }
     }
 
@@ -879,7 +890,7 @@ contract JBUniswapV4Hook is BaseHook {
         // Use forceApprove to set an exact allowance, avoiding accumulation from safeIncreaseAllowance
         // if a previous terminal call reverted after partial token consumption.
         if (!inputCurrency.isAddressZero()) {
-            IERC20(tokenIn).forceApprove(address(terminal), amountIn);
+            IERC20(tokenIn).forceApprove({spender: address(terminal), value: amountIn});
         }
 
         if (isBuying) {
