@@ -1,240 +1,124 @@
 # univ4-router-v6 -- Risks
 
-Deep implementation-level risk analysis of `JBUniswapV4Hook` and `Oracle`.
+Forward-looking risk analysis of `JBUniswapV4Hook` (~963 lines) and `Oracle` library (~392 lines).
 
-## Trust Assumptions
+## 1. Trust Assumptions
 
-1. **Uniswap V4 PoolManager** -- The hook executes within V4's PoolManager context. All take/settle flash-accounting relies on PoolManager enforcing balance invariants. A PoolManager bug would compromise all hooked pools.
-2. **TWAP Oracle Integrity** -- Oracle accuracy depends on sufficient observation history and pool activity. New or low-activity pools have unreliable TWAPs. The hook falls back to spot price when TWAP is unavailable (`_getTWAPSqrtPrice` returns 0).
-3. **Juicebox Core Protocol** -- Relies on `IJBController.currentRulesetOf()` for weight/reserved rate, `IJBTerminalStore.currentReclaimableSurplusOf()` for cashout estimates, and `IJBPrices.pricePerUnitOf()` for currency conversion. Bugs in any of these affect routing accuracy.
-4. **ERC-20 Token Compliance** -- Uses `SafeERC20` (OpenZeppelin) and `forceApprove` for all token interactions. Non-standard tokens (fee-on-transfer, rebasing) may cause accounting mismatches in the take/settle cycle.
+- **Uniswap V4 PoolManager** -- All take/settle flash-accounting relies on PoolManager enforcing balance invariants at the end of `unlock()`. A PoolManager bug would compromise every hooked pool. No fallback exists.
+- **Oracle observation integrity** -- Observations are written only in hook callbacks (`afterSwap`, `afterAddLiquidity`, `afterRemoveLiquidity`, `afterInitialize`). PoolManager guarantees these callbacks execute atomically within the swap transaction; an attacker cannot forge observations without triggering a real pool state change.
+- **Hook permission flags** -- The contract address encodes permission bits via CREATE2 salt mining (`AFTER_INITIALIZE`, `BEFORE_SWAP`, `AFTER_SWAP`, `BEFORE_SWAP_RETURNS_DELTA`, `AFTER_ADD_LIQUIDITY`, `AFTER_REMOVE_LIQUIDITY`). If the address is deployed with incorrect flags, hooks silently fail to fire. `HookMiner.find()` is used in deployment scripts/tests to guarantee correct flag encoding.
+- **Juicebox core contracts** -- Routing accuracy depends on `IJBController.currentRulesetOf()` (weight, reservedPercent, baseCurrency), `IJBTerminalStore.currentReclaimableSurplusOf()` (cashout estimates), `IJBPrices.pricePerUnitOf()` (currency conversion), and `IJBDirectory.primaryTerminalOf()` (terminal resolution). All external calls are try-catch wrapped; failures silently route to V4 (never block swaps, but may produce suboptimal routing).
+- **ERC-20 compliance** -- Uses `SafeERC20.forceApprove` for terminal approvals. Fee-on-transfer and rebasing tokens will cause accounting mismatches in the take-transform-settle cycle. The PoolManager balance check at unlock end would revert such swaps rather than silently losing funds.
+- **Single-unlock reentrancy model** -- No explicit `ReentrancyGuard`. Protection relies entirely on PoolManager's single-unlock constraint and atomic flash-accounting reconciliation.
 
-## Risk Inventory
+## 2. TWAP Oracle Risks
 
-### CRITICAL -- None Found
+### 2.1 Warmup window (spot fallback)
 
-The Nemesis audit (2 passes, 34 functions, ~1,780 lines) found no critical or high-severity issues. All 11 findings were LOW severity.
+- For the first 30 minutes (`TWAP_PERIOD = 1800s`) after pool initialization, `_getTWAPSqrtPrice` returns 0 and `estimateUniswapOutput` falls back to the current spot price from `getSlot0()`.
+- Spot price is trivially manipulable within a single block. During warmup, an attacker can sandwich the routing decision to force a suboptimal path.
+- The exact boundary: TWAP activates when `block.timestamp - TWAP_PERIOD >= oldestObservation.blockTimestamp`. At `TWAP_PERIOD - 1` seconds, spot fallback is still used; at `TWAP_PERIOD` seconds, TWAP activates. Transition is smooth (<5% estimate difference per `test_SpotFallback_WarmupBoundary`).
+- Low-activity pools may remain in spot-price fallback indefinitely if no swap/liquidity event triggers observation writes.
+- Mitigation: `amountOutMin` in hookData provides a hard floor on output regardless of routing path.
 
-### HIGH -- Flash-Accounting Balance Mismatch
+### 2.2 Observation cardinality limits
 
-**Severity:** HIGH (theoretical) | **Status:** Mitigated by design | **Tested:** Yes
+- Oracle starts at cardinality 1, auto-grows by doubling at capacity boundaries (1 -> 2 -> 4 -> ... -> 128 -> 256 cap).
+- Largest single growth (128 -> 256) costs ~128 cold SSTOREs (~2.56M gas). This cost is borne by the swap/liquidity caller that triggers the growth. An attacker could grief callers by timing transactions to coincide with growth boundaries.
+- At cardinality 256 with 12-second blocks, the oracle stores ~51 minutes of history -- sufficient for the 30-minute TWAP window with margin.
+- The cardinality cap at 256 means the oracle cannot store more than ~51 minutes at 12-second block times. If block production is faster (L2 with 2s blocks), 256 observations cover only ~8.5 minutes, which is less than `TWAP_PERIOD`. On such chains, the oracle would never fully warm up and would permanently use spot fallback.
 
-**Location:** `_routeThroughJuicebox`
+### 2.3 TWAP_PERIOD selection tradeoffs
 
-**Description:** The routing function follows a take-then-settle pattern:
-1. `poolManager.take()` -- withdraws input tokens from PoolManager
-2. External call (JB terminal) -- transforms tokens via pay/cashOut
-3. `_settleOutput()` -- deposits output tokens back to PoolManager
+- 30-minute window balances manipulation resistance against responsiveness. Shorter windows are cheaper to manipulate; longer windows are slower to reflect genuine price changes.
+- `TWAP_PERIOD` is a compile-time constant (`uint32 public constant TWAP_PERIOD = 1800`). Cannot be adjusted per-pool or updated post-deployment. If market conditions change (e.g., new L2 block times), the only recourse is redeployment.
+- For a V4 pool with X liquidity, the cost to move the TWAP by 1 tick over the full window is approximately `X * tickSpacing * 1800 / blockTime` in capital-at-risk. At 12-second blocks, a single-block push weights only 12/1800 = 0.67% of the window.
 
-If the external call in step 2 reverts, tokens taken in step 1 would be stranded in the hook contract. However, because this all happens inside a V4 hook callback, the entire swap transaction reverts atomically, restoring PoolManager's balance.
+### 2.4 tickCumulative overflow (int56)
 
-**Attack scenario:** An attacker deploys a malicious JB terminal that reverts after partial token consumption. Result: the entire swap reverts (PoolManager enforces flash-accounting balance at the end of `unlock()`). No funds lost.
+- `Oracle.Observation.tickCumulative` is `int56`. At max tick (887,272), overflow occurs after ~1.4 years of continuous accumulation at that tick.
+- The `transform()` function runs in `unchecked` arithmetic. After overflow, TWAP calculations will produce incorrect results silently (no revert).
+- For realistic pools where the tick oscillates around a center, overflow is effectively unreachable. Pools stuck at extreme ticks (near TickMath min/max) for >1 year are the only risk scenario.
+- Widened from int48 (which overflowed after ~44 hours) -- verified in `OracleTickCumulativeWidth.t.sol`.
 
-**Concrete risk:** If a JB terminal silently consumes tokens without returning them and does NOT revert, the hook would attempt `_settleOutput()` with 0 tokens, causing a PoolManager balance check failure and a revert. The `forceApprove` fix prevents allowance accumulation from such partial-consumption scenarios.
+## 3. Routing Risks
 
-**Test coverage:**
-- `JBUniswapV4Hook.t.sol`: `testJuiceboxRoutingExecution` -- verifies complete JB routing cycle
+### 3.1 Three-way routing logic
 
-### MEDIUM -- TWAP Oracle Manipulation
+- `_beforeSwap` evaluates two routes: V4 pool (via TWAP-based `estimateUniswapOutput`) and Juicebox (via `calculateExpectedTokensWithCurrency` for buying or `calculateExpectedOutputFromSelling` for selling). Picks the one with higher estimated output.
+- If neither token is a JB project token (`TOKENS.projectIdOf` returns 0 for both), routing skips JB comparison entirely and passes through to V4 (`ZERO_DELTA`).
+- When both tokens are JB project tokens, only the buy-side (minting into the output project) is compared. Sell-side evaluation is omitted to save gas. This may miss sell-side opportunities.
 
-**Severity:** MEDIUM | **Status:** Mitigated | **Tested:** Partially
+### 3.2 Slippage protection layers
 
-**Location:** `_getTWAPSqrtPrice`, `_recordObservation`
+- **Hook level (`_beforeSwap`)**: JB routes enforce `amountOutMin` via the terminal's `minReturnedTokens` / `minTokensReclaimed` parameter.
+- **Hook level (`_afterSwap`)**: V4 routes validate actual delta output against `amountOutMin`. Uses absolute value of negative delta (V4 convention: output amounts are negative). Fixed from a prior bug where `outputAmount > 0` was never true for V4's negative convention.
+- **JuiceboxSwapRouter (test utility)**: Additional slippage check in `unlockCallback` after adjusting for pre-deposited amounts.
+- Gap: `_beforeSwap` requires exactly 32 bytes hookData (`== 32`), while `_afterSwap` accepts `>= 32`. Routers cannot append extra metadata beyond `amountOutMin`.
 
-**Description:** The V4 TWAP oracle uses a 30-minute window (`TWAP_PERIOD = 1800`). An attacker with sufficient capital could manipulate the TWAP over this window by:
-1. Making large swaps to move the tick over multiple blocks
-2. Sustaining the manipulated price for 30+ minutes
-3. Swapping at the now-biased TWAP price
+### 3.3 estimateUniswapOutput accuracy
 
-**Why mitigated:** Sustaining price manipulation for 30 minutes costs the attacker significant capital in arbitrage losses. The two-way comparison (V4 TWAP vs JB weight) means an attacker would need to manipulate the TWAP to be worse than JB minting, which is bounded by ruleset weight.
+- Uses TWAP sqrtPrice (not spot) to estimate output. Applies pool fee deduction (`key.fee / 1_000_000`). Does not account for actual price impact from the swap itself.
+- For large swaps relative to pool liquidity, the estimate overestimates output because it assumes constant price (no slippage curve). This biases routing toward V4 for large swaps.
+- When sqrtPriceX96 exceeds `type(uint128).max`, the function branches to use `FullMath.mulDiv` with `ratioX128` to avoid overflow. Verified across the full tick range in `testFuzz_FullMathSafety_PriceSquared`.
+- The estimate is a view function -- no actual swap is simulated. The V4 pool's real output may differ due to tick crossings, concentrated liquidity gaps, and dynamic fees.
 
-**Residual risk:** Low-liquidity pools where the cost of TWAP manipulation is low. Pools with < 2 observations fall back to spot price, which is trivially manipulable.
+### 3.4 Conservative sell estimate
 
-**Test coverage:**
-- `OracleDeepTest.t.sol`: 14 tests covering oracle initialization, writes, cardinality growth, TWAP calculation, and warmup behavior
-- No test directly simulates a multi-block TWAP manipulation attack
+- `calculateExpectedOutputFromSelling` always deducts the terminal fee (read dynamically via `terminal.FEE()` / `JBConstants.MAX_FEE`) even if the hook address is registered as feeless. This systematically disadvantages JB sell routing.
+- Uses total surplus (empty terminals/accountingContexts arrays) regardless of the project's `useTotalSurplusForCashOuts` flag. May overestimate JB cashout output for projects with local-surplus-only configuration. Actual cashout would return less, but `amountOutMin` protects the user.
 
-### MEDIUM -- Spot Price Fallback Window
+## 4. MEV Surface
 
-**Severity:** MEDIUM | **Status:** Known, by design | **Tested:** Yes
+### 4.1 Spot fallback sandwich window
 
-**Location:** `estimateUniswapOutput`, `_getTWAPSqrtPrice`
+- During the 30-minute warmup period, `estimateUniswapOutput` uses spot price. An attacker can push spot price in one block, cause the routing decision to use the manipulated price, and reverse in the next block.
+- The attack shifts the routing decision boundary: manipulating V4 spot price downward makes JB minting look relatively better, forcing the victim to mint at the ruleset weight instead of getting a better V4 rate.
+- Mitigation: `amountOutMin` limits losses. The JB minting rate (ruleset weight) is not manipulable within a transaction, so the JB route itself is not sandwichable.
 
-**Description:** When a pool's oracle has fewer than 2 observations or the oldest observation is too recent, `_getTWAPSqrtPrice` returns 0. The V4 price estimate then falls back to the current spot price (`poolManager.getSlot0()`), which can be manipulated within a single block.
+### 4.2 TWAP manipulation cost
 
-During this fallback window, an attacker could:
-1. Sandwich the spot-price-based routing decision
-2. Manipulate spot price to force routing through a worse path
-3. Profit from the price discrepancy
+- A single-block push weights 12/1800 = 0.67% of the 30-minute TWAP window. Verified: single-block 10 ETH manipulation against 1000 ETH liquidity pool produces <20% TWAP deviation (`test_TWAPManipulation_SingleBlockPushIsBounded`).
+- Sustained 5-block manipulation (60 seconds = 3.3% of window) produces <30% TWAP deviation (`test_TWAPManipulation_SustainedPushOverFiveBlocksIsBounded`).
+- To shift the TWAP arithmetic mean tick by N ticks, an attacker must sustain a tick displacement of `N * TWAP_PERIOD / holdTime` for `holdTime` seconds. The cost scales linearly with pool liquidity and quadratically with displacement magnitude (concentrated liquidity costs increase as the tick moves further from center).
+- After manipulation stops and normal trading resumes, the TWAP converges back to true price within one full TWAP_PERIOD window as manipulated observations age out (`test_TWAPManipulation_RecoveryAfterManipulationStops`).
 
-**Duration of vulnerability:** From pool initialization until the oracle accumulates sufficient observations spanning the TWAP_PERIOD (1800 seconds). With regular swaps, this resolves within ~30 minutes. Low-activity pools may remain in spot-price fallback indefinitely.
+### 4.3 Cross-route arbitrage
 
-**Test coverage:**
-- `OracleDeepTest.t.sol`: `test_TWAPSqrtPrice_InsufficientObservations_ReturnsZero` -- verifies fallback
-- `OracleDeepTest.t.sol`: `test_TWAPSqrtPrice_OldestObsTooRecent_ReturnsZero` -- verifies transient window
-- `OracleDeepTest.t.sol`: `test_TWAPSqrtPrice_SufficientAge_ReturnsNonZero` -- verifies resolution
+- When JB routing wins, the hook takes input from PoolManager, routes through the JB terminal, and settles output back. The V4 pool itself is not touched (the hook returns a `BeforeSwapDelta` that cancels the pool swap). This means the V4 pool price does not move, creating a potential arb opportunity between the stale V4 pool price and the JB terminal rate.
+- This is by design: JB routing bypasses the AMM to give users a better rate. Third-party arbitrageurs can correct the V4 pool price independently.
 
-### LOW -- Surplus Estimation Uses Total Surplus
+## 5. Integration Risks
 
-**Severity:** LOW | **Status:** By design | **Tested:** Yes
+### 5.1 Hook deployment address mining
 
-**Location:** `calculateExpectedOutputFromSelling`
+- V4 hooks encode permission flags in the contract address's lower bits. Deployment requires CREATE2 with a specific salt (`HookMiner.find()`) that produces an address matching the required flags.
+- If the deployer uses the wrong creation code or constructor arguments, the mined salt will produce an address with incorrect flags. Hooks will silently fail to fire, and swaps through the pool will execute without routing comparison or oracle updates.
+- The hook address is immutable after deployment. If hook permissions need to change, a new hook must be deployed at a new address, and pools must be migrated.
 
-**Description:** The sell-side estimate calls `store.currentReclaimableSurplusOf()` with empty `terminals[]` and `accountingContexts[]`. When terminals is empty, the store falls back to `DIRECTORY.terminalsOf(projectId)` -- aggregating surplus across ALL terminals.
+### 5.2 afterSwap / afterInitialize callbacks
 
-This means the estimate always uses **total surplus** regardless of the project's `useTotalSurplusForCashOuts` flag. For projects where this flag is `false` (local surplus only), the estimate overestimates what a real cashout would return, potentially routing through JB when V4 would give a better rate.
+- `_afterSwap` records oracle observations AND validates V4 slippage. If `_afterSwap` fails to execute (wrong address flags), neither protection operates.
+- `_afterInitialize` bootstraps the oracle with the first observation. Without it, `states[poolId]` remains zero-initialized, and all TWAP queries revert with `Oracle_CardinalityCannotBeZero`.
+- `_afterAddLiquidity` and `_afterRemoveLiquidity` also write observations. These provide additional TWAP data points between swaps, improving oracle accuracy for pools with frequent liquidity changes but infrequent swaps.
 
-**Why acceptable:** This is a routing estimate, not an execution guarantee. The actual cashout enforces the correct surplus scope. If the estimate overestimates JB, the cashout may return less than expected, but the `amountOutMin` slippage check protects the user.
+### 5.3 Cross-pool interactions
 
-**Test coverage:**
-- `JBUniswapV4Hook.t.sol`: `testCalculateExpectedOutputFromSelling` -- verifies surplus calculation with fee deduction
-- `ThreeWayRouting.t.sol`: `test_TwoWay_SellingJBToken_JBWins` -- verifies sell routing through JB
+- Each pool has its own independent observation buffer (`mapping(PoolId => Oracle.Observation[65_535])`). No cross-pool oracle contamination is possible.
+- Multiple pools can reference the same JB project token. The hook evaluates routing independently per pool. Different pools with different fee tiers or liquidity depths may route differently for the same JB token.
+- The hook is a singleton: one contract serves all pools that reference it in their `PoolKey.hooks` field. A bug in the hook affects all such pools simultaneously.
 
-### LOW -- Sell Estimation Silently Returns Zero on Failure
+### 5.4 Token address normalization
 
-**Severity:** LOW | **Status:** By design | **Tested:** Yes
+- Uniswap V4 uses `address(0)` for native ETH; Juicebox uses `0x000000000000000000000000000000000000EEEe`. The `_normalizeToken` function maps between them. If a new V4 convention or JB convention is introduced, this mapping breaks silently.
+- Currency ID for JB price feeds: `uint32(uint160(token))`. This truncation means different tokens whose addresses share the same lower 32 bits would collide. Statistically unlikely for EVM CREATE/CREATE2 addresses, but theoretically possible.
 
-**Location:** `calculateExpectedOutputFromSelling`
+## 6. Invariants to Verify
 
-**Description:** Both `terminal.STORE()` and `store.currentReclaimableSurplusOf()` are wrapped in try-catch blocks. If any external call reverts (misconfigured project, no ruleset, store bug, etc.), the function returns 0 instead of propagating the revert. This causes the swap to fall back to V4 routing silently.
-
-**Why designed this way:** Without try-catch, a revert from any JB protocol call would bubble up through the `_beforeSwap` hook and **fail the entire swap**. The try-catch ensures that JB protocol issues never block V4 swaps. The inner try-catch is specifically needed because Solidity try-catch only catches the try expression's revert, not reverts from code within the try body.
-
-**Test coverage:**
-- `JBUniswapV4Hook.t.sol`: `testCalculateExpectedOutputFromSelling_StoreReverts_ReturnsZero` -- verifies graceful fallback when store reverts
-- `JBUniswapV4Hook.t.sol`: `testCalculateExpectedOutputFromSelling_NoStore_ReturnsZero` -- verifies graceful fallback when STORE() reverts
-
-## MEV / Sandwich Attack Vectors
-
-### Vector 1: Sandwich on JB Routing Decision
-
-**Risk:** LOW-MEDIUM | **Tested:** No
-
-An attacker observing a pending swap through a hooked pool could:
-1. Front-run with a large swap to move the V4 pool price
-2. This changes the V4 TWAP estimate, potentially forcing the victim's swap to route through JB (minting) instead of V4
-3. Back-run by swapping in the opposite direction on V4
-
-**Impact:** The victim gets JB tokens at the minting rate (which may be worse than the pre-manipulation V4 rate). The attacker profits from the V4 price movement.
-
-**Mitigation:** The `amountOutMin` parameter (hookData) provides a hard floor. If the routed output falls below `amountOutMin`, the swap reverts (`JBUniswapV4Hook_InsufficientOutput`).
-
-### Vector 2: JB Terminal Interaction Sandwich
-
-**Risk:** LOW | **Tested:** No
-
-When routing through JB (`_routeThroughJuicebox`), the hook calls `terminal.pay()` or `terminal.cashOutTokensOf()`. These JB functions have their own `minReturnedTokens` / `minTokensReclaimed` parameters, set to `amountOutMin`.
-
-The JB minting rate is determined by the project's ruleset weight, which is not manipulable within a single transaction. Cashout rates depend on the bonding curve and total supply, which are harder to sandwich than AMM pools.
-
-## Reentrancy Analysis
-
-| Function | External Calls | State Before Call | Protection | Risk |
-|----------|---------------|-------------------|------------|------|
-| `_beforeSwap` | `TOKENS.projectIdOf`, `DIRECTORY.controllerOf`, `PRICES.pricePerUnitOf`, JB terminal `pay`/`cashOutTokensOf` | Oracle state NOT yet updated (observation recorded in `_afterSwap`) | V4 PoolManager lock (only one unlock at a time). All external calls wrapped in try-catch for view calls. | LOW -- PoolManager prevents reentrant swaps. |
-| `_afterSwap` | `poolManager.getSlot0`, `poolManager.getLiquidity` | Swap fully settled | Internal calls to PoolManager only (trusted) | LOW |
-| `_routeThroughJuicebox` | `poolManager.take`, JB `terminal.pay`/`cashOutTokensOf`, `_settleOutput` | Tokens taken from PM | Atomic within V4 unlock. JB terminal call happens after take but before settle. | MEDIUM -- JB terminal is external/untrusted. But PoolManager enforces balance at unlock end. |
-
-**No explicit reentrancy guard** (no `ReentrancyGuard`). Protection relies entirely on:
-1. V4 PoolManager's single-unlock constraint (cannot re-enter unlock while unlock is active)
-2. Atomic flash-accounting (PoolManager reverts if balances don't reconcile)
-
-## Oracle-Specific Risks
-
-### tickCumulative Overflow (int56)
-
-**Severity:** LOW | **Status:** Fixed (was int48) | **Tested:** Yes
-
-**Location:** `Oracle.Observation.tickCumulative` (Oracle.sol)
-
-**Description:** The `tickCumulative` field was widened from int48 to int56 to prevent overflow. At max tick (887,272), int48 overflows after ~44 hours. int56 extends this to ~1.4 years.
-
-### Oracle Cardinality Growth Gas Cost
-
-**Severity:** LOW | **Status:** Bounded | **Tested:** Yes
-
-**Location:** `_recordObservation`, `Oracle.grow`
-
-**Description:** Auto-growth doubles cardinality at capacity boundaries: 1 -> 2 -> 4 -> 8 -> ... -> 128 -> 256 (cap). Each growth calls `Oracle.grow()` which pre-allocates storage slots via SSTORE. The largest single growth (128 -> 256) costs ~128 SSTOREs (~2.56M gas at 20k gas per cold SSTORE). This cost is borne by the swap/liquidity caller who triggers the growth.
-
-**Test coverage:** `OracleDeepTest.t.sol`: `test_OracleCardinality_CapsAt256` -- verifies cap at 256.
-
-## Routing Decision Risks
-
-### Conservative JB Sell Estimate
-
-**Severity:** LOW | **Status:** By design | **Tested:** Yes
-
-**Location:** `calculateExpectedOutputFromSelling`
-
-**Description:** The sell estimate always deducts the terminal's protocol fee, even if the hook is registered as a feeless address. This makes JB cashout routing slightly disadvantaged vs. Uniswap. The code explicitly acknowledges this: "Conservative: if hook is feeless, estimate is slightly low -> routes to Uniswap (still good)."
-
-### Both-JB-Tokens Buy-Side Priority
-
-**Severity:** LOW | **Status:** By design | **Tested:** No
-
-**Location:** `_beforeSwap`
-
-**Description:** When both swap tokens are JB project tokens, the hook only evaluates the buy-side JB route (minting into the output project). The sell-side (cashing out the input project) is not compared. This is a design simplification.
-
-### hookData Length Strictness
-
-**Severity:** LOW | **Status:** Known | **Tested:** Yes
-
-**Location:** `_beforeSwap` (`== 32`) vs `_afterSwap` (`>= 32`)
-
-**Description:** `_beforeSwap` requires exactly 32 bytes of hookData, while `_afterSwap` accepts 32 or more bytes. This inconsistency prevents routers from appending extra metadata after `amountOutMin`. The JuiceboxSwapRouter test utility encodes exactly 32 bytes.
-
-### Exact-Output Swaps Not Supported
-
-**Severity:** LOW | **Status:** By design | **Tested:** Yes
-
-**Description:** The hook reverts on exact-output swaps (`amountSpecified > 0`). Only exact-input swaps are supported because the routing logic requires knowing the exact input amount upfront to compare routes.
-
-## Slippage Protection
-
-Slippage protection operates at two levels:
-
-| Level | Mechanism | Location | Enforces |
-|-------|-----------|----------|----------|
-| Hook `_beforeSwap` | `amountOutMin` from hookData | `_beforeSwap` | Minimum output for JB routes |
-| Hook `_afterSwap` | `amountOutMin` from hookData | `_afterSwap` | Minimum output for V4 routes (checks actual delta) |
-| JB terminal | `minReturnedTokens` / `minTokensReclaimed` | `_routeThroughJuicebox` | JB-level minimum (redundant with hook check) |
-
-## External Dependency Risks
-
-| Dependency | Risk | Impact if Compromised |
-|------------|------|-----------------------|
-| Uniswap V4 PoolManager | Single point of failure for all hooked pools | Total loss of pool funds |
-| JB Directory | Terminal and controller resolution | Attacker could redirect routing to malicious terminal |
-| JB Prices | Currency conversion for JB estimates | Incorrect price data leads to suboptimal routing (not fund loss) |
-| JB Controller | Ruleset weight and metadata | Incorrect weight leads to overestimating JB minting rate |
-| JB Terminal | Payment and cashout execution | Malicious terminal could consume tokens without returning output (but PoolManager flash-accounting would revert the entire swap) |
-| JB Terminal Store | Surplus calculation for sell estimates | If store reverts, sell estimate returns 0 (V4 fallback). No fund loss. |
-| OpenZeppelin SafeERC20 | Token transfer safety | Standard library -- well-audited, minimal risk |
-
-## Cancun / EVM Dependency
-
-The contract requires Cancun-compatible EVM features:
-- **Transient storage** (V4 PoolManager uses `TSTORE`/`TLOAD` for flash-accounting)
-- **Uniswap V4 features** (hook permission flags encoded in contract address)
-
-Deployment on pre-Cancun chains will fail. This limits deployment to Ethereum mainnet (post-Dencun), Optimism, Arbitrum, Base, and other Cancun-compatible L2s.
-
-## Audit Results Summary
-
-The Nemesis audit (March 2026) analyzed 34 functions across ~1,780 lines in 2 converged passes:
-
-| Severity | Count | Status |
-|----------|-------|--------|
-| CRITICAL | 0 | -- |
-| HIGH | 0 | -- |
-| MEDIUM | 0 | 1 downgraded to LOW (unreachable revert path) |
-| LOW | 11 | All confirmed as informational / by-design |
-
-**Key audit conclusions:**
-- No exploitable vulnerabilities found
-- Flash-accounting balance is correct for all routing paths (V4, JB)
-- Oracle state management is consistent with atomic updates
-- No state persists between transactions (minimal attack surface)
-- Multi-transaction journey tracing found no cross-call contamination
+- **TWAP always dampens manipulation vs spot** -- A single-block price push should always produce smaller TWAP deviation than spot deviation. Verified in `test_SpotFallback_TWAPDampensAfterWarmup`: spot deviation from a 50 ETH push is significantly larger than TWAP deviation after warmup. This holds as long as the TWAP window contains honest observations.
+- **Recovery after manipulation stops** -- After sustained manipulation ends and normal trading resumes for one full TWAP_PERIOD, the TWAP should converge to within 5% of pre-manipulation baseline. Verified in `test_TWAPManipulation_RecoveryAfterManipulationStops`: TWAP changes after manipulation stops (not stuck), though exact convergence depends on post-manipulation equilibrium price.
+- **Warmup boundary transition smoothness** -- The transition from spot fallback to TWAP at exactly `TWAP_PERIOD` seconds should not create a price discontinuity >5%. Verified in `test_SpotFallback_WarmupBoundary`: estimates at `TWAP_PERIOD - 1` and `TWAP_PERIOD` differ by <500 bps.
+- **Oracle observation monotonicity** -- `blockTimestamp` in observations increases monotonically (modulo uint32 wraparound). Same-block writes are no-ops (`Oracle.write` returns early when `last.blockTimestamp == blockTimestamp`). Verified in `test_OracleWrite_SameBlock_NoOp`.
+- **Flash-accounting conservation** -- For every `poolManager.take()`, a corresponding `_settleOutput()` must execute within the same `unlock()` call, or PoolManager reverts. The hook never holds tokens across transactions.
+- **Cardinality cap** -- `cardinalityNext` never exceeds 256. Growth logic: doubles up to 128, then caps at 256. Verified in `test_OracleCardinality_CapsAt256`.
+- **Routing never blocks V4 swaps** -- All JB protocol calls in the routing path (`currentRulesetOf`, `currentReclaimableSurplusOf`, `pricePerUnitOf`, `primaryTerminalOf`) are try-catch wrapped. A revert in any JB contract results in V4 fallback, not a failed swap.
