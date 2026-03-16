@@ -49,10 +49,7 @@ contract DeployScript is Script {
         vm.startBroadcast(deployerPrivateKey);
 
         JBUniswapV4Hook hook = new JBUniswapV4Hook{salt: salt}({
-            poolManager: IPoolManager(poolManager),
-            tokens: core.tokens,
-            directory: core.directory,
-            prices: core.prices
+            poolManager: IPoolManager(poolManager), tokens: core.tokens, directory: core.directory, prices: core.prices
         });
 
         console2.log("JBUniswapV4Hook deployed at:", address(hook));
@@ -67,9 +64,9 @@ contract DeployScript is Script {
         // Optimism
         if (block.chainid == 10) return 0x9a13F98Cb987694C9F086b1F5eB990EeA8264Ec3;
         // Base
-        if (block.chainid == 8453) return 0x498581fF718922c3f8e6A244956aF099B2652b2B;
+        if (block.chainid == 8453) return 0x498581fF718922c3f8e6A244956aF099B2652b2b;
         // Arbitrum
-        if (block.chainid == 42_161) return 0x360E68fAccca8CA495c1B759Fd9EEe466db9FB32;
+        if (block.chainid == 42_161) return 0x360E68faCcca8cA495c1B759Fd9EEe466db9FB32;
         // Sepolia
         if (block.chainid == 11_155_111) return 0xE03A1074c86CFeDd5C142C4F04F1a1536e203543;
         // Base Sepolia
