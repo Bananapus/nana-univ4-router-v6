@@ -63,7 +63,7 @@ The oracle is a ring buffer of up to 65,535 observations per pool. Cardinality a
 | Contract | Description |
 |----------|-------------|
 | `JBUniswapV4Hook` | Uniswap V4 `BaseHook` that compares prices across V4 and Juicebox for every swap involving a project token, then routes to the best option. Maintains its own TWAP oracle with IGeomeanOracle-compatible `observe()`. |
-| `Oracle` (library) | Ring-buffer observation array (up to 65,535 slots) storing tick cumulatives, seconds-per-liquidity, and `prevTick`. Supports `observe`, `observeSingle`, `write`, `grow`, and binary search over the circular buffer. |
+| `Oracle` (library) | Ring-buffer observation array (up to 65,535 slots) storing tick cumulatives and seconds-per-liquidity. Supports `observe`, `observeSingle`, `write`, `grow`, and binary search over the circular buffer. |
 
 ## Hook Permissions
 
@@ -129,11 +129,7 @@ test/
   OracleDeepTest.t.sol                 # Ring buffer, cardinality, interpolation
   SlippageTolerance.t.sol              # amountOutMin enforcement
 script/
-  Deploy.s.sol                         # Main deployment (HookMiner for address)
-  DeployJBUniswapV4Hook.s.sol          # Alternative deployment script
-  01_CreatePoolAndAddLiquidity.s.sol   # Pool initialization
-  02_AddLiquidity.s.sol                # Add liquidity to existing pool
-  03_Swap.s.sol                        # Test swap execution
+  Deploy.s.sol                         # Deployment (HookMiner for address, per-chain PoolManager)
 ```
 
 ## Constructor

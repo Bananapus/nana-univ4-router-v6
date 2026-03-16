@@ -159,16 +159,6 @@ The JB minting rate is determined by the project's ruleset weight, which is not 
 
 **Test coverage:** `OracleDeepTest.t.sol`: `test_OracleCardinality_CapsAt256` -- verifies cap at 256.
 
-### Dead Oracle Fields
-
-**Severity:** INFORMATIONAL | **Status:** Known | **Tested:** N/A
-
-**Location:** `Oracle.Observation.prevTick`, `MIN_ABS_TICK_MOVE` / `LIMIT_ABS_TICK_MOVE`
-
-**Description:** `prevTick` is written but never read. The two tick-move constants are never referenced. These are remnants of a backrun-protection feature that was removed. They waste no runtime gas (constants are inlined; `prevTick` fits within the 256-bit storage slot) but add cognitive overhead.
-
-**Audit finding:** NM-001, NM-002 (both LOW).
-
 ## Routing Decision Risks
 
 ### Conservative JB Sell Estimate
@@ -187,8 +177,6 @@ The JB minting rate is determined by the project's ruleset weight, which is not 
 
 **Description:** When both swap tokens are JB project tokens, the hook only evaluates the buy-side JB route (minting into the output project). The sell-side (cashing out the input project) is not compared. This is a design simplification.
 
-**Audit finding:** NM-006 (LOW).
-
 ### hookData Length Strictness
 
 **Severity:** LOW | **Status:** Known | **Tested:** Yes
@@ -196,8 +184,6 @@ The JB minting rate is determined by the project's ruleset weight, which is not 
 **Location:** `_beforeSwap` (`== 32`) vs `_afterSwap` (`>= 32`)
 
 **Description:** `_beforeSwap` requires exactly 32 bytes of hookData, while `_afterSwap` accepts 32 or more bytes. This inconsistency prevents routers from appending extra metadata after `amountOutMin`. The JuiceboxSwapRouter test utility encodes exactly 32 bytes.
-
-**Audit finding:** NM-007 (LOW).
 
 ### Exact-Output Swaps Not Supported
 
@@ -243,7 +229,7 @@ The Nemesis audit (March 2026) analyzed 34 functions across ~1,780 lines in 2 co
 |----------|-------|--------|
 | CRITICAL | 0 | -- |
 | HIGH | 0 | -- |
-| MEDIUM | 0 | 1 downgraded to LOW (NM-008: unreachable revert path) |
+| MEDIUM | 0 | 1 downgraded to LOW (unreachable revert path) |
 | LOW | 11 | All confirmed as informational / by-design |
 
 **Key audit conclusions:**

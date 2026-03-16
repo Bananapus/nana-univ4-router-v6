@@ -11,14 +11,13 @@ import {Oracle} from "../../src/libraries/Oracle.sol";
 /// overflowed int48 now works correctly with int56.
 contract OracleTickCumulativeWidth is Test {
     /// @notice Verify that the Observation struct fits in a single 256-bit storage slot.
-    /// Layout: uint32 + int24 + int56 + uint136 + bool = 32 + 24 + 56 + 136 + 8 = 256
+    /// Layout: uint32 + int56 + uint160 + bool = 32 + 56 + 160 + 8 = 256
     function test_observationStructFitsSingleSlot() public pure {
         // Construct an Observation with extreme values and verify field sizes are correct.
         Oracle.Observation memory obs = Oracle.Observation({
             blockTimestamp: type(uint32).max,
-            prevTick: int24(887_272), // max tick
             tickCumulative: type(int56).max,
-            secondsPerLiquidityCumulativeX128: type(uint136).max,
+            secondsPerLiquidityCumulativeX128: type(uint160).max,
             initialized: true
         });
         // If this compiles and runs, the struct definition is consistent.

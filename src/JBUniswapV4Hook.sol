@@ -194,7 +194,10 @@ contract JBUniswapV4Hook is BaseHook {
                 return 0;
             }
             // Deduct JB protocol fee dynamically read from the terminal.
-            // Conservative: if hook is feeless, estimate is slightly low → routes to Uniswap (still good).
+            // The JB sell estimate conservatively includes fee deductions even for feeless
+            // addresses. This may underestimate the actual output for feeless senders, causing the router to prefer
+            // pool swaps when direct cash-out would be better. Acceptable trade-off — conservative estimates
+            // prevent overpayment.
             uint256 fee = IJBFeeTerminal(address(terminal)).FEE();
             return grossReclaim - FullMath.mulDiv({a: grossReclaim, b: fee, denominator: JBConstants.MAX_FEE});
         } catch {
@@ -287,6 +290,9 @@ contract JBUniswapV4Hook is BaseHook {
 
     /// @notice Estimate expected output tokens from a Uniswap swap using TWAP
     /// @dev Uses time-weighted average price to prevent manipulation
+    // Pool selection by highest liquidity is a heuristic. A pool with less liquidity but better tick
+    // distribution could produce better output for a given swap size. Full simulation of all pools would be
+    // gas-prohibitive on-chain. Off-chain routers can provide optimal pool selection via metadata.
     /// @param poolId The pool ID
     /// @param key The pool key
     /// @param amountIn The input amount
@@ -374,7 +380,7 @@ contract JBUniswapV4Hook is BaseHook {
     )
         external
         view
-        returns (int56[] memory tickCumulatives, uint136[] memory secondsPerLiquidityCumulativeX128s)
+        returns (int56[] memory tickCumulatives, uint160[] memory secondsPerLiquidityCumulativeX128s)
     {
         PoolId poolId = key.toId();
         ObservationState memory state = states[poolId];
@@ -438,8 +444,13 @@ contract JBUniswapV4Hook is BaseHook {
         });
 
         // Calculate arithmetic mean tick
+        int56 tickCumulativeDelta = tickCumulativeCurrent - tickCumulativePast;
         // forge-lint: disable-next-line(unsafe-typecast)
-        arithmeticMeanTick = int24((tickCumulativeCurrent - tickCumulativePast) / int56(uint56(secondsAgo)));
+        arithmeticMeanTick = int24(tickCumulativeDelta / int56(uint56(secondsAgo)));
+        // Round toward negative infinity for negative ticks (Solidity truncates toward zero).
+        if (tickCumulativeDelta < 0 && (tickCumulativeDelta % int56(uint56(secondsAgo)) != 0)) {
+            arithmeticMeanTick--;
+        }
     }
 
     //*********************************************************************//
@@ -468,14 +479,12 @@ contract JBUniswapV4Hook is BaseHook {
 
     /// @notice Hook called after pool initialization to set up oracle
     /// @param key The pool key
-    /// @param tick The initial tick
     /// @return selector The function selector
-    function _afterInitialize(address, PoolKey calldata key, uint160, int24 tick) internal override returns (bytes4) {
+    function _afterInitialize(address, PoolKey calldata key, uint160, int24) internal override returns (bytes4) {
         PoolId poolId = key.toId();
 
         // Initialize oracle with first observation
-        (uint16 cardinality, uint16 cardinalityNext) =
-            observations[poolId].initialize({time: uint32(block.timestamp), tick: tick});
+        (uint16 cardinality, uint16 cardinalityNext) = observations[poolId].initialize({time: uint32(block.timestamp)});
 
         states[poolId] = ObservationState({index: 0, cardinality: cardinality, cardinalityNext: cardinalityNext});
 
@@ -568,6 +577,9 @@ contract JBUniswapV4Hook is BaseHook {
         returns (bytes4, BeforeSwapDelta, uint24)
     {
         // Decode amountOutMin from hookData (required: uint256)
+        // hookData must be exactly 32 bytes, encoding a single uint256 amountOutMin (the minimum
+        // acceptable output amount). This strict check prevents malformed metadata from reaching hook contracts.
+        // Callers must format hookData as abi.encode(uint256).
         uint256 amountOutMin;
         if (hookData.length == 32) {
             amountOutMin = abi.decode(hookData, (uint256));
@@ -612,6 +624,9 @@ contract JBUniswapV4Hook is BaseHook {
 
         // Use the appropriate project ID for Juicebox operations.
         // Buying takes priority: if both are JB tokens, we compare buying via Juicebox vs Uniswap.
+        // When both tokens are JB project tokens, only the buy-side (minting) is evaluated for
+        // routing. Evaluating both buy and sell sides would double gas costs. The buy-side heuristic is conservative
+        // — it may miss sell-side opportunities but never overpays.
         uint256 projectId = isBuyingJBToken ? buyProjectId : sellProjectId;
 
         uint256 juiceboxExpectedOutput;
@@ -776,6 +791,9 @@ contract JBUniswapV4Hook is BaseHook {
         }
 
         // Observe the TWAP
+        // this.observeTWAP() is called without try-catch. If the oracle observation fails (e.g.,
+        // insufficient history), the entire transaction reverts. This is intentional — a failed TWAP observation
+        // means no reliable price reference exists, and proceeding without one would expose the swap to manipulation.
         int24 arithmeticMeanTick = this.observeTWAP({
             poolId: poolId,
             secondsAgo: TWAP_PERIOD,
