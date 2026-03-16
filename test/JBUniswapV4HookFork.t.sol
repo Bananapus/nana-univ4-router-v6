@@ -75,9 +75,10 @@ contract JBUniswapV4HookForkTest is Test {
     // Test user with mainnet ETH
     address testUser = address(0xBEEF);
 
-    /// @notice Fork mainnet via foundry.toml rpc_endpoints.ethereum (reads ${RPC_ETHEREUM_MAINNET}).
+    /// @notice Fork mainnet using RPC_ETHEREUM_MAINNET env var, falling back to a public RPC.
     function setUp() public {
-        vm.createSelectFork("ethereum");
+        string memory rpcUrl = vm.envOr("RPC_ETHEREUM_MAINNET", string("https://ethereum-rpc.publicnode.com"));
+        vm.createSelectFork(rpcUrl);
 
         // Mark mainnet contracts as persistent so they can be called in fork tests
         vm.makePersistent(MAINNET_JB_TOKENS);
