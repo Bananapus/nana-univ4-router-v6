@@ -447,7 +447,7 @@ contract JBUniswapV4Hook is BaseHook {
         int56 tickCumulativeDelta = tickCumulativeCurrent - tickCumulativePast;
         // forge-lint: disable-next-line(unsafe-typecast)
         arithmeticMeanTick = int24(tickCumulativeDelta / int56(uint56(secondsAgo)));
-        // Round toward negative infinity for negative ticks (consistent with Uniswap V3 convention)
+        // Round toward negative infinity for negative ticks (Solidity truncates toward zero).
         if (tickCumulativeDelta < 0 && (tickCumulativeDelta % int56(uint56(secondsAgo)) != 0)) {
             arithmeticMeanTick--;
         }
