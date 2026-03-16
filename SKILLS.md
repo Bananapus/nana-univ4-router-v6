@@ -9,7 +9,7 @@ Uniswap V4 hook that automatically routes swaps involving Juicebox project token
 | Contract | Role |
 |----------|------|
 | `JBUniswapV4Hook` | V4 BaseHook: `beforeSwap` compares two routes (V4 pool vs Juicebox) and overrides the swap when Juicebox is better; `afterSwap`/`afterAddLiquidity`/`afterRemoveLiquidity` record TWAP observations; `afterInitialize` bootstraps the oracle. Exposes `observe()` for IGeomeanOracle-compatible TWAP queries. |
-| `Oracle` (library) | Circular observation buffer storing `(blockTimestamp, prevTick, tickCumulative, secondsPerLiquidityCumulativeX128)`. Supports `observe`, `observeSingle`, `write`, `grow`, and binary search. |
+| `Oracle` (library) | Circular observation buffer storing `(blockTimestamp, tickCumulative, secondsPerLiquidityCumulativeX128)`. Supports `observe`, `observeSingle`, `write`, `grow`, and binary search. |
 
 ## Key Functions
 
@@ -70,7 +70,7 @@ Uniswap V4 hook that automatically routes swaps involving Juicebox project token
 
 | Struct | Key Fields | Used In |
 |--------|------------|---------|
-| `Oracle.Observation` | `uint32 blockTimestamp`, `int24 prevTick`, `int56 tickCumulative`, `uint136 secondsPerLiquidityCumulativeX128`, `bool initialized` | `observations` mapping (per PoolId, ring buffer of 65,535) |
+| `Oracle.Observation` | `uint32 blockTimestamp`, `int56 tickCumulative`, `uint160 secondsPerLiquidityCumulativeX128`, `bool initialized` | `observations` mapping (per PoolId, ring buffer of 65,535) |
 | `ObservationState` | `uint16 index`, `uint16 cardinality`, `uint16 cardinalityNext` | `states` mapping (per PoolId), tracks write position and buffer capacity |
 
 ## Events
