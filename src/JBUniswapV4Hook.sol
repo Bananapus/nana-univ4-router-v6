@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
-pragma solidity ^0.8.24;
+pragma solidity 0.8.26;
 
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {IERC20Metadata} from "@openzeppelin/contracts/token/ERC20/extensions/IERC20Metadata.sol";
@@ -120,11 +120,11 @@ contract JBUniswapV4Hook is BaseHook {
     //*********************************************************************//
 
     /// @notice Emitted when a routing decision is made
-    event RouteSelected(PoolId indexed poolId, bool useJuicebox, uint256 expectedTokens);
+    event RouteSelected(PoolId indexed poolId, bool useJuicebox, uint256 expectedTokens, address caller);
 
     /// @notice Emitted when the best route is selected among v4 and Juicebox
     /// @param routeType 0 = v4, 1 = juicebox
-    event BestRouteSelected(PoolId indexed poolId, uint8 routeType, uint256 expectedTokens);
+    event BestRouteSelected(PoolId indexed poolId, uint8 routeType, uint256 expectedTokens, address caller);
 
     //*********************************************************************//
     // -------------------------- constructor ---------------------------- //
@@ -650,7 +650,7 @@ contract JBUniswapV4Hook is BaseHook {
             });
         } else {
             // No JB token involved, proceed with normal Uniswap swap
-            emit RouteSelected(poolId, false, 0);
+            emit RouteSelected(poolId, false, 0, msg.sender);
             return (BaseHook.beforeSwap.selector, BeforeSwapDeltaLibrary.ZERO_DELTA, 0);
         }
 
@@ -666,12 +666,13 @@ contract JBUniswapV4Hook is BaseHook {
         emit BestRouteSelected(
             poolId,
             juiceboxBetterThanV4 ? 1 : 0,
-            juiceboxBetterThanV4 ? juiceboxExpectedOutput : uniswapV4ExpectedTokens
+            juiceboxBetterThanV4 ? juiceboxExpectedOutput : uniswapV4ExpectedTokens,
+            msg.sender
         );
 
         // If Juicebox gives better output, route through Juicebox
         if (juiceboxBetterThanV4) {
-            emit RouteSelected(poolId, true, juiceboxExpectedOutput);
+            emit RouteSelected(poolId, true, juiceboxExpectedOutput, msg.sender);
 
             uint256 outputReceived = _routeThroughJuicebox({
                 projectId: projectId,
@@ -688,7 +689,7 @@ contract JBUniswapV4Hook is BaseHook {
 
         // Proceed with normal v4 swap
         // Note: Slippage protection for V4 swaps is enforced in _afterSwap hook
-        emit RouteSelected(poolId, false, uniswapV4ExpectedTokens);
+        emit RouteSelected(poolId, false, uniswapV4ExpectedTokens, msg.sender);
         return (BaseHook.beforeSwap.selector, BeforeSwapDeltaLibrary.ZERO_DELTA, 0);
     }
 
