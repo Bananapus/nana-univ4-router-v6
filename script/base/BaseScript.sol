@@ -22,17 +22,21 @@ contract BaseScript is Script {
     address immutable DEPLOYER_ADDRESS;
 
     /////////////////////////////////////
-    // --- Configure These ---
+    // --- Configure via environment ---
     /////////////////////////////////////
-    IERC20 internal constant TOKEN0 = IERC20(0x0165878A594ca255338adfa4d48449f69242Eb8F);
-    IERC20 internal constant TOKEN1 = IERC20(0xa513E6E4b8f2a923D98304ec87F64353C4D5C853);
-    IHooks constant HOOK_CONTRACT = IHooks(address(0));
+    IERC20 internal immutable TOKEN0;
+    IERC20 internal immutable TOKEN1;
+    IHooks immutable HOOK_CONTRACT;
     /////////////////////////////////////
 
     Currency immutable CURRENCY0;
     Currency immutable CURRENCY1;
 
     constructor() {
+        TOKEN0 = IERC20(vm.envAddress("TOKEN0"));
+        TOKEN1 = IERC20(vm.envAddress("TOKEN1"));
+        HOOK_CONTRACT = IHooks(vm.envOr("HOOK_CONTRACT", address(0)));
+
         POOL_MANAGER = IPoolManager(AddressConstants.getPoolManagerAddress(block.chainid));
         POSITION_MANAGER = IPositionManager(payable(AddressConstants.getPositionManagerAddress(block.chainid)));
         SWAP_ROUTER = IUniswapV4Router04(payable(AddressConstants.getV4SwapRouterAddress(block.chainid)));
@@ -51,7 +55,7 @@ contract BaseScript is Script {
         vm.label({account: address(HOOK_CONTRACT), newLabel: "HookContract"});
     }
 
-    function getCurrencies() public pure returns (Currency, Currency) {
+    function getCurrencies() public view returns (Currency, Currency) {
         require(address(TOKEN0) != address(TOKEN1));
 
         if (TOKEN0 < TOKEN1) {
