@@ -15,9 +15,8 @@ contract DeployScript is Script {
     CoreDeployment core;
 
     function run() external {
-        // Get the pool manager address from environment.
-        address poolManager = vm.envOr("POOL_MANAGER", address(0));
-        require(poolManager != address(0), "POOL_MANAGER environment variable not set");
+        // Get the Uniswap V4 PoolManager address for this chain.
+        address poolManager = _getPoolManager();
 
         // Get the core deployment addresses.
         core = CoreDeploymentLib.getDeployment(
@@ -59,5 +58,25 @@ contract DeployScript is Script {
         console2.log("JBUniswapV4Hook deployed at:", address(hook));
 
         vm.stopBroadcast();
+    }
+
+    /// @notice Returns the Uniswap V4 PoolManager address for the current chain.
+    function _getPoolManager() internal view returns (address) {
+        // Ethereum
+        if (block.chainid == 1) return 0x000000000004444c5dc75cB358380D2e3dE08A90;
+        // Optimism
+        if (block.chainid == 10) return 0x9a13F98Cb987694C9F086b1F5eB990EeA8264Ec3;
+        // Base
+        if (block.chainid == 8453) return 0x498581fF718922c3f8e6A244956aF099B2652b2B;
+        // Arbitrum
+        if (block.chainid == 42_161) return 0x360E68fAccca8CA495c1B759Fd9EEe466db9FB32;
+        // Sepolia
+        if (block.chainid == 11_155_111) return 0xE03A1074c86CFeDd5C142C4F04F1a1536e203543;
+        // Base Sepolia
+        if (block.chainid == 84_532) return 0x05E73354cFDd6745C338b50BcFDfA3Aa6fA03408;
+        // Arbitrum Sepolia
+        if (block.chainid == 421_614) return 0xFB3e0C6F74eB1a21CC1Da29aeC80D2Dfe6C9a317;
+
+        revert("Unsupported chain for Uniswap V4 PoolManager");
     }
 }
