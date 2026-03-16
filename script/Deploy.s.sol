@@ -1,7 +1,63 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.24;
 
-import {DeployJBUniswapV4Hook} from "./DeployJBUniswapV4Hook.s.sol";
+import {CoreDeployment, CoreDeploymentLib} from "@bananapus/core-v6/script/helpers/CoreDeploymentLib.sol";
 
-/// @notice Convenience alias — delegates to DeployJBUniswapV4Hook.
-contract DeployScript is DeployJBUniswapV4Hook {}
+import {Script, console2} from "forge-std/Script.sol";
+import {IPoolManager} from "@uniswap/v4-core/src/interfaces/IPoolManager.sol";
+import {Hooks} from "@uniswap/v4-core/src/libraries/Hooks.sol";
+import {HookMiner} from "@uniswap/v4-periphery/src/utils/HookMiner.sol";
+
+import {JBUniswapV4Hook} from "../src/JBUniswapV4Hook.sol";
+
+contract DeployScript is Script {
+    /// @notice Tracks the deployment of the core contracts for the chain we are deploying to.
+    CoreDeployment core;
+
+    function run() external {
+        // Get the pool manager address from environment.
+        address poolManager = vm.envOr("POOL_MANAGER", address(0));
+        require(poolManager != address(0), "POOL_MANAGER environment variable not set");
+
+        // Get the core deployment addresses.
+        core = CoreDeploymentLib.getDeployment(
+            vm.envOr("NANA_CORE_DEPLOYMENT_PATH", string("node_modules/@bananapus/core-v6/deployments/"))
+        );
+
+        uint256 deployerPrivateKey = vm.envUint("PRIVATE_KEY");
+        address deployer = vm.addr(deployerPrivateKey);
+
+        // Calculate the required flags for the hook permissions.
+        uint160 flags = uint160(
+            Hooks.BEFORE_SWAP_FLAG | Hooks.AFTER_SWAP_FLAG | Hooks.AFTER_INITIALIZE_FLAG
+                | Hooks.BEFORE_SWAP_RETURNS_DELTA_FLAG | Hooks.AFTER_ADD_LIQUIDITY_FLAG
+                | Hooks.AFTER_REMOVE_LIQUIDITY_FLAG
+        );
+
+        // Prepare constructor arguments.
+        bytes memory constructorArgs = abi.encode(IPoolManager(poolManager), core.tokens, core.directory, core.prices);
+
+        // Mine a valid hook address.
+        (address hookAddress, bytes32 salt) = HookMiner.find({
+            deployer: deployer,
+            flags: flags,
+            creationCode: type(JBUniswapV4Hook).creationCode,
+            constructorArgs: constructorArgs
+        });
+
+        console2.log("Deploying JBUniswapV4Hook to:", hookAddress);
+
+        vm.startBroadcast(deployerPrivateKey);
+
+        JBUniswapV4Hook hook = new JBUniswapV4Hook{salt: salt}({
+            poolManager: IPoolManager(poolManager),
+            tokens: core.tokens,
+            directory: core.directory,
+            prices: core.prices
+        });
+
+        console2.log("JBUniswapV4Hook deployed at:", address(hook));
+
+        vm.stopBroadcast();
+    }
+}
