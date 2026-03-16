@@ -754,6 +754,20 @@ contract JBUniswapV4Hook is BaseHook {
         }
     }
 
+    /// @notice Gets token decimals, defaulting to 18 if unavailable
+    /// @param token The token address
+    /// @return decimals The token decimals (defaults to 18)
+    function _getTokenDecimals(address token) internal view returns (uint8) {
+        if (token == JB_NATIVE_TOKEN) {
+            return 18; // Native ETH has 18 decimals
+        }
+        try IERC20Metadata(token).decimals() returns (uint8 decimals) {
+            return decimals;
+        } catch {
+            return 18; // Default to 18 if unavailable
+        }
+    }
+
     /// @notice Get the TWAP sqrt price for a pool
     /// @param poolId The pool ID
     /// @return sqrtPriceX96 The TWAP sqrt price, or 0 if not enough observations
@@ -805,20 +819,6 @@ contract JBUniswapV4Hook is BaseHook {
 
         // Convert tick to sqrtPriceX96
         return TickMath.getSqrtPriceAtTick(arithmeticMeanTick);
-    }
-
-    /// @notice Gets token decimals, defaulting to 18 if unavailable
-    /// @param token The token address
-    /// @return decimals The token decimals (defaults to 18)
-    function _getTokenDecimals(address token) internal view returns (uint8) {
-        if (token == JB_NATIVE_TOKEN) {
-            return 18; // Native ETH has 18 decimals
-        }
-        try IERC20Metadata(token).decimals() returns (uint8 decimals) {
-            return decimals;
-        } catch {
-            return 18; // Default to 18 if unavailable
-        }
     }
 
     /// @notice Normalizes a token address to Juicebox's native token representation
