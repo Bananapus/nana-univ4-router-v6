@@ -2183,11 +2183,8 @@ contract JuiceboxHookTest is Test {
         token1.mint(address(this), 1 ether);
         token1.approve(address(jbSwapRouter), 1 ether);
 
-        SwapParams memory params = SwapParams({
-            zeroForOne: false,
-            amountSpecified: -1 ether,
-            sqrtPriceLimitX96: TickMath.MAX_SQRT_PRICE - 1
-        });
+        SwapParams memory params =
+            SwapParams({zeroForOne: false, amountSpecified: -1 ether, sqrtPriceLimitX96: TickMath.MAX_SQRT_PRICE - 1});
 
         // The swap should revert: hook routes through JB → terminal.pay() attempts reentrant swap
         // → hook._beforeSwap sees _routing == true → reverts JBUniswapV4Hook_ReentrantRouting
@@ -2277,7 +2274,9 @@ contract ReentrantMockTerminal {
         PoolKey memory k = reentrantPoolKey;
         PM.swap(
             k,
-            SwapParams({zeroForOne: false, amountSpecified: -0.001 ether, sqrtPriceLimitX96: TickMath.MAX_SQRT_PRICE - 1}),
+            SwapParams({
+                zeroForOne: false, amountSpecified: -0.001 ether, sqrtPriceLimitX96: TickMath.MAX_SQRT_PRICE - 1
+            }),
             abi.encode(uint256(0))
         );
         return 0; // Never reached
