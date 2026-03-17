@@ -103,7 +103,7 @@ Uniswap V4 hook that automatically routes swaps involving Juicebox project token
 ## Gotchas
 
 1. **Exact-output swaps are not supported.** `_beforeSwap` reverts with `JBUniswapV4Hook_ExactOutputSwapsNotSupported` if `params.amountSpecified > 0`. Only exact-input (negative `amountSpecified`) is handled.
-2. **`hookData` must encode `uint256 amountOutMin`.** Exactly 32 bytes required; otherwise reverts with `JBUniswapV4Hook_AmountOutMinRequired`. This is NOT optional -- every swap through this hook needs it.
+2. **`hookData` must encode `uint256 amountOutMin`.** Exactly 32 bytes required; otherwise reverts with `JBUniswapV4Hook_AmountOutMinRequired`. This is NOT optional -- every swap through this hook needs it. `abi.encode(uint256(0))` delegates slippage protection to the hook's own TWAP oracle. The buyback hook uses this value when composing on the same pool.
 3. **TWAP falls back to spot price silently.** If fewer than 2 observations or less than `TWAP_PERIOD` seconds of data exist, `_getTWAPSqrtPrice` returns 0 and the estimator uses `getSlot0` spot price. No revert, no event.
 4. **Native ETH normalization.** For Juicebox terminal calls, `address(0)` maps to `JB_NATIVE_TOKEN` (`0x000000000000000000000000000000000000EEEe`).
 5. **Oracle auto-grows cardinality** when the buffer fills: doubles up to 128, then jumps to 256 max. The gas cost is paid by whoever triggers the observation write that fills the buffer.
@@ -117,6 +117,7 @@ Uniswap V4 hook that automatically routes swaps involving Juicebox project token
 13. **`via_ir = true` is required** in foundry.toml due to stack depth from V4 core dependencies. Without it, compilation may fail with "stack too deep" errors.
 14. **The hook is fully immutable.** No admin functions, no upgrade path. All parameters are constants or immutable constructor arguments. Changing behavior requires deploying a new hook and migrating pools.
 15. **Non-JB token swaps pass through unchanged.** If neither token in the pair is a registered JB project token (via `TOKENS.projectIdOf()`), the hook returns `ZERO_DELTA` and the V4 AMM executes normally. No routing overhead.
+16. **Composition with JBBuybackHook.** This hook is designed to serve as both the pool hook and the oracle (`ORACLE_HOOK`) for `JBBuybackHook` on the same pool. When the buyback hook swaps, `_beforeSwap` fires and may route through JB, re-entering the buyback hook. The `_routing` reentrancy guard prevents infinite recursion — the inner swap reverts, and the buyback hook's try/catch falls back to minting.
 
 ## Example Integration
 

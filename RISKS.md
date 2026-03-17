@@ -88,7 +88,14 @@ Forward-looking risk analysis of `JBUniswapV4Hook` (~963 lines) and `Oracle` lib
 - When JB routing wins, the hook takes input from PoolManager, routes through the JB terminal, and settles output back. The V4 pool itself is not touched (the hook returns a `BeforeSwapDelta` that cancels the pool swap). This means the V4 pool price does not move, creating a potential arb opportunity between the stale V4 pool price and the JB terminal rate.
 - This is by design: JB routing bypasses the AMM to give users a better rate. Third-party arbitrageurs can correct the V4 pool price independently.
 
-## 5. Integration Risks
+## 5. Composition with JBBuybackHook
+
+- **Same-pool composition**: `JBUniswapV4Hook` is designed to serve as both the V4 pool hook and the `ORACLE_HOOK` for `JBBuybackHook`. The buyback hook queries `observe()` for TWAP data and executes swaps on the same pool.
+- **Reentrancy path**: When the buyback hook swaps → `_beforeSwap` fires → routing logic calls `terminal.pay()` → this re-enters the buyback hook via the data hook → buyback hook tries to swap again. The `_routing` transient storage flag in `_beforeSwap` detects this recursion and reverts.
+- **Fallback behavior**: The reentrancy revert is caught by the buyback hook's try/catch, which falls back to minting via the controller. No funds are lost. The user receives tokens at the mint rate.
+- **hookData from buyback hook**: The buyback hook passes `abi.encode(uint256(0))` as hookData. The `0` value for `amountOutMin` delegates slippage protection to the hook's own TWAP-based routing — the hook will route through JB if it offers a better rate, or let V4 execute if the pool price is better.
+
+## 6. Integration Risks
 
 ### 5.1 Hook deployment address mining
 
@@ -113,7 +120,7 @@ Forward-looking risk analysis of `JBUniswapV4Hook` (~963 lines) and `Oracle` lib
 - Uniswap V4 uses `address(0)` for native ETH; Juicebox uses `0x000000000000000000000000000000000000EEEe`. The `_normalizeToken` function maps between them. If a new V4 convention or JB convention is introduced, this mapping breaks silently.
 - Currency ID for JB price feeds: `uint32(uint160(token))`. This truncation means different tokens whose addresses share the same lower 32 bits would collide. Statistically unlikely for EVM CREATE/CREATE2 addresses, but theoretically possible.
 
-## 6. Invariants to Verify
+## 7. Invariants to Verify
 
 - **TWAP always dampens manipulation vs spot** -- A single-block price push should always produce smaller TWAP deviation than spot deviation. Verified in `test_SpotFallback_TWAPDampensAfterWarmup`: spot deviation from a 50 ETH push is significantly larger than TWAP deviation after warmup. This holds as long as the TWAP window contains honest observations.
 - **Recovery after manipulation stops** -- After sustained manipulation ends and normal trading resumes for one full TWAP_PERIOD, the TWAP should converge to within 5% of pre-manipulation baseline. Verified in `test_TWAPManipulation_RecoveryAfterManipulationStops`: TWAP changes after manipulation stops (not stuck), though exact convergence depends on post-manipulation equilibrium price.
