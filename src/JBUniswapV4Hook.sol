@@ -147,7 +147,9 @@ contract JBUniswapV4Hook is BaseHook {
         PRICES = prices;
     }
 
-    /// @notice Receive function to accept ETH
+    /// @notice Receive function to accept ETH during swap settlement with the PoolManager.
+    /// @dev No withdrawal mechanism is needed — ETH received here is consumed during the same transaction
+    /// as part of CurrencySettler.settle() for native-ETH output routing.
     receive() external payable {}
 
     //*********************************************************************//
@@ -194,10 +196,10 @@ contract JBUniswapV4Hook is BaseHook {
                 return 0;
             }
             // Deduct JB protocol fee dynamically read from the terminal.
-            // The JB sell estimate conservatively includes fee deductions even for feeless
-            // addresses. This may underestimate the actual output for feeless senders, causing the router to prefer
-            // pool swaps when direct cash-out would be better. Acceptable trade-off — conservative estimates
-            // prevent overpayment.
+            // The JB sell estimate conservatively includes fee deductions even for feeless addresses. This
+            // may underestimate the actual output for feeless senders, causing the router to prefer pool swaps
+            // when direct cash-out would yield more. Intentional trade-off: conservative estimates err on the
+            // side of more issuance rather than routing to a worse option.
             uint256 fee = IJBFeeTerminal(address(terminal)).FEE();
             return grossReclaim - FullMath.mulDiv({a: grossReclaim, b: fee, denominator: JBConstants.MAX_FEE});
         } catch {
@@ -224,6 +226,9 @@ contract JBUniswapV4Hook is BaseHook {
         // Get the currency Id for the `weight`.
         uint256 baseCurrency;
         uint16 reservedPercent;
+        // NOTE: This estimate uses the ruleset's static weight. If the project has a data hook that overrides
+        // the weight at payment time, the actual issuance may differ from this estimate, potentially causing
+        // the swap-vs-mint routing decision to diverge from what would be optimal.
         try IJBController(address(DIRECTORY.controllerOf(projectId))).currentRulesetOf(projectId) returns (
             JBRuleset memory ruleset, JBRulesetMetadata memory metadata
         ) {
@@ -313,7 +318,10 @@ contract JBUniswapV4Hook is BaseHook {
         // forge-lint: disable-next-line(mixed-case-variable)
         uint160 sqrtPriceX96TWAP = _getTWAPSqrtPrice(poolId);
 
-        // If TWAP is not available (not enough observations), fallback to spot price
+        // If TWAP is not available (not enough observations), fallback to spot price.
+        // NOTE: Spot price is used as a fallback for newly created pools that lack sufficient TWAP history.
+        // In this state, the estimate is susceptible to spot-price manipulation. Once the pool accumulates
+        // enough observations for TWAP, this fallback is no longer used.
         // slither-disable-next-line incorrect-equality
         if (sqrtPriceX96TWAP == 0) {
             // slither-disable-next-line unused-return
@@ -624,9 +632,10 @@ contract JBUniswapV4Hook is BaseHook {
 
         // Use the appropriate project ID for Juicebox operations.
         // Buying takes priority: if both are JB tokens, we compare buying via Juicebox vs Uniswap.
-        // When both tokens are JB project tokens, only the buy-side (minting) is evaluated for
-        // routing. Evaluating both buy and sell sides would double gas costs. The buy-side heuristic is conservative
-        // — it may miss sell-side opportunities but never overpays.
+        // When both tokens are JB project tokens, only the buy-side (minting) is evaluated for routing.
+        // The sell-side token is the project token being sold and is intentionally not evaluated separately —
+        // evaluating both sides would double gas costs. The buy-side heuristic is conservative: it may miss
+        // sell-side opportunities where cash-out yields more, but never overpays.
         uint256 projectId = isBuyingJBToken ? buyProjectId : sellProjectId;
 
         uint256 juiceboxExpectedOutput;
@@ -904,14 +913,16 @@ contract JBUniswapV4Hook is BaseHook {
         // Normalize token for Juicebox terminal interaction
         address normalizedTokenIn = _normalizeToken(tokenIn);
 
-        // Approve the terminal to spend the tokens if needed.
-        // Use forceApprove to set an exact allowance, avoiding accumulation from safeIncreaseAllowance
-        // if a previous terminal call reverted after partial token consumption.
-        if (!inputCurrency.isAddressZero()) {
-            IERC20(tokenIn).forceApprove({spender: address(terminal), value: amountIn});
-        }
-
         if (isBuying) {
+            // Approve the terminal to spend the input tokens for payment.
+            // Use forceApprove to set an exact allowance, avoiding accumulation from safeIncreaseAllowance
+            // if a previous terminal call reverted after partial token consumption.
+            // Only needed on the buy path — sell path uses cashOutTokensOf which burns JB tokens
+            // via the controller, not ERC20 transferFrom.
+            if (!inputCurrency.isAddressZero()) {
+                IERC20(tokenIn).forceApprove({spender: address(terminal), value: amountIn});
+            }
+
             // Buying JB tokens: Pay to Juicebox and receive JB tokens
             // Normalize native ETH to JB_NATIVE_TOKEN for terminal interaction
             uint256 payValue = inputCurrency.isAddressZero() ? amountIn : 0;
