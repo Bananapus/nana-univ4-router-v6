@@ -43,10 +43,12 @@ import {Oracle} from "./libraries/Oracle.sol";
 /// @dev This hook compares prices between Uniswap V4 pools and Juicebox projects, then routes to the option that gives
 /// users the most tokens. It uses TWAP (Time-Weighted Average Price) oracles to protect against manipulation.
 ///      Provides IGeomeanOracle-compatible `observe()` for TWAP queries by external contracts.
-/// @dev WARNING: COMPOSITION CONFLICT — This hook must NOT be the pool hook for pools where one of the tokens
-/// is a JB project using JBBuybackHook as its data hook. The JBBuybackHook determines swap-vs-mint using a
-/// TWAP-derived weight, while this hook uses a static weight comparison. When both are active on the same pool,
-/// the static weight used here conflicts with the dynamic weight from JBBuybackHook, leading to suboptimal routing.
+/// @dev COMPOSITION NOTE — This hook is designed to serve as the ORACLE_HOOK for JBBuybackHook on the same V4 pool.
+/// When the buyback hook attempts a swap, it flows through this hook's `_beforeSwap` routing logic. If the routing
+/// decision leads back to Juicebox (via `_routeThroughJuicebox`), the `_routing` reentrancy guard prevents infinite
+/// recursion and the buyback hook falls back to minting. This weight comparison uses static issuance weight while
+/// the buyback hook uses TWAP-derived estimates, so the two may occasionally disagree on routing — this is expected
+/// and handled gracefully by the try/catch fallback in the buyback hook.
 contract JBUniswapV4Hook is BaseHook {
     using PoolIdLibrary for PoolKey;
     using StateLibrary for IPoolManager;
