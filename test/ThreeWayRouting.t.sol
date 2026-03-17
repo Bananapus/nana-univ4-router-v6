@@ -469,7 +469,7 @@ contract TwoWayRoutingTest is Test {
 
         // Set expectEmit right before the swap call
         vm.expectEmit(true, false, false, false);
-        emit JBUniswapV4Hook.BestRouteSelected(id, 1, 0);
+        emit JBUniswapV4Hook.BestRouteSelected(id, 1, 0, address(0));
 
         jbSwapRouter.swap(key, params, 0);
 
@@ -496,7 +496,7 @@ contract TwoWayRoutingTest is Test {
             SwapParams({zeroForOne: true, amountSpecified: -1 ether, sqrtPriceLimitX96: TickMath.MIN_SQRT_PRICE + 1});
 
         vm.expectEmit(true, false, false, false);
-        emit JBUniswapV4Hook.BestRouteSelected(id, 0, 0);
+        emit JBUniswapV4Hook.BestRouteSelected(id, 0, 0, address(0));
 
         jbSwapRouter.swap(key, params, 0);
     }
@@ -518,7 +518,7 @@ contract TwoWayRoutingTest is Test {
             SwapParams({zeroForOne: true, amountSpecified: -1 ether, sqrtPriceLimitX96: TickMath.MIN_SQRT_PRICE + 1});
 
         vm.expectEmit(true, false, false, false);
-        emit JBUniswapV4Hook.BestRouteSelected(id, 0, 0);
+        emit JBUniswapV4Hook.BestRouteSelected(id, 0, 0, address(0));
 
         jbSwapRouter.swap(key, params, 0);
     }
@@ -569,7 +569,7 @@ contract TwoWayRoutingTest is Test {
 
         // For non-JB tokens, only RouteSelected is emitted (not BestRouteSelected)
         vm.expectEmit(true, false, false, true);
-        emit JBUniswapV4Hook.RouteSelected(nonJBId, false, 0);
+        emit JBUniswapV4Hook.RouteSelected(nonJBId, false, 0, address(manager));
 
         swapRouter.swap(nonJBKey, params, PoolSwapTest.TestSettings(false, false), abi.encode(uint256(0)));
     }
@@ -592,7 +592,7 @@ contract TwoWayRoutingTest is Test {
             SwapParams({zeroForOne: true, amountSpecified: -1 ether, sqrtPriceLimitX96: TickMath.MIN_SQRT_PRICE + 1});
 
         vm.expectEmit(true, false, false, false);
-        emit JBUniswapV4Hook.BestRouteSelected(id, 1, 0);
+        emit JBUniswapV4Hook.BestRouteSelected(id, 1, 0, address(0));
 
         jbSwapRouter.swap(key, params, 0);
 
@@ -643,7 +643,7 @@ contract TwoWayRoutingTest is Test {
             SwapParams({zeroForOne: true, amountSpecified: -1 ether, sqrtPriceLimitX96: TickMath.MIN_SQRT_PRICE + 1});
 
         vm.expectEmit(true, false, false, false);
-        emit JBUniswapV4Hook.BestRouteSelected(ethId, 1, 0);
+        emit JBUniswapV4Hook.BestRouteSelected(ethId, 1, 0, address(0));
 
         jbSwapRouter.swap{value: 1 ether}(ethKey, params, 0);
 

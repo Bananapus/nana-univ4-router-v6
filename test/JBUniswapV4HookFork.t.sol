@@ -441,7 +441,7 @@ contract JBUniswapV4HookForkTest is Test {
     // =========================
 
     function _bestRouteSelectedSig() private pure returns (bytes32) {
-        return keccak256("BestRouteSelected(bytes32,uint8,uint256)");
+        return keccak256("BestRouteSelected(bytes32,uint8,uint256,address)");
     }
 
     function _getLastBestRouteFromLogs() private returns (uint8 routeType, uint256 expectedTokens) {
@@ -450,7 +450,7 @@ contract JBUniswapV4HookForkTest is Test {
         for (uint256 i = entries.length; i > 0; i--) {
             Vm.Log memory logEntry = entries[i - 1];
             if (logEntry.topics.length > 0 && logEntry.topics[0] == sig) {
-                (routeType, expectedTokens) = abi.decode(logEntry.data, (uint8, uint256));
+                (routeType, expectedTokens,) = abi.decode(logEntry.data, (uint8, uint256, address));
                 return (routeType, expectedTokens);
             }
         }

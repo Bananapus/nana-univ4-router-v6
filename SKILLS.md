@@ -77,7 +77,7 @@ Uniswap V4 hook that automatically routes swaps involving Juicebox project token
 
 | Event | When |
 |-------|------|
-| `BestRouteSelected(PoolId indexed poolId, uint8 routeType, uint256 expectedTokens)` | Emitted in `_beforeSwap` when a JB token swap is routed. `routeType`: 0=V4, 1=JB. |
+| `BestRouteSelected(PoolId indexed poolId, uint8 routeType, uint256 expectedTokens, address caller)` | Emitted in `_beforeSwap` when a JB token swap is routed. `routeType`: 0=V4, 1=JB. |
 
 ## Errors
 

@@ -50,7 +50,7 @@ A V4 pool exists with `hooks = JBUniswapV4Hook`. One of the pool's tokens is a J
 5. **Comparison: V4 wins**
 
    - `juiceboxBetterThanV4 = false` (V4 gives more output)
-   - Emits `BestRouteSelected(poolId, 0, uniswapV4ExpectedTokens)`
+   - Emits `BestRouteSelected(poolId, 0, uniswapV4ExpectedTokens, caller)`
    - Returns `(BaseHook.beforeSwap.selector, ZERO_DELTA, 0)`
 
 6. **V4 PoolManager executes the swap normally (AMM mechanics)**
@@ -92,7 +92,7 @@ The JB project has a favorable minting rate (high weight, low reserved percent) 
 2. **Comparison: JB wins (buying)**
 
    - `juiceboxBetterThanV4 = true` (JB gives more tokens)
-   - Emits `BestRouteSelected(poolId, 1, juiceboxExpectedOutput)`
+   - Emits `BestRouteSelected(poolId, 1, juiceboxExpectedOutput, caller)`
 
 3. **`_routeThroughJuicebox(projectId, inputCurrency, outputCurrency, amountIn, isBuying=true, terminal, amountOutMin)`**
 
@@ -309,7 +309,7 @@ When V4 routing is selected:
    - Decodes `amountOutMin`
    - Looks up `TOKENS.projectIdOf()` for both tokens -- returns 0 for both
    - `isSellingJBToken = false`, `isBuyingJBToken = false`
-   - Enters the `else` branch: emits `RouteSelected(poolId, false, 0)`
+   - Enters the `else` branch: emits `RouteSelected(poolId, false, 0, caller)`
    - Returns `ZERO_DELTA` -- V4 handles the swap normally
 
 3. **V4 AMM executes the swap**
