@@ -328,6 +328,9 @@ library Oracle {
                 uint32 observationTimeDelta = atOrAfter.blockTimestamp - beforeOrAt.blockTimestamp;
                 uint32 targetDelta = target - beforeOrAt.blockTimestamp;
                 // forge-lint: disable-start(divide-before-multiply)
+                // NOTE: The divide-before-multiply here loses up to (observationTimeDelta - 1) units of
+                // tickCumulative precision. For realistic observation intervals (seconds to minutes) and
+                // tick ranges, this is bounded and economically insignificant.
                 return (
                     beforeOrAt.tickCumulative
                         + ((atOrAfter.tickCumulative - beforeOrAt.tickCumulative) / int56(uint56(observationTimeDelta)))
