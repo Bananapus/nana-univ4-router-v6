@@ -43,6 +43,12 @@ import {Oracle} from "./libraries/Oracle.sol";
 /// @dev This hook compares prices between Uniswap V4 pools and Juicebox projects, then routes to the option that gives
 /// users the most tokens. It uses TWAP (Time-Weighted Average Price) oracles to protect against manipulation.
 ///      Provides IGeomeanOracle-compatible `observe()` for TWAP queries by external contracts.
+/// @dev COMPOSITION NOTE — This hook is designed to serve as the ORACLE_HOOK for JBBuybackHook on the same V4 pool.
+/// When the buyback hook attempts a swap, it flows through this hook's `_beforeSwap` routing logic. If the routing
+/// decision leads back to Juicebox (via `_routeThroughJuicebox`), the `_routing` reentrancy guard prevents infinite
+/// recursion and the buyback hook falls back to minting. This weight comparison uses static issuance weight while
+/// the buyback hook uses TWAP-derived estimates, so the two may occasionally disagree on routing — this is expected
+/// and handled gracefully by the try/catch fallback in the buyback hook.
 contract JBUniswapV4Hook is BaseHook {
     using PoolIdLibrary for PoolKey;
     using StateLibrary for IPoolManager;
@@ -62,6 +68,9 @@ contract JBUniswapV4Hook is BaseHook {
 
     /// @notice Reverts when swap output is below minimum required amount.
     error JBUniswapV4Hook_InsufficientOutput();
+
+    /// @notice Reverts when a reentrant swap is detected during Juicebox routing.
+    error JBUniswapV4Hook_ReentrantRouting();
 
     /// @notice Reverts when secondsAgo is zero in observeTWAP().
     error JBUniswapV4Hook_SecondsAgoCannotBeZero();
@@ -114,6 +123,15 @@ contract JBUniswapV4Hook is BaseHook {
 
     /// @notice The current observation array state for the given pool ID
     mapping(PoolId => ObservationState) public states;
+
+    //*********************************************************************//
+    // -------------------- private stored properties ------------------- //
+    //*********************************************************************//
+
+    /// @notice Flag to prevent recursive routing through Juicebox during swap hooks.
+    /// @dev Set to true before `_routeThroughJuicebox`, checked at `_beforeSwap` entry.
+    ///      Uses a custom flag instead of OZ ReentrancyGuard to avoid conflicts with PoolManager's unlock callback.
+    bool private _routing;
 
     //*********************************************************************//
     // ---------------------------- events ------------------------------- //
@@ -584,6 +602,9 @@ contract JBUniswapV4Hook is BaseHook {
         override
         returns (bytes4, BeforeSwapDelta, uint24)
     {
+        // Prevent recursive routing: if we're already routing through Juicebox, block reentrant swaps.
+        if (_routing) revert JBUniswapV4Hook_ReentrantRouting();
+
         // Decode amountOutMin from hookData (required: uint256)
         // hookData must be exactly 32 bytes, encoding a single uint256 amountOutMin (the minimum
         // acceptable output amount). This strict check prevents malformed metadata from reaching hook contracts.
@@ -887,6 +908,11 @@ contract JBUniswapV4Hook is BaseHook {
     /// @param inputCurrency The input currency (native ETH or ERC20)
     /// @param outputCurrency The output currency (native ETH or ERC20)
     /// @param amountIn The input amount
+    /// @dev STRUCTURAL ARBITRAGE BOUND: This function routes swaps through Juicebox pay/cashOut which bypasses
+    /// the V4 pool's price movement. However, the bonding curve's concavity naturally bounds arbitrage:
+    /// each cashOut reduces both surplus AND supply, so each subsequent cashOut yields less until the
+    /// JB price drops below the V4 pool price, at which point arbitrage becomes unprofitable.
+    /// This convergence makes sustained extraction self-limiting.
     /// @param isBuying Whether we're buying (true) or selling (false) JB tokens
     /// @param terminal The Juicebox terminal to use
     /// @param amountOutMin Minimum tokens user accepts (enforced by JB terminal)
@@ -904,6 +930,8 @@ contract JBUniswapV4Hook is BaseHook {
         internal
         returns (uint256 outputReceived)
     {
+        _routing = true;
+
         address tokenIn = Currency.unwrap(inputCurrency);
         address tokenOut = Currency.unwrap(outputCurrency);
 
@@ -955,6 +983,8 @@ contract JBUniswapV4Hook is BaseHook {
 
         // Settle output back to PoolManager
         _settleOutput({outputCurrency: outputCurrency, amount: outputReceived});
+
+        _routing = false;
 
         return outputReceived;
     }

@@ -294,7 +294,15 @@ The hook maps between V4's native ETH (`address(0)`) and JB's native token const
 - `_getPrimaryTerminal()` normalizes before lookup
 - `_settleOutput()` uses the V4 currency (not normalized) -- correct for PoolManager interaction
 
-### 8. Oracle State Consistency
+### 8. Composition with JBBuybackHook
+
+This hook serves as both the V4 pool hook and the `ORACLE_HOOK` for `JBBuybackHook`. Verify:
+- The `_routing` reentrancy guard prevents infinite recursion when the buyback hook swaps → `_beforeSwap` routes through JB → `terminal.pay()` re-enters the buyback hook → tries to swap again
+- `hookData: abi.encode(uint256(0))` from the buyback hook is correctly decoded as `amountOutMin = 0`
+- With `amountOutMin = 0`, the hook still provides meaningful protection via TWAP-based routing (picking the better of V4 vs JB)
+- The reentrancy revert is clean — no partial state changes, no token loss
+
+### 9. Oracle State Consistency
 
 - `_afterInitialize` sets up the first observation. Verify the initial state (`index=0, cardinality=1, cardinalityNext=1`) is correct.
 - `_recordObservation` reads pool state (`getSlot0`, `getLiquidity`) and writes to the observation array. These are not atomic with the swap/liquidity change. Is there a window where the recorded tick/liquidity is stale?

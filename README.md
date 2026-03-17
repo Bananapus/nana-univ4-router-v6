@@ -36,6 +36,10 @@ beforeSwap() fires
 afterSwap() records oracle observation, validates slippage for V4 swaps
 ```
 
+### Composition with JBBuybackHook
+
+This hook is designed to serve as both the V4 pool hook and the `ORACLE_HOOK` for `JBBuybackHook` on the same pool. The buyback hook queries `observe()` for TWAP data and executes swaps through this hook. When the routing logic tries to route back through Juicebox (re-entering the buyback hook), a `_routing` reentrancy guard prevents infinite recursion. The buyback hook's try/catch catches the revert and falls back to minting.
+
 ### TWAP Oracle
 
 The hook maintains its own TWAP oracle per pool, recording observations on every swap, liquidity change, and pool initialization. This protects price estimates from single-block manipulation.

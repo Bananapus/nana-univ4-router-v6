@@ -2161,6 +2161,39 @@ contract JuiceboxHookTest is Test {
         assertGt(token0Received, 0, "Should receive tokens");
         assertEq(token0Received, 1000 ether, "Should receive expected amount");
     }
+
+    // ============================================
+    // REENTRANCY GUARD TESTS
+    // ============================================
+
+    /// Given a reentrant terminal that attempts another swap during pay()
+    /// And the swap routes through Juicebox (JB rate > V4)
+    /// When the terminal triggers a second swap from inside pay()
+    /// Then the _routing guard blocks the reentrant swap
+    /// And the entire transaction reverts
+    function testReentrantRouting_RevertsWithRoutingGuard() public {
+        // Deploy reentrant terminal that attempts a swap during pay()
+        ReentrantMockTerminal reentrantTerminal = new ReentrantMockTerminal(IPoolManager(address(manager)));
+        reentrantTerminal.setPoolKey(key);
+
+        // Point directory to reentrant terminal (JB weight is 1000e18, so JB route will be chosen)
+        mockJBDirectory.setMockTerminal(address(reentrantTerminal));
+
+        // Prepare swap: buying JB token (token0, projectId 123) with token1
+        token1.mint(address(this), 1 ether);
+        token1.approve(address(jbSwapRouter), 1 ether);
+
+        SwapParams memory params =
+            SwapParams({zeroForOne: false, amountSpecified: -1 ether, sqrtPriceLimitX96: TickMath.MAX_SQRT_PRICE - 1});
+
+        // The swap should revert: hook routes through JB → terminal.pay() attempts reentrant swap
+        // → hook._beforeSwap sees _routing == true → reverts JBUniswapV4Hook_ReentrantRouting
+        vm.expectRevert();
+        jbSwapRouter.swap(key, params, 0);
+
+        // Restore original terminal for other tests
+        mockJBDirectory.setMockTerminal(address(mockJBMultiTerminal));
+    }
 }
 
 /// @dev Mock store whose currentReclaimableSurplusOf always reverts
@@ -2202,4 +2235,52 @@ contract RevertingStoreCallTerminal {
     function STORE() external pure {
         revert("terminal: no store");
     }
+}
+
+/// @dev Mock terminal that attempts reentrancy by initiating a swap during pay().
+/// Used to test the _routing guard in JBUniswapV4Hook._beforeSwap.
+contract ReentrantMockTerminal {
+    IPoolManager public immutable PM;
+    PoolKey public reentrantPoolKey;
+
+    constructor(IPoolManager _pm) {
+        PM = _pm;
+    }
+
+    function setPoolKey(PoolKey memory _key) external {
+        reentrantPoolKey = _key;
+    }
+
+    function FEE() external pure returns (uint256) {
+        return 25;
+    }
+
+    function pay(
+        uint256,
+        address,
+        uint256,
+        address,
+        uint256,
+        string calldata,
+        bytes calldata
+    )
+        external
+        payable
+        returns (uint256)
+    {
+        // Attempt reentrant swap — we're already inside a PoolManager unlock context.
+        // This calls poolManager.swap() which triggers the hook's _beforeSwap.
+        // Since _routing is true, it reverts with JBUniswapV4Hook_ReentrantRouting.
+        PoolKey memory k = reentrantPoolKey;
+        PM.swap(
+            k,
+            SwapParams({
+                zeroForOne: false, amountSpecified: -0.001 ether, sqrtPriceLimitX96: TickMath.MAX_SQRT_PRICE - 1
+            }),
+            abi.encode(uint256(0))
+        );
+        return 0; // Never reached
+    }
+
+    receive() external payable {}
 }

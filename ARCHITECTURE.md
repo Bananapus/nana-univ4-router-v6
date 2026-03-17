@@ -66,6 +66,10 @@ Each swap/liquidity event → Oracle.write(tick, liquidity, timestamp)
 | V4 Hook | `BaseHook` | Uniswap V4 pool hook (before/after swap, liquidity, initialize) |
 | Price oracle | `Oracle` | Built-in TWAP for V4 pools, IGeomeanOracle-compatible `observe()` |
 
+## Composition with JBBuybackHook
+
+This hook is designed to serve as both the V4 pool hook and the `ORACLE_HOOK` for `JBBuybackHook` on the same pool. The buyback hook queries `observe()` for TWAP data and executes swaps through this hook. When the routing logic in `_beforeSwap` tries to route back through Juicebox (re-entering the buyback hook), a `_routing` reentrancy guard prevents infinite recursion. The buyback hook's try/catch catches the revert and falls back to minting.
+
 ## Dependencies
 - `@bananapus/core-v6` — Core protocol interfaces (IJBTokens, IJBDirectory, IJBController, IJBPrices, IJBTerminalStore, IJBMultiTerminal)
 - `@openzeppelin/contracts` — SafeERC20, IERC20Metadata
