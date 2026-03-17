@@ -1240,9 +1240,7 @@ contract JBUniswapV4HookForkTest is Test {
         // Step 2: Manipulate v4 price so Juicebox cashout is better than Uniswap for selling.
         // Dump NANA into v4 (NANA -> WETH) to make NANA cheaper in v4.
         SwapParams memory dumpNANA = SwapParams({
-            zeroForOne: true,
-            amountSpecified: -int256(5000 ether),
-            sqrtPriceLimitX96: TickMath.MIN_SQRT_PRICE + 1
+            zeroForOne: true, amountSpecified: -int256(5000 ether), sqrtPriceLimitX96: TickMath.MIN_SQRT_PRICE + 1
         });
         try swapRouter.swap(key, dumpNANA, PoolSwapTest.TestSettings(false, false), abi.encode(uint256(100))) {}
             catch {}
@@ -1375,7 +1373,8 @@ contract JBUniswapV4HookForkTest is Test {
         });
         try swapRouter.swap{value: 50 ether}(
             nativeKey, pushUp, PoolSwapTest.TestSettings(false, false), abi.encode(uint256(0))
-        ) {} catch {}
+        ) {}
+            catch {}
 
         // Compare outputs to confirm JB is better
         PoolId nativeId = nativeKey.toId();
