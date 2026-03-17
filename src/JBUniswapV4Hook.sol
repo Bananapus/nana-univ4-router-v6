@@ -124,6 +124,10 @@ contract JBUniswapV4Hook is BaseHook {
     /// @notice The current observation array state for the given pool ID
     mapping(PoolId => ObservationState) public states;
 
+    //*********************************************************************//
+    // -------------------- private stored properties ------------------- //
+    //*********************************************************************//
+
     /// @notice Flag to prevent recursive routing through Juicebox during swap hooks.
     /// @dev Set to true before `_routeThroughJuicebox`, checked at `_beforeSwap` entry.
     ///      Uses a custom flag instead of OZ ReentrancyGuard to avoid conflicts with PoolManager's unlock callback.
