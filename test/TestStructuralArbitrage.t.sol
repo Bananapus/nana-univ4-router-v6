@@ -894,5 +894,4 @@ contract TestStructuralArbitrage is Test {
         // --- Part C: Conservation ---
         assertEq(partialExtracted + finalReclaim, INITIAL_SURPLUS, "Conservation: total extracted = initial surplus");
     }
-
 }
