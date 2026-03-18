@@ -175,6 +175,10 @@ contract JBUniswapV4Hook is BaseHook {
     //*********************************************************************//
 
     /// @notice Calculate expected output from selling JB tokens
+    /// @dev This estimate uses the ruleset's static cashOutTaxRate via the terminal store. If the project has a data
+    /// hook that overrides cashout parameters at cashout time, the actual reclaim may differ from this estimate,
+    /// potentially causing the swap-vs-cashout routing decision to diverge from what would be optimal.
+    /// The estimate also conservatively deducts fees even for feeless addresses, which may underestimate output.
     /// @param projectId The Juicebox project ID
     /// @param tokenAmountIn The amount of JB tokens being sold
     /// @param outputToken The token to receive (e.g., ETH, USDC)
@@ -226,6 +230,9 @@ contract JBUniswapV4Hook is BaseHook {
     }
 
     /// @notice Calculate expected tokens for a given payment amount in any currency
+    /// @dev This estimate uses the ruleset's static weight. If the project has a data hook (such as a buyback hook)
+    /// that overrides the weight at payment time, the actual token issuance may differ from this estimate,
+    /// potentially causing the swap-vs-mint routing decision to diverge from what would be optimal.
     /// @param projectId The Juicebox project ID
     /// @param paymentToken The token being used for payment
     /// @param paymentAmount The amount being paid (in the token's native decimals)
@@ -678,6 +685,21 @@ contract JBUniswapV4Hook is BaseHook {
             juiceboxExpectedOutput = calculateExpectedOutputFromSelling({
                 projectId: sellProjectId, tokenAmountIn: amountIn, outputToken: tokenOut, terminal: jbTerminal
             });
+
+            // Skip JB routing for zero-tax projects to prevent structural arbitrage.
+            // With cashOutTaxRate == 0, the bonding curve imposes no penalty, so repeated cashouts
+            // extract surplus without convergence. Let the V4 AMM handle these swaps instead.
+            if (juiceboxExpectedOutput > 0) {
+                try IJBController(address(DIRECTORY.controllerOf(sellProjectId))).currentRulesetOf(sellProjectId)
+                returns (JBRuleset memory ruleset, JBRulesetMetadata memory) {
+                    if (JBRulesetMetadataResolver.cashOutTaxRate(ruleset) == 0) {
+                        juiceboxExpectedOutput = 0;
+                    }
+                } catch {
+                    // If we can't read the ruleset, don't route through JB.
+                    juiceboxExpectedOutput = 0;
+                }
+            }
         } else {
             // No JB token involved, proceed with normal Uniswap swap
             emit RouteSelected(poolId, false, 0, msg.sender);
