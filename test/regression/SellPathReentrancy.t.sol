@@ -429,7 +429,7 @@ contract SellPathReentrancyTest is Test {
         // 4. Terminal attempts PM.swap() which triggers hook._beforeSwap
         // 5. _beforeSwap sees _routing == true, reverts JBUniswapV4Hook_ReentrantRouting
         // 6. Entire transaction unwinds
-        vm.expectRevert();
+        vm.expectRevert(JBUniswapV4Hook.JBUniswapV4Hook_ReentrantRouting.selector);
         jbSwapRouter.swap(key, params, 0);
 
         // Verify the terminal did attempt reentrancy (it was called)

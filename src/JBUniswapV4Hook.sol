@@ -43,12 +43,13 @@ import {Oracle} from "./libraries/Oracle.sol";
 /// @dev This hook compares prices between Uniswap V4 pools and Juicebox projects, then routes to the option that gives
 /// users the most tokens. It uses TWAP (Time-Weighted Average Price) oracles to protect against manipulation.
 ///      Provides IGeomeanOracle-compatible `observe()` for TWAP queries by external contracts.
-/// @dev COMPOSITION NOTE — This hook is designed to serve as the ORACLE_HOOK for JBBuybackHook on the same V4 pool.
+/// @dev COMPOSITION WARNING — This hook is designed to serve as the ORACLE_HOOK for JBBuybackHook on the same V4 pool.
 /// When the buyback hook attempts a swap, it flows through this hook's `_beforeSwap` routing logic. If the routing
 /// decision leads back to Juicebox (via `_routeThroughJuicebox`), the `_routing` reentrancy guard prevents infinite
 /// recursion and the buyback hook falls back to minting. This weight comparison uses static issuance weight while
-/// the buyback hook uses TWAP-derived estimates, so the two may occasionally disagree on routing — this is expected
-/// and handled gracefully by the try/catch fallback in the buyback hook.
+/// the buyback hook uses TWAP-derived estimates, so the two may occasionally disagree on routing. Deployers MUST
+/// ensure that the project's data hook does not override weight in a way that makes the static estimate dangerously
+/// stale — otherwise routing decisions will consistently diverge, causing users to receive suboptimal rates.
 contract JBUniswapV4Hook is BaseHook {
     using PoolIdLibrary for PoolKey;
     using StateLibrary for IPoolManager;
@@ -230,9 +231,9 @@ contract JBUniswapV4Hook is BaseHook {
     }
 
     /// @notice Calculate expected tokens for a given payment amount in any currency
-    /// @dev This estimate uses the ruleset's static weight. If the project has a data hook (such as a buyback hook)
-    /// that overrides the weight at payment time, the actual token issuance may differ from this estimate,
-    /// potentially causing the swap-vs-mint routing decision to diverge from what would be optimal.
+    /// @dev WARNING: This estimate uses the ruleset's static weight. If the project has a data hook (such as a
+    /// buyback hook) that overrides the weight at payment time, the actual token issuance may differ from this
+    /// estimate, causing the swap-vs-mint routing decision to diverge. Deployers must ensure weight compatibility.
     /// @param projectId The Juicebox project ID
     /// @param paymentToken The token being used for payment
     /// @param paymentAmount The amount being paid (in the token's native decimals)

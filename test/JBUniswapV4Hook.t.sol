@@ -2188,7 +2188,7 @@ contract JuiceboxHookTest is Test {
 
         // The swap should revert: hook routes through JB → terminal.pay() attempts reentrant swap
         // → hook._beforeSwap sees _routing == true → reverts JBUniswapV4Hook_ReentrantRouting
-        vm.expectRevert();
+        vm.expectRevert(JBUniswapV4Hook.JBUniswapV4Hook_ReentrantRouting.selector);
         jbSwapRouter.swap(key, params, 0);
 
         // Restore original terminal for other tests
