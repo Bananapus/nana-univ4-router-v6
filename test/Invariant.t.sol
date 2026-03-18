@@ -18,9 +18,7 @@ import {TickMath} from "@uniswap/v4-core/src/libraries/TickMath.sol";
 import {Hooks} from "@uniswap/v4-core/src/libraries/Hooks.sol";
 
 import {JBUniswapV4Hook} from "../src/JBUniswapV4Hook.sol";
-import {Oracle} from "../src/libraries/Oracle.sol";
 import {MockERC20} from "./mock/MockERC20.sol";
-import {JuiceboxSwapRouter} from "./utils/JuiceboxSwapRouter.sol";
 import {IJBTokens, IJBPrices, IJBDirectory, IJBTerminalStore} from "../src/JBUniswapV4Hook.sol";
 import {IJBTerminal} from "@bananapus/core-v6/src/interfaces/IJBTerminal.sol";
 import {JBAccountingContext} from "@bananapus/core-v6/src/structs/JBAccountingContext.sol";
@@ -393,11 +391,17 @@ contract InvariantTest is Test {
     using StateLibrary for IPoolManager;
 
     JBUniswapV4Hook hook;
+    // forge-lint: disable-next-line(mixed-case-variable)
     MockJBTokensInv mockJBTokens;
+    // forge-lint: disable-next-line(mixed-case-variable)
     MockJBDirectoryInv mockJBDirectory;
+    // forge-lint: disable-next-line(mixed-case-variable)
     MockJBMultiTerminalInv mockJBMultiTerminal;
+    // forge-lint: disable-next-line(mixed-case-variable)
     MockJBControllerInv mockJBController;
+    // forge-lint: disable-next-line(mixed-case-variable)
     MockJBPricesInv mockJBPrices;
+    // forge-lint: disable-next-line(mixed-case-variable)
     MockJBTerminalStoreInv mockJBTerminalStore;
 
     PoolManager manager;

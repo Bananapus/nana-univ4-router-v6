@@ -1,6 +1,6 @@
 {
   "name": "@bananapus/univ4-router-v6",
-  "version": "0.0.7",
+  "version": "0.0.8",
   "license": "MIT",
   "repository": {
     "type": "git",
@@ -14,7 +14,7 @@
     "coverage": "forge coverage --match-path \"./src/*.sol\" --report lcov --report summary"
   },
   "dependencies": {
-    "@bananapus/core-v6": "^0.0.16",
+    "@bananapus/core-v6": "^0.0.17",
     "@openzeppelin/contracts": "^5.6.1",
     "@openzeppelin/uniswap-hooks": "^1.1.1",
     "@prb/math": "^4.1.0",
@@ -24,5 +24,7 @@
     "@uniswap/v4-periphery": "^1.0.3",
     "solmate": "^6.8.0"
   },
-  "devDependencies": {}
+  "devDependencies": {
+    "@sphinx-labs/plugins": "^0.33.3"
+  }
 }

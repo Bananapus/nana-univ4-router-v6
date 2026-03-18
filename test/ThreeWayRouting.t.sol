@@ -342,11 +342,17 @@ contract TwoWayRoutingTest is Test {
     using StateLibrary for IPoolManager;
 
     JBUniswapV4Hook hook;
+    // forge-lint: disable-next-line(mixed-case-variable)
     MockJBTokens mockJBTokens;
+    // forge-lint: disable-next-line(mixed-case-variable)
     MockJBDirectory mockJBDirectory;
+    // forge-lint: disable-next-line(mixed-case-variable)
     MockJBMultiTerminal mockJBMultiTerminal;
+    // forge-lint: disable-next-line(mixed-case-variable)
     MockJBController mockJBController;
+    // forge-lint: disable-next-line(mixed-case-variable)
     MockJBPrices mockJBPrices;
+    // forge-lint: disable-next-line(mixed-case-variable)
     MockJBTerminalStore mockJBTerminalStore;
 
     PoolManager manager;
@@ -532,13 +538,16 @@ contract TwoWayRoutingTest is Test {
     /// Then V4 passthrough happens (no JB involvement)
     /// And RouteSelected is emitted with useJuicebox=false
     function test_TwoWay_JBTerminalUnavailable() public {
+        // forge-lint: disable-next-line(mixed-case-variable)
         MockERC20 nonJBToken0 = new MockERC20("NonJB0", "NJB0");
+        // forge-lint: disable-next-line(mixed-case-variable)
         MockERC20 nonJBToken1 = new MockERC20("NonJB1", "NJB1");
 
         if (address(nonJBToken0) > address(nonJBToken1)) {
             (nonJBToken0, nonJBToken1) = (nonJBToken1, nonJBToken0);
         }
 
+        // forge-lint: disable-next-line(mixed-case-variable)
         PoolKey memory nonJBKey = PoolKey({
             currency0: Currency.wrap(address(nonJBToken0)),
             currency1: Currency.wrap(address(nonJBToken1)),
@@ -559,6 +568,7 @@ contract TwoWayRoutingTest is Test {
             ZERO_BYTES
         );
 
+        // forge-lint: disable-next-line(mixed-case-variable)
         PoolId nonJBId = nonJBKey.toId();
 
         // Approve for swap and set expectEmit right before swap call
@@ -616,6 +626,7 @@ contract TwoWayRoutingTest is Test {
         mockJBMultiTerminal.setProjectToken(ethProjectId, address(ethPairToken));
 
         // currency0 = native ETH (address(0)), currency1 = ethPairToken
+        // forge-lint: disable-next-line(mixed-case-variable)
         Currency nativeETH = Currency.wrap(address(0));
         Currency wrappedToken = Currency.wrap(address(ethPairToken));
 

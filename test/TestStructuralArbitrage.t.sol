@@ -454,6 +454,7 @@ contract TestStructuralArbitrage is Test {
         // Configure JB project: token0 is the project token
         mockJbTokens.setProjectId(address(token0), PROJECT_ID);
         mockJbController.setWeight(PROJECT_ID, 1000e18);
+        // forge-lint: disable-next-line(unsafe-typecast)
         mockJbController.setCashOutTaxRate(PROJECT_ID, uint16(CASH_OUT_TAX_RATE));
         terminal.setProjectToken(PROJECT_ID, address(token0));
 

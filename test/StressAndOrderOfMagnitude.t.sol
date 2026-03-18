@@ -79,6 +79,7 @@ contract MockJBDirectory {
 contract MockJBPrices {
     mapping(uint256 => mapping(uint256 => mapping(uint256 => uint256))) public prices;
 
+    // forge-lint: disable-next-line(mixed-case-function)
     function DEFAULT_PROJECT_ID() external pure returns (uint256) {
         return 0;
     }
@@ -117,6 +118,7 @@ contract MockJBMultiTerminal {
 
     mapping(uint256 => address) public projectTokens;
 
+    // forge-lint: disable-next-line(mixed-case-variable)
     MockJBTerminalStore public TERMINAL_STORE;
 
     uint256 public overridePayReturnAmount;
@@ -125,6 +127,7 @@ contract MockJBMultiTerminal {
     bool public useOverrideCashOutReturn;
 
     /// @notice JB protocol fee (2.5% = 25 out of MAX_FEE 1000).
+    // forge-lint: disable-next-line(mixed-case-function)
     function FEE() external pure returns (uint256) {
         return 25;
     }
@@ -137,6 +140,7 @@ contract MockJBMultiTerminal {
         TERMINAL_STORE = MockJBTerminalStore(terminalStore);
     }
 
+    // forge-lint: disable-next-line(mixed-case-function)
     function STORE() external view returns (IJBTerminalStore) {
         return IJBTerminalStore(address(TERMINAL_STORE));
     }
@@ -318,11 +322,17 @@ contract StressAndOrderOfMagnitudeTest is Test {
     using StateLibrary for IPoolManager;
 
     JBUniswapV4Hook hook;
+    // forge-lint: disable-next-line(mixed-case-variable)
     MockJBTokens mockJBTokens;
+    // forge-lint: disable-next-line(mixed-case-variable)
     MockJBDirectory mockJBDirectory;
+    // forge-lint: disable-next-line(mixed-case-variable)
     MockJBMultiTerminal mockJBMultiTerminal;
+    // forge-lint: disable-next-line(mixed-case-variable)
     MockJBController mockJBController;
+    // forge-lint: disable-next-line(mixed-case-variable)
     MockJBPrices mockJBPrices;
+    // forge-lint: disable-next-line(mixed-case-variable)
     MockJBTerminalStore mockJBTerminalStore;
 
     PoolManager manager;
