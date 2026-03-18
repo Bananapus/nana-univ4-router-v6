@@ -332,11 +332,11 @@ contract TestStructuralArbitrage is Test {
     using StateLibrary for IPoolManager;
 
     JBUniswapV4Hook hook;
-    MockJBTokensSA mockJBTokens;
-    MockJBDirectorySA mockJBDirectory;
+    MockJBTokensSA mockJbTokens;
+    MockJBDirectorySA mockJbDirectory;
     ConcaveBondingCurveTerminal terminal;
-    MockJBControllerSA mockJBController;
-    MockJBPricesSA mockJBPrices;
+    MockJBControllerSA mockJbController;
+    MockJBPricesSA mockJbPrices;
     ConcaveBondingCurveStore terminalStore;
 
     PoolManager manager;
@@ -375,10 +375,10 @@ contract TestStructuralArbitrage is Test {
         modifyLiquidityRouter = new PoolModifyLiquidityTest(IPoolManager(address(manager)));
 
         // Deploy JB mocks
-        mockJBTokens = new MockJBTokensSA();
-        mockJBDirectory = new MockJBDirectorySA();
-        mockJBController = new MockJBControllerSA();
-        mockJBPrices = new MockJBPricesSA();
+        mockJbTokens = new MockJBTokensSA();
+        mockJbDirectory = new MockJBDirectorySA();
+        mockJbController = new MockJBControllerSA();
+        mockJbPrices = new MockJBPricesSA();
 
         // Deploy concave bonding curve terminal and store
         terminal = new ConcaveBondingCurveTerminal();
@@ -386,8 +386,8 @@ contract TestStructuralArbitrage is Test {
         terminal.setStore(address(terminalStore));
 
         // Wire up directory
-        mockJBDirectory.setMockTerminal(address(terminal));
-        mockJBDirectory.setMockController(address(mockJBController));
+        mockJbDirectory.setMockTerminal(address(terminal));
+        mockJbDirectory.setMockController(address(mockJbController));
 
         // Deploy hook with address-mined salt
         uint160 flags = uint160(
@@ -398,9 +398,9 @@ contract TestStructuralArbitrage is Test {
 
         bytes memory constructorArgs = abi.encode(
             IPoolManager(address(manager)),
-            IJBTokens(address(mockJBTokens)),
-            IJBDirectory(address(mockJBDirectory)),
-            IJBPrices(address(mockJBPrices))
+            IJBTokens(address(mockJbTokens)),
+            IJBDirectory(address(mockJbDirectory)),
+            IJBPrices(address(mockJbPrices))
         );
 
         (, bytes32 salt) =
@@ -408,9 +408,9 @@ contract TestStructuralArbitrage is Test {
 
         hook = new JBUniswapV4Hook{salt: salt}(
             IPoolManager(address(manager)),
-            IJBTokens(address(mockJBTokens)),
-            IJBDirectory(address(mockJBDirectory)),
-            IJBPrices(address(mockJBPrices))
+            IJBTokens(address(mockJbTokens)),
+            IJBDirectory(address(mockJbDirectory)),
+            IJBPrices(address(mockJbPrices))
         );
 
         // Create tokens, ensuring correct ordering (currency0 < currency1)
@@ -422,13 +422,13 @@ contract TestStructuralArbitrage is Test {
         }
 
         // Configure JB project: token0 is the project token
-        mockJBTokens.setProjectId(address(token0), PROJECT_ID);
-        mockJBController.setWeight(PROJECT_ID, 1000e18);
+        mockJbTokens.setProjectId(address(token0), PROJECT_ID);
+        mockJbController.setWeight(PROJECT_ID, 1000e18);
         terminal.setProjectToken(PROJECT_ID, address(token0));
 
         // Set price feed: 1:1 between token1 and base currency
         uint32 token1CurrencyId = uint32(uint160(address(token1)));
-        mockJBPrices.setPricePerUnitOf(PROJECT_ID, token1CurrencyId, 1, 1e18);
+        mockJbPrices.setPricePerUnitOf(PROJECT_ID, token1CurrencyId, 1, 1e18);
 
         // Initialize bonding curve
         terminalStore.configure(INITIAL_SURPLUS, INITIAL_SUPPLY, CASH_OUT_TAX_RATE);
@@ -468,13 +468,14 @@ contract TestStructuralArbitrage is Test {
     // ============================================
 
     /// @dev Sells `amount` of token0 (JB token) for token1 via the hook router.
-    function _sellJBTokens(uint256 amount) internal {
+    function _sellJbTokens(uint256 amount) internal {
         token0.mint(address(this), amount);
         token0.approve(address(jbSwapRouter), amount);
 
         SwapParams memory params = SwapParams({
             zeroForOne: true,
-            amountSpecified: -int256(amount),
+            // forge-lint: disable-next-line(unsafe-typecast)
+            amountSpecified: -int256(amount), // safe: test amounts are small
             sqrtPriceLimitX96: TickMath.MIN_SQRT_PRICE + 1
         });
 
@@ -590,7 +591,7 @@ contract TestStructuralArbitrage is Test {
         uint256 numSwaps = 15;
 
         for (uint256 i = 0; i < numSwaps; i++) {
-            _sellJBTokens(SWAP_SIZE);
+            _sellJbTokens(SWAP_SIZE);
         }
 
         uint256 totalExtracted = terminal.cumulativeOutput();
@@ -649,7 +650,7 @@ contract TestStructuralArbitrage is Test {
         for (uint256 i = 0; i < maxSwaps; i++) {
             uint256 cashoutsBefore = terminal.callCount();
 
-            _sellJBTokens(SWAP_SIZE);
+            _sellJbTokens(SWAP_SIZE);
 
             uint256 cashoutsAfter = terminal.callCount();
 

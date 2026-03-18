@@ -834,11 +834,11 @@ contract TwoWayRoutingTest is Test {
         mockJBMultiTerminal.setProjectToken(ethProjectId, address(ethPairToken));
 
         // currency0 = native ETH (address(0)), currency1 = ethPairToken (JB token)
-        Currency nativeETH = Currency.wrap(address(0));
+        Currency nativeEth = Currency.wrap(address(0));
         Currency wrappedToken = Currency.wrap(address(ethPairToken));
 
         PoolKey memory ethKey = PoolKey({
-            currency0: nativeETH, currency1: wrappedToken, fee: 3000, tickSpacing: 60, hooks: IHooks(address(hook))
+            currency0: nativeEth, currency1: wrappedToken, fee: 3000, tickSpacing: 60, hooks: IHooks(address(hook))
         });
 
         vm.deal(address(this), 100 ether);
@@ -858,8 +858,8 @@ contract TwoWayRoutingTest is Test {
         // Set cashout surplus for the project
         // The output token is native ETH. After normalization, JB_NATIVE_TOKEN = 0xEEEe
         // Use that address for the surplus so calculateExpectedOutputFromSelling can look it up
-        address JB_NATIVE_TOKEN = address(0x000000000000000000000000000000000000EEEe);
-        mockJBTerminalStore.setSurplus(ethProjectId, JB_NATIVE_TOKEN, 0.5 ether);
+        address jbNativeToken = address(0x000000000000000000000000000000000000EEEe);
+        mockJBTerminalStore.setSurplus(ethProjectId, jbNativeToken, 0.5 ether);
 
         // zeroForOne=false means selling currency1 (ethPairToken = JB token) for currency0 (native ETH)
         // This is the sell-side path: tokenIn = JB token, tokenOut = ETH
