@@ -78,6 +78,7 @@ contract MockJBDirectory_AuditGaps {
 contract MockJBPrices_AuditGaps {
     mapping(uint256 => mapping(uint256 => mapping(uint256 => uint256))) public prices;
 
+    // forge-lint: disable-next-line(mixed-case-function)
     function DEFAULT_PROJECT_ID() external pure returns (uint256) {
         return 0;
     }
@@ -139,10 +140,12 @@ contract MockJBMultiTerminal_AuditGaps {
     uint256 public lastAmount;
     address public lastBeneficiary;
     mapping(uint256 => address) public projectTokens;
+    // forge-lint: disable-next-line(mixed-case-variable)
     MockJBTerminalStore_AuditGaps public TERMINAL_STORE;
     uint256 public overridePayReturnAmount;
     bool public useOverridePayReturn;
 
+    // forge-lint: disable-next-line(mixed-case-function)
     function FEE() external pure returns (uint256) {
         return 25;
     }
@@ -155,6 +158,7 @@ contract MockJBMultiTerminal_AuditGaps {
         TERMINAL_STORE = MockJBTerminalStore_AuditGaps(terminalStore);
     }
 
+    // forge-lint: disable-next-line(mixed-case-function)
     function STORE() external view returns (IJBTerminalStore) {
         return IJBTerminalStore(address(TERMINAL_STORE));
     }
@@ -308,11 +312,17 @@ contract TestAuditGaps_TWAPManipulationCost is Test {
     using StateLibrary for IPoolManager;
 
     JBUniswapV4Hook hook;
+    // forge-lint: disable-next-line(mixed-case-variable)
     MockJBTokens_AuditGaps mockJBTokens;
+    // forge-lint: disable-next-line(mixed-case-variable)
     MockJBDirectory_AuditGaps mockJBDirectory;
+    // forge-lint: disable-next-line(mixed-case-variable)
     MockJBMultiTerminal_AuditGaps mockJBMultiTerminal;
+    // forge-lint: disable-next-line(mixed-case-variable)
     MockJBController_AuditGaps mockJBController;
+    // forge-lint: disable-next-line(mixed-case-variable)
     MockJBPrices_AuditGaps mockJBPrices;
+    // forge-lint: disable-next-line(mixed-case-variable)
     MockJBTerminalStore_AuditGaps mockJBTerminalStore;
     PoolManager manager;
     PoolSwapTest swapRouter;
@@ -457,6 +467,7 @@ contract TestAuditGaps_TWAPManipulationCost is Test {
         assertGe(card, 2, "Cardinality should be >= 2 for TWAP");
 
         // Phase 2: Record the baseline TWAP estimate (before manipulation)
+        // forge-lint: disable-next-line(mixed-case-variable)
         uint256 baselineTWAP = hook.estimateUniswapOutput(id, key, 1 ether, true);
         assertGt(baselineTWAP, 0, "Baseline TWAP estimate should be positive");
         console.log("Baseline TWAP estimate for 1 ETH:", baselineTWAP);
@@ -468,6 +479,7 @@ contract TestAuditGaps_TWAPManipulationCost is Test {
         _doSwap(true, -10 ether);
 
         // Phase 4: Measure the post-manipulation TWAP estimate
+        // forge-lint: disable-next-line(mixed-case-variable)
         uint256 postManipTWAP = hook.estimateUniswapOutput(id, key, 1 ether, true);
         assertGt(postManipTWAP, 0, "Post-manipulation TWAP estimate should be positive");
         console.log("Post-manipulation TWAP estimate for 1 ETH:", postManipTWAP);
@@ -545,6 +557,7 @@ contract TestAuditGaps_TWAPManipulationCost is Test {
             }
         }
 
+        // forge-lint: disable-next-line(mixed-case-variable)
         uint256 baselineTWAP = hook.estimateUniswapOutput(id, key, 1 ether, true);
         assertGt(baselineTWAP, 0, "Baseline should be positive");
         console.log("[5-block] Baseline TWAP:", baselineTWAP);
@@ -556,6 +569,7 @@ contract TestAuditGaps_TWAPManipulationCost is Test {
             _doSwap(true, -5 ether);
         }
 
+        // forge-lint: disable-next-line(mixed-case-variable)
         uint256 postManipTWAP = hook.estimateUniswapOutput(id, key, 1 ether, true);
         console.log("[5-block] Post-manipulation TWAP:", postManipTWAP);
 
@@ -594,6 +608,7 @@ contract TestAuditGaps_TWAPManipulationCost is Test {
             }
         }
 
+        // forge-lint: disable-next-line(mixed-case-variable)
         uint256 baselineTWAP = hook.estimateUniswapOutput(id, key, 1 ether, true);
 
         // Phase 2: Manipulate for 5 blocks
@@ -603,6 +618,7 @@ contract TestAuditGaps_TWAPManipulationCost is Test {
             _doSwap(true, -5 ether);
         }
 
+        // forge-lint: disable-next-line(mixed-case-variable)
         uint256 postManipTWAP = hook.estimateUniswapOutput(id, key, 1 ether, true);
 
         // Phase 3: Resume balanced trading. Swap back to restore price, then trade normally.
@@ -622,6 +638,7 @@ contract TestAuditGaps_TWAPManipulationCost is Test {
             }
         }
 
+        // forge-lint: disable-next-line(mixed-case-variable)
         uint256 recoveredTWAP = hook.estimateUniswapOutput(id, key, 1 ether, true);
         console.log("[recovery] Baseline TWAP:", baselineTWAP);
         console.log("[recovery] Post-manipulation TWAP:", postManipTWAP);
@@ -680,11 +697,17 @@ contract TestAuditGaps_SpotFallbackSandwichWindow is Test {
     using StateLibrary for IPoolManager;
 
     JBUniswapV4Hook hook;
+    // forge-lint: disable-next-line(mixed-case-variable)
     MockJBTokens_AuditGaps mockJBTokens;
+    // forge-lint: disable-next-line(mixed-case-variable)
     MockJBDirectory_AuditGaps mockJBDirectory;
+    // forge-lint: disable-next-line(mixed-case-variable)
     MockJBMultiTerminal_AuditGaps mockJBMultiTerminal;
+    // forge-lint: disable-next-line(mixed-case-variable)
     MockJBController_AuditGaps mockJBController;
+    // forge-lint: disable-next-line(mixed-case-variable)
     MockJBPrices_AuditGaps mockJBPrices;
+    // forge-lint: disable-next-line(mixed-case-variable)
     MockJBTerminalStore_AuditGaps mockJBTerminalStore;
     PoolManager manager;
     PoolSwapTest swapRouter;
@@ -887,6 +910,7 @@ contract TestAuditGaps_SpotFallbackSandwichWindow is Test {
         }
 
         // Verify TWAP is now active
+        // forge-lint: disable-next-line(mixed-case-variable)
         uint256 baselineTWAP = hook.estimateUniswapOutput(id, key, 1 ether, true);
         assertGt(baselineTWAP, 0, "TWAP baseline should be positive");
         console.log("[post-warmup] TWAP baseline:", baselineTWAP);
@@ -896,6 +920,7 @@ contract TestAuditGaps_SpotFallbackSandwichWindow is Test {
         vm.warp(ts);
         _doSwap(true, -50 ether);
 
+        // forge-lint: disable-next-line(mixed-case-variable)
         uint256 postPushTWAP = hook.estimateUniswapOutput(id, key, 1 ether, true);
         console.log("[post-warmup] TWAP after 50 ETH push:", postPushTWAP);
 

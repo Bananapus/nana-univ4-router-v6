@@ -224,7 +224,6 @@ contract JBUniswapV4HookForkTest is Test {
         assertTrue(metadata.baseCurrency > 0, "Project should have a base currency");
 
         // Test calculating expected tokens with ETH payment
-        uint256 ethAmount = 1 ether;
         uint256 expectedTokens = hook.calculateExpectedTokensWithCurrency(projectId, address(0), 1 ether);
 
         // Should return tokens based on the project's weight
@@ -249,7 +248,7 @@ contract JBUniswapV4HookForkTest is Test {
     }
 
     /// @notice Test that the hook can detect if a token is a Juicebox project token
-    function testDetectJuiceboxToken() public {
+    function testDetectJuiceboxToken() public view {
         // This test would need a real JB project token address
         // For now, we just verify the hook can call the TOKENS contract
         try IJBTokens(MAINNET_JB_TOKENS).projectIdOf(IJBToken(address(NANA))) returns (uint256 projectId) {
@@ -259,7 +258,7 @@ contract JBUniswapV4HookForkTest is Test {
             // Expected to fail for invalid token - address(0) is not a valid IJBToken
             console.log("projectIdOf failed for invalid token:", reason);
             // This is expected behavior
-        } catch (bytes memory lowLevelData) {
+        } catch (bytes memory) {
             // Low-level revert (e.g., invalid function selector, contract doesn't exist)
             console.log("projectIdOf reverted with low-level error");
             // This is acceptable - the token contract may not exist or be invalid
@@ -292,7 +291,7 @@ contract JBUniswapV4HookForkTest is Test {
             // Estimation may fail if pool has issues (no observations, invalid state)
             console.log("Uniswap output estimation failed:", reason);
             // This is acceptable - pool may not have enough TWAP data yet
-        } catch (bytes memory lowLevelData) {
+        } catch (bytes memory) {
             // Low-level revert (e.g., division by zero, arithmetic overflow)
             console.log("Uniswap output estimation reverted with low-level error");
             // This is acceptable - pool state may be invalid or calculations may overflow
@@ -358,6 +357,7 @@ contract JBUniswapV4HookForkTest is Test {
         uint256 projectId = IJBTokens(MAINNET_JB_TOKENS).projectIdOf(IJBToken(NANA));
         if (projectId != 0) {
             // Get terminal for the output token (WETH)
+            // forge-lint: disable-next-line(mixed-case-variable)
             address normalizedWETH = address(0x000000000000000000000000000000000000EEEe);
             IJBTerminal jbTerminal;
             try IJBDirectory(MAINNET_JB_DIRECTORY).primaryTerminalOf(projectId, normalizedWETH) returns (
@@ -444,7 +444,7 @@ contract JBUniswapV4HookForkTest is Test {
         return keccak256("BestRouteSelected(bytes32,uint8,uint256,address)");
     }
 
-    function _getLastBestRouteFromLogs() private returns (uint8 routeType, uint256 expectedTokens) {
+    function _getLastBestRouteFromLogs() private view returns (uint8 routeType, uint256 expectedTokens) {
         Vm.Log[] memory entries = vm.getRecordedLogs();
         bytes32 sig = _bestRouteSelectedSig();
         for (uint256 i = entries.length; i > 0; i--) {
@@ -483,6 +483,7 @@ contract JBUniswapV4HookForkTest is Test {
         // Push price to make NANA cheaper vs WETH for a subsequent WETH->NANA swap:
         // Do a large NANA->WETH swap (zeroForOne=true) which increases NANA reserves and removes WETH.
         IERC20(NANA).approve(address(swapRouter), type(uint256).max);
+        // forge-lint: disable-next-line(mixed-case-variable)
         SwapParams memory pushDownNANAPrice = SwapParams({
             zeroForOne: true, amountSpecified: -int256(5000 ether), sqrtPriceLimitX96: TickMath.MIN_SQRT_PRICE + 1
         });
@@ -502,7 +503,7 @@ contract JBUniswapV4HookForkTest is Test {
             sqrtPriceLimitX96: TickMath.MAX_SQRT_PRICE - 1
         });
         try jbSwapRouter.swap(key, testSwap, 0) { // 1% slippage
-            (uint8 route, uint256 expectedTokens) = _getLastBestRouteFromLogs();
+            (uint8 route,) = _getLastBestRouteFromLogs();
             // Expect v4 due to manipulated favorable v4 price
             assertEq(route, 0, "Expected best route to be v4");
         } catch Error(string memory reason) {
@@ -540,6 +541,7 @@ contract JBUniswapV4HookForkTest is Test {
 
         // Push price to make WETH cheaper vs NANA for a subsequent NANA->WETH swap:
         // Do a large WETH->NANA swap (zeroForOne=false) which increases WETH reserves and removes NANA.
+        // forge-lint: disable-next-line(mixed-case-variable)
         SwapParams memory pushUpWETHSupply = SwapParams({
             zeroForOne: false, amountSpecified: -int256(5000 ether), sqrtPriceLimitX96: TickMath.MAX_SQRT_PRICE - 1
         });
@@ -557,7 +559,7 @@ contract JBUniswapV4HookForkTest is Test {
             sqrtPriceLimitX96: TickMath.MIN_SQRT_PRICE + 1
         });
         try jbSwapRouter.swap(key, testSwap, 0) { // 1% slippage
-            (uint8 route, uint256 expectedTokens) = _getLastBestRouteFromLogs();
+            (uint8 route,) = _getLastBestRouteFromLogs();
             // Expect v4 due to manipulated favorable v4 price
             assertEq(route, 0, "Expected best route to be v4");
         } catch Error(string memory reason) {
@@ -639,6 +641,7 @@ contract JBUniswapV4HookForkTest is Test {
         } catch {}
 
         // Record initial balance before swap
+        // forge-lint: disable-next-line(mixed-case-variable)
         uint256 initialNANA = IERC20(NANA).balanceOf(user);
 
         // Execute via JB router to let hook choose
@@ -651,7 +654,7 @@ contract JBUniswapV4HookForkTest is Test {
         });
 
         try jbSwapRouter.swap{value: amountIn}(useKey, testSwap, 100) { // 1% slippage
-            (uint8 route, uint256 expectedTokens) = _getLastBestRouteFromLogs();
+            (uint8 route,) = _getLastBestRouteFromLogs();
 
             // Check for primary terminal (same check as in JBUniswapV4Hook.sol)
             // When buying with WETH, we need to look up terminal that accepts native ETH (JB_NATIVE_TOKEN)
@@ -668,6 +671,7 @@ contract JBUniswapV4HookForkTest is Test {
                 assertEq(route, 1, "Expected route to be juicebox");
 
                 // Verify quote accuracy: check actual tokens received match quote
+                // forge-lint: disable-next-line(mixed-case-variable)
                 uint256 finalNANA = IERC20(NANA).balanceOf(user);
                 uint256 nanaReceived = finalNANA > initialNANA ? finalNANA - initialNANA : 0;
 
@@ -746,6 +750,7 @@ contract JBUniswapV4HookForkTest is Test {
 
         uint256 jbOut = 0;
         // Get terminal for the output token (WETH)
+        // forge-lint: disable-next-line(mixed-case-variable)
         address normalizedWETH = address(0x000000000000000000000000000000000000EEEe);
         IJBTerminal jbTerminal;
         try IJBDirectory(MAINNET_JB_DIRECTORY).primaryTerminalOf(projectId, normalizedWETH) returns (IJBTerminal t) {
@@ -758,8 +763,8 @@ contract JBUniswapV4HookForkTest is Test {
         } catch {}
 
         // Record initial balances before swap
+        // forge-lint: disable-next-line(mixed-case-variable)
         uint256 initialWETH = IERC20(WETH).balanceOf(user);
-        uint256 initialNANA = IERC20(NANA).balanceOf(user);
 
         vm.recordLogs();
         SwapParams memory testSwap = SwapParams({
@@ -776,6 +781,7 @@ contract JBUniswapV4HookForkTest is Test {
                 assertEq(route, 1, "Expected route to be juicebox");
 
                 // Verify quote accuracy: check actual WETH received matches quote
+                // forge-lint: disable-next-line(mixed-case-variable)
                 uint256 finalWETH = IERC20(WETH).balanceOf(user);
                 uint256 wethReceived = finalWETH > initialWETH ? finalWETH - initialWETH : 0;
 
@@ -882,7 +888,9 @@ contract JBUniswapV4HookForkTest is Test {
         }
 
         // Record initial balances
+        // forge-lint: disable-next-line(mixed-case-variable)
         uint256 initialUserETH = user.balance;
+        // forge-lint: disable-next-line(mixed-case-variable)
         uint256 initialUserNANA = IERC20(NANA).balanceOf(user);
 
         // Execute buy swap (Native ETH -> NANA)
@@ -901,7 +909,9 @@ contract JBUniswapV4HookForkTest is Test {
             assertEq(route, 1, "Should route through Juicebox");
 
             // Verify user received NANA (proving pay() succeeded and hook settled NANA back)
+            // forge-lint: disable-next-line(mixed-case-variable)
             uint256 finalUserETH = user.balance;
+            // forge-lint: disable-next-line(mixed-case-variable)
             uint256 finalUserNANA = IERC20(NANA).balanceOf(user);
 
             uint256 nanaReceived = finalUserNANA > initialUserNANA ? finalUserNANA - initialUserNANA : 0;
@@ -972,6 +982,7 @@ contract JBUniswapV4HookForkTest is Test {
         jbSwapRouter.swap(key, buySwap, 0); // 1% slippage
 
         // Check user's NANA balance
+        // forge-lint: disable-next-line(mixed-case-variable)
         uint256 userNANABalance = IERC20(NANA).balanceOf(user);
         require(userNANABalance > 0, "User must have NANA tokens to sell");
 
@@ -1001,6 +1012,7 @@ contract JBUniswapV4HookForkTest is Test {
         // When cashing out, we need a terminal that has the token we're cashing out TO (WETH), not the JB token (NANA)
         IJBTerminal jbTerminal;
         // Hook normalizes WETH to JB_NATIVE_TOKEN before lookup
+        // forge-lint: disable-next-line(mixed-case-variable)
         address normalizedWETH = address(0x000000000000000000000000000000000000EEEe);
         try IJBDirectory(MAINNET_JB_DIRECTORY).primaryTerminalOf(projectId, normalizedWETH) returns (IJBTerminal t) {
             jbTerminal = t;
@@ -1028,7 +1040,9 @@ contract JBUniswapV4HookForkTest is Test {
         bool expectJuiceboxRoute = address(jbTerminal) != address(0);
 
         // Record initial balances
+        // forge-lint: disable-next-line(mixed-case-variable)
         uint256 initialUserWETH = IERC20(WETH).balanceOf(user);
+        // forge-lint: disable-next-line(mixed-case-variable)
         uint256 initialUserNANA = IERC20(NANA).balanceOf(user);
 
         // Execute sell swap (NANA -> WETH)
@@ -1060,7 +1074,9 @@ contract JBUniswapV4HookForkTest is Test {
             }
 
             // Verify user received WETH (proving cashOutTokensOf succeeded and hook settled WETH back)
+            // forge-lint: disable-next-line(mixed-case-variable)
             uint256 finalUserWETH = IERC20(WETH).balanceOf(user);
+            // forge-lint: disable-next-line(mixed-case-variable)
             uint256 finalUserNANA = IERC20(NANA).balanceOf(user);
 
             uint256 wethReceived = finalUserWETH > initialUserWETH ? finalUserWETH - initialUserWETH : 0;
@@ -1234,11 +1250,13 @@ contract JBUniswapV4HookForkTest is Test {
         });
         jbSwapRouter.swap(key, buySwap, 0);
 
+        // forge-lint: disable-next-line(mixed-case-variable)
         uint256 userNANA = IERC20(NANA).balanceOf(user);
         require(userNANA > 0, "User must hold NANA to test sell path");
 
         // Step 2: Manipulate v4 price so Juicebox cashout is better than Uniswap for selling.
         // Dump NANA into v4 (NANA -> WETH) to make NANA cheaper in v4.
+        // forge-lint: disable-next-line(mixed-case-variable)
         SwapParams memory dumpNANA = SwapParams({
             zeroForOne: true, amountSpecified: -int256(5000 ether), sqrtPriceLimitX96: TickMath.MIN_SQRT_PRICE + 1
         });
@@ -1256,6 +1274,7 @@ contract JBUniswapV4HookForkTest is Test {
             v4Out = 0;
         }
 
+        // forge-lint: disable-next-line(mixed-case-variable)
         address normalizedETH = address(0x000000000000000000000000000000000000EEEe);
         IJBTerminal jbTerminal;
         try IJBDirectory(MAINNET_JB_DIRECTORY).primaryTerminalOf(projectId, normalizedETH) returns (IJBTerminal t) {
@@ -1284,7 +1303,9 @@ contract JBUniswapV4HookForkTest is Test {
         uint256 allowanceBefore = IERC20(NANA).allowance(address(hook), address(jbTerminal));
 
         // Step 5: Execute sell (NANA -> WETH) routed through Juicebox cashout.
+        // forge-lint: disable-next-line(mixed-case-variable)
         uint256 initialWETH = IERC20(WETH).balanceOf(user);
+        // forge-lint: disable-next-line(mixed-case-variable)
         uint256 initialNANA = IERC20(NANA).balanceOf(user);
 
         vm.recordLogs();
@@ -1307,7 +1328,9 @@ contract JBUniswapV4HookForkTest is Test {
         assertEq(allowanceAfter, allowanceBefore, "Sell path must not set ERC20 allowance on terminal");
 
         // Step 7: Verify user received WETH and spent NANA.
+        // forge-lint: disable-next-line(mixed-case-variable)
         uint256 finalWETH = IERC20(WETH).balanceOf(user);
+        // forge-lint: disable-next-line(mixed-case-variable)
         uint256 finalNANA = IERC20(NANA).balanceOf(user);
 
         uint256 wethReceived = finalWETH > initialWETH ? finalWETH - initialWETH : 0;
@@ -1411,6 +1434,7 @@ contract JBUniswapV4HookForkTest is Test {
         }
 
         // Record initial balances
+        // forge-lint: disable-next-line(mixed-case-variable)
         uint256 initialNANA = IERC20(NANA).balanceOf(user);
 
         // Execute buy swap (native ETH -> NANA)
@@ -1429,6 +1453,7 @@ contract JBUniswapV4HookForkTest is Test {
         assertEq(route, 1, "Buy should route through Juicebox pay()");
 
         // Verify user received NANA (proving terminal.pay() succeeded with correct approval)
+        // forge-lint: disable-next-line(mixed-case-variable)
         uint256 finalNANA = IERC20(NANA).balanceOf(user);
         uint256 nanaReceived = finalNANA > initialNANA ? finalNANA - initialNANA : 0;
         assertTrue(nanaReceived > 0, "User should receive NANA from Juicebox pay()");

@@ -2,7 +2,6 @@
 pragma solidity ^0.8.26;
 
 import {Test} from "forge-std/Test.sol";
-import {console} from "forge-std/console.sol";
 
 import {PoolManager} from "@uniswap/v4-core/src/PoolManager.sol";
 import {IPoolManager} from "@uniswap/v4-core/src/interfaces/IPoolManager.sol";
@@ -78,6 +77,7 @@ contract MockJBDirectory_Oracle {
 contract MockJBPrices_Oracle {
     mapping(uint256 => mapping(uint256 => mapping(uint256 => uint256))) public prices;
 
+    // forge-lint: disable-next-line(mixed-case-function)
     function DEFAULT_PROJECT_ID() external pure returns (uint256) {
         return 0;
     }
@@ -139,11 +139,13 @@ contract MockJBMultiTerminal_Oracle {
     uint256 public lastAmount;
     address public lastBeneficiary;
     mapping(uint256 => address) public projectTokens;
+    // forge-lint: disable-next-line(mixed-case-variable)
     MockJBTerminalStore_Oracle public TERMINAL_STORE;
     uint256 public overridePayReturnAmount;
     bool public useOverridePayReturn;
 
     /// @notice JB protocol fee (2.5% = 25 out of MAX_FEE 1000).
+    // forge-lint: disable-next-line(mixed-case-function)
     function FEE() external pure returns (uint256) {
         return 25;
     }
@@ -156,6 +158,7 @@ contract MockJBMultiTerminal_Oracle {
         TERMINAL_STORE = MockJBTerminalStore_Oracle(terminalStore);
     }
 
+    // forge-lint: disable-next-line(mixed-case-function)
     function STORE() external view returns (IJBTerminalStore) {
         return IJBTerminalStore(address(TERMINAL_STORE));
     }
@@ -297,11 +300,17 @@ contract OracleDeepTest is Test {
     using StateLibrary for IPoolManager;
 
     JBUniswapV4Hook hook;
+    // forge-lint: disable-next-line(mixed-case-variable)
     MockJBTokens_Oracle mockJBTokens;
+    // forge-lint: disable-next-line(mixed-case-variable)
     MockJBDirectory_Oracle mockJBDirectory;
+    // forge-lint: disable-next-line(mixed-case-variable)
     MockJBMultiTerminal_Oracle mockJBMultiTerminal;
+    // forge-lint: disable-next-line(mixed-case-variable)
     MockJBController_Oracle mockJBController;
+    // forge-lint: disable-next-line(mixed-case-variable)
     MockJBPrices_Oracle mockJBPrices;
+    // forge-lint: disable-next-line(mixed-case-variable)
     MockJBTerminalStore_Oracle mockJBTerminalStore;
     PoolManager manager;
     PoolSwapTest swapRouter;
@@ -516,7 +525,7 @@ contract OracleDeepTest is Test {
         vm.warp(10_100);
         _doSwap(true, -0.001 ether);
 
-        (uint16 indexMid, uint16 cardMid, uint16 cardNextMid) = hook.states(id);
+        (uint16 indexMid, uint16 cardMid,) = hook.states(id);
         assertEq(cardMid, 2, "Cardinality should be 2 after first swap (bumped by write)");
         assertEq(indexMid, 1, "Index should be 1 after first swap");
         // Now cardinality==cardinalityNext==2 and index==1==cardinality-1, so next swap triggers auto-grow
@@ -546,7 +555,7 @@ contract OracleDeepTest is Test {
         uint256 ts = 10_100; // start from an explicit timestamp
 
         for (uint256 swapCount = 0; swapCount < maxSwaps; swapCount++) {
-            (, uint16 card, uint16 cardNext) = hook.states(id);
+            (,, uint16 cardNext) = hook.states(id);
 
             // Stop once we've reached the cap
             if (cardNext >= 256) break;
@@ -608,7 +617,7 @@ contract OracleDeepTest is Test {
         }
 
         // The oracle should still be usable after wraparound
-        (uint16 newIndex, uint16 newCard,) = hook.states(id);
+        (, uint16 newCard,) = hook.states(id);
         assertGe(newCard, currentCard, "Cardinality should not shrink after wraparound");
 
         // Verify we can still read the TWAP estimate without reverting

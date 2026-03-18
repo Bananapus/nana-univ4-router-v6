@@ -72,7 +72,7 @@ contract SlippageToleranceTest is Test {
     // Helper: tick=0 implies sqrtP == 2^96 (price ~ 1), simplifies normalization to 1
     int24 constant TICK_ONE_TO_ONE = 0;
 
-    function test_OneOutOfTwoHundred_IsOnePercentCap() public {
+    function test_OneOutOfTwoHundred_IsOnePercentCap() public view {
         // amountIn = 1e18, liquidity ~= 200e18 → raw ≈ 500 bps
         uint256 amountIn = 1e18;
         uint128 liquidity = uint128(200e18);
@@ -87,7 +87,7 @@ contract SlippageToleranceTest is Test {
         assertEq(adjusted, 100, "adjusted should cap at 1% for 1/200");
     }
 
-    function test_TinyRaw_AppliesFloor() public {
+    function test_TinyRaw_AppliesFloor() public view {
         // amountIn = 1e18, liquidity = 5e21 → raw ≈ 20 bps
         uint256 amountIn = 1e18;
         uint128 liquidity = uint128(5e21);
@@ -100,7 +100,7 @@ contract SlippageToleranceTest is Test {
         assertEq(adjusted, 1054, "tiny raw should floor to ~1054 bps");
     }
 
-    function test_LargeRaw_CapsAtTwentyPercent() public {
+    function test_LargeRaw_CapsAtTwentyPercent() public view {
         // Choose amount/liquidity so raw ~ 10,000 bps → cap at raw/5 = 2000 bps
         uint256 amountIn = 5e20; // 500 tokens
         uint128 liquidity = uint128(5e21); // choose ratio = 10,000 bps
@@ -112,7 +112,7 @@ contract SlippageToleranceTest is Test {
         assertEq(adjusted, 2000, "should cap at 20% of raw (2000 bps)");
     }
 
-    function testFuzz_RespectsCapsAndFloors(uint128 amountIn, uint128 liquidity) public {
+    function testFuzz_RespectsCapsAndFloors(uint128 amountIn, uint128 liquidity) public view {
         vm.assume(amountIn > 0);
         vm.assume(liquidity > 0);
 
@@ -154,7 +154,7 @@ contract SlippageToleranceTest is Test {
     // Missing Edge Case Tests
     // ============================================================
 
-    function test_ZeroSqrtP_ReturnsMaxTolerance() public {
+    function test_ZeroSqrtP_ReturnsMaxTolerance() public view {
         // Can't actually get sqrtP == 0 from TickMath, but the code handles it defensively
         int24 minTick = -887_272;
         uint160 sqrtP = TickMath.getSqrtPriceAtTick(minTick);
@@ -163,7 +163,7 @@ contract SlippageToleranceTest is Test {
         assertEq(hook.TWAP_SLIPPAGE_DENOMINATOR(), 10_000, "TWAP_SLIPPAGE_DENOMINATOR should be 10000");
     }
 
-    function test_VeryLargeRawSlippageBps_CapsAt88Percent() public {
+    function test_VeryLargeRawSlippageBps_CapsAt88Percent() public view {
         // raw > 15x sets maxAllowed to 88%, but log calc might be lower
         uint256 amountIn = 200e18;
         uint128 liquidity = uint128(100e18);
@@ -176,7 +176,7 @@ contract SlippageToleranceTest is Test {
         assertGt(adjusted, 0, "Should return positive value");
     }
 
-    function test_LargeRawSlippageBps_CapsAt67Percent() public {
+    function test_LargeRawSlippageBps_CapsAt67Percent() public view {
         // raw > 10x but <= 15x caps at 67%
         uint256 amountIn = 120e18;
         uint128 liquidity = uint128(100e18);
@@ -188,7 +188,7 @@ contract SlippageToleranceTest is Test {
         assertEq(adjusted, 6700, "Should cap at 67%");
     }
 
-    function test_MaxAllowedSafetyCap_PreventsExceeding100Percent() public {
+    function test_MaxAllowedSafetyCap_PreventsExceeding100Percent() public view {
         // Safety check ensures maxAllowed never exceeds 100%
         uint256 maxAllowed88 = hook.TWAP_SLIPPAGE_DENOMINATOR() * 88 / 100;
         uint256 maxAllowed67 = hook.TWAP_SLIPPAGE_DENOMINATOR() * 67 / 100;
@@ -197,7 +197,7 @@ contract SlippageToleranceTest is Test {
         assertLe(maxAllowed67, hook.TWAP_SLIPPAGE_DENOMINATOR(), "67% cap should be <= 100%");
     }
 
-    function test_AdjustedSlippageBpsExceedsMaxAllowed_GetsCapped() public {
+    function test_AdjustedSlippageBpsExceedsMaxAllowed_GetsCapped() public view {
         // When adjusted > maxAllowed, it should cap at maxAllowed
         uint256 amountIn = 120e18;
         uint128 liquidity = uint128(100e18);

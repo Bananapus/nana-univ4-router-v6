@@ -2,8 +2,6 @@
 pragma solidity ^0.8.26;
 
 import {Test} from "forge-std/Test.sol";
-import {console} from "forge-std/console.sol";
-
 import {PoolManager} from "@uniswap/v4-core/src/PoolManager.sol";
 import {IPoolManager} from "@uniswap/v4-core/src/interfaces/IPoolManager.sol";
 import {IHooks} from "@uniswap/v4-core/src/interfaces/IHooks.sol";
@@ -79,6 +77,7 @@ contract MockJBDirectory_Observe {
 contract MockJBPrices_Observe {
     mapping(uint256 => mapping(uint256 => mapping(uint256 => uint256))) public prices;
 
+    // forge-lint: disable-next-line(mixed-case-function)
     function DEFAULT_PROJECT_ID() external pure returns (uint256) {
         return 0;
     }
@@ -140,11 +139,13 @@ contract MockJBMultiTerminal_Observe {
     uint256 public lastAmount;
     address public lastBeneficiary;
     mapping(uint256 => address) public projectTokens;
+    // forge-lint: disable-next-line(mixed-case-variable)
     MockJBTerminalStore_Observe public TERMINAL_STORE;
     uint256 public overridePayReturnAmount;
     bool public useOverridePayReturn;
 
     /// @notice JB protocol fee (2.5% = 25 out of MAX_FEE 1000).
+    // forge-lint: disable-next-line(mixed-case-function)
     function FEE() external pure returns (uint256) {
         return 25;
     }
@@ -157,6 +158,7 @@ contract MockJBMultiTerminal_Observe {
         TERMINAL_STORE = MockJBTerminalStore_Observe(terminalStore);
     }
 
+    // forge-lint: disable-next-line(mixed-case-function)
     function STORE() external view returns (IJBTerminalStore) {
         return IJBTerminalStore(address(TERMINAL_STORE));
     }
@@ -298,11 +300,17 @@ contract TestObserve is Test {
     using StateLibrary for IPoolManager;
 
     JBUniswapV4Hook hook;
+    // forge-lint: disable-next-line(mixed-case-variable)
     MockJBTokens_Observe mockJBTokens;
+    // forge-lint: disable-next-line(mixed-case-variable)
     MockJBDirectory_Observe mockJBDirectory;
+    // forge-lint: disable-next-line(mixed-case-variable)
     MockJBMultiTerminal_Observe mockJBMultiTerminal;
+    // forge-lint: disable-next-line(mixed-case-variable)
     MockJBController_Observe mockJBController;
+    // forge-lint: disable-next-line(mixed-case-variable)
     MockJBPrices_Observe mockJBPrices;
+    // forge-lint: disable-next-line(mixed-case-variable)
     MockJBTerminalStore_Observe mockJBTerminalStore;
     PoolManager manager;
     PoolSwapTest swapRouter;
@@ -693,9 +701,9 @@ contract TestObserve is Test {
         assertTrue(foundAfter, "Should find observation at t=10200");
 
         // The interpolated tickCumulative at t=10150 should be:
-        // beforeTickCum + (afterTickCum - beforeTickCum) / 100 * 50
-        // This matches Oracle.observeSingle's divide-before-multiply formula.
-        int56 expectedTickCum = beforeTickCum + ((afterTickCum - beforeTickCum) / 100) * 50;
+        // beforeTickCum + (afterTickCum - beforeTickCum) * 50 / 100
+        // This matches Oracle.observeSingle's interpolation formula.
+        int56 expectedTickCum = beforeTickCum + ((afterTickCum - beforeTickCum) * 50) / 100;
         assertEq(tickCumulatives[0], expectedTickCum, "Interpolated tickCumulative should match formula");
 
         // The interpolated secondsPerLiqCumulative at t=10150 should follow the same pattern

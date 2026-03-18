@@ -2,7 +2,6 @@
 pragma solidity ^0.8.26;
 
 import {Test} from "forge-std/Test.sol";
-import {console} from "forge-std/console.sol";
 
 import {PoolManager} from "@uniswap/v4-core/src/PoolManager.sol";
 import {IPoolManager} from "@uniswap/v4-core/src/interfaces/IPoolManager.sol";
@@ -80,6 +79,7 @@ contract MockJBPrices {
     mapping(uint256 => mapping(uint256 => mapping(uint256 => uint256))) public prices;
 
     // Default project ID for global price feeds
+    // forge-lint: disable-next-line(mixed-case-function)
     function DEFAULT_PROJECT_ID() external pure returns (uint256) {
         return 0;
     }
@@ -123,6 +123,7 @@ contract MockJBMultiTerminal {
     mapping(uint256 => address) public projectTokens;
 
     // Reference to terminal store for surplus calculations
+    // forge-lint: disable-next-line(mixed-case-variable)
     MockJBTerminalStore public TERMINAL_STORE;
 
     // Override return amounts for testing
@@ -132,6 +133,7 @@ contract MockJBMultiTerminal {
     bool public useOverrideCashOutReturn;
 
     /// @notice JB protocol fee (2.5% = 25 out of MAX_FEE 1000).
+    // forge-lint: disable-next-line(mixed-case-function)
     function FEE() external pure returns (uint256) {
         return 25;
     }
@@ -144,6 +146,7 @@ contract MockJBMultiTerminal {
         TERMINAL_STORE = MockJBTerminalStore(terminalStore);
     }
 
+    // forge-lint: disable-next-line(mixed-case-function)
     function STORE() external view returns (IJBTerminalStore) {
         return IJBTerminalStore(address(TERMINAL_STORE));
     }
@@ -358,11 +361,17 @@ contract JuiceboxHookTest is Test {
     using StateLibrary for IPoolManager;
 
     JBUniswapV4Hook hook;
+    // forge-lint: disable-next-line(mixed-case-variable)
     MockJBTokens mockJBTokens;
+    // forge-lint: disable-next-line(mixed-case-variable)
     MockJBDirectory mockJBDirectory;
+    // forge-lint: disable-next-line(mixed-case-variable)
     MockJBMultiTerminal mockJBMultiTerminal;
+    // forge-lint: disable-next-line(mixed-case-variable)
     MockJBController mockJBController;
+    // forge-lint: disable-next-line(mixed-case-variable)
     MockJBPrices mockJBPrices;
+    // forge-lint: disable-next-line(mixed-case-variable)
     MockJBTerminalStore mockJBTerminalStore;
 
     PoolManager manager;
@@ -564,7 +573,7 @@ contract JuiceboxHookTest is Test {
     /// Given token1 is set as ETH currency with currency ID 1
     /// When calculating expected tokens for project 123 with 1 ether of token1
     /// Then the calculation should return a positive number of tokens
-    function testCalculateExpectedTokensWithCurrency() public {
+    function testCalculateExpectedTokensWithCurrency() public view {
         // Test calculation with token1 as payment currency
         // The price is already set up in setUp() via mockJBPrices
         uint256 expectedTokens = hook.calculateExpectedTokensWithCurrency(123, address(token1), 1 ether);
@@ -581,13 +590,16 @@ contract JuiceboxHookTest is Test {
     /// And the user's token balances should remain at 1000 ether each
     function testNonJuiceboxTokenSwap() public {
         // Create pool with non-Juicebox tokens
+        // forge-lint: disable-next-line(mixed-case-variable)
         MockERC20 nonJBToken0 = new MockERC20("NonJB0", "NJB0");
+        // forge-lint: disable-next-line(mixed-case-variable)
         MockERC20 nonJBToken1 = new MockERC20("NonJB1", "NJB1");
 
         if (address(nonJBToken0) > address(nonJBToken1)) {
             (nonJBToken0, nonJBToken1) = (nonJBToken1, nonJBToken0);
         }
 
+        // forge-lint: disable-next-line(mixed-case-variable)
         PoolKey memory nonJBKey = PoolKey({
             currency0: Currency.wrap(address(nonJBToken0)),
             currency1: Currency.wrap(address(nonJBToken1)),
@@ -1220,11 +1232,7 @@ contract JuiceboxHookTest is Test {
 
     /// @notice Test 9.1: _getTokenDecimals() handles missing decimals() function
     /// @dev Verifies that _getTokenDecimals() defaults to 18 when token doesn't implement decimals()
-    function test_GetTokenDecimals_DefaultsTo18_WhenDecimalsNotImplemented() public {
-        // Create a contract that doesn't implement decimals()
-        // We'll use a simple contract address that's not an ERC20
-        address nonERC20 = address(0x1234);
-
+    function test_GetTokenDecimals_DefaultsTo18_WhenDecimalsNotImplemented() public pure {
         // _getTokenDecimals() should default to 18 for non-ERC20 addresses
         // We can't directly test this, but we can verify it works via calculateExpectedTokensWithCurrency
         // Actually, we need a way to test this. Let's create a minimal contract without decimals
@@ -1292,7 +1300,7 @@ contract JuiceboxHookTest is Test {
             });
 
             manager.initialize(newKey, SQRT_PRICE_1_1);
-            PoolId newId = newKey.toId();
+            newKey.toId();
 
             // The hook detects project IDs dynamically during swaps (no cache needed)
             // This test just verifies the pool can be initialized
@@ -1352,7 +1360,7 @@ contract JuiceboxHookTest is Test {
         }
 
         // Verify observations were recorded
-        (uint16 finalIndex, uint16 finalCardinality,) = hook.states(id);
+        (, uint16 finalCardinality,) = hook.states(id);
         // Cardinality may not grow if all swaps failed due to liquidity constraints
         // In that case, this test effectively verifies the system handles such cases gracefully
         assertGe(finalCardinality, 1, "Cardinality should be at least 1");
@@ -1433,9 +1441,9 @@ contract JuiceboxHookTest is Test {
         uint256 baseCurrency = 1; // ETH
         mockJBPrices.setPricePerUnitOf(123, token1CurrencyId, baseCurrency, ethPerToken1);
 
-        // Calculate expected tokens from both routes
-        uint256 jbExpectedTokens = hook.calculateExpectedTokensWithCurrency(123, address(token1), swapAmount);
-        uint256 uniswapExpectedTokens = hook.estimateUniswapOutput(id, key, swapAmount, false);
+        // Calculate expected tokens from both routes (call to verify no revert)
+        hook.calculateExpectedTokensWithCurrency(123, address(token1), swapAmount);
+        hook.estimateUniswapOutput(id, key, swapAmount, false);
 
         // Mint and approve for swap
         token1.mint(address(this), swapAmount);
@@ -1514,6 +1522,7 @@ contract JuiceboxHookTest is Test {
         vm.warp(block.timestamp + 1800);
 
         // Record victim's expected outcome using TWAP
+        // forge-lint: disable-next-line(mixed-case-variable)
         uint256 victimExpectedWithTWAP = hook.estimateUniswapOutput(id, key, victimSwapAmount, false);
 
         // Attacker front-runs: manipulate price
@@ -2041,6 +2050,7 @@ contract JuiceboxHookTest is Test {
     function testAmountOutMin_V4_Success() public {
         // Setup: Create a non-JB pool for v4 routing (token0 < token1, so token0 is currency0)
         // We'll swap token1 -> token0
+        // forge-lint: disable-next-line(mixed-case-variable)
         PoolKey memory nonJBKey = PoolKey({
             currency0: Currency.wrap(address(token0)),
             currency1: Currency.wrap(address(token1)),
@@ -2048,6 +2058,7 @@ contract JuiceboxHookTest is Test {
             tickSpacing: 60,
             hooks: IHooks(address(0))
         });
+        // forge-lint: disable-next-line(mixed-case-variable)
         PoolId nonJBId = nonJBKey.toId();
 
         // Initialize the pool first
@@ -2095,6 +2106,7 @@ contract JuiceboxHookTest is Test {
     /// @notice Test that swap fails when output < amountOutMin for V4 route
     function testAmountOutMin_V4_Failure() public {
         // Setup: Create a non-JB pool for v4 routing
+        // forge-lint: disable-next-line(mixed-case-variable)
         PoolKey memory nonJBKey = PoolKey({
             currency0: Currency.wrap(address(token0)),
             currency1: Currency.wrap(address(token1)),
@@ -2102,6 +2114,7 @@ contract JuiceboxHookTest is Test {
             tickSpacing: 60,
             hooks: IHooks(address(0))
         });
+        // forge-lint: disable-next-line(mixed-case-variable)
         PoolId nonJBId = nonJBKey.toId();
 
         // Initialize the pool first
@@ -2217,16 +2230,19 @@ contract RevertingMockStore {
 
 /// @dev Mock terminal that returns a reverting store from STORE()
 contract RevertingStoreTerminal {
+    // forge-lint: disable-next-line(screaming-snake-case-immutable)
     address public immutable store;
 
     constructor(address _store) {
         store = _store;
     }
 
+    // forge-lint: disable-next-line(mixed-case-function)
     function STORE() external view returns (address) {
         return store;
     }
 
+    // forge-lint: disable-next-line(mixed-case-function)
     function FEE() external pure returns (uint256) {
         return 25;
     }
@@ -2234,6 +2250,7 @@ contract RevertingStoreTerminal {
 
 /// @dev Mock terminal whose STORE() reverts
 contract RevertingStoreCallTerminal {
+    // forge-lint: disable-next-line(mixed-case-function)
     function STORE() external pure {
         revert("terminal: no store");
     }
@@ -2253,6 +2270,7 @@ contract ReentrantMockTerminal {
         reentrantPoolKey = _key;
     }
 
+    // forge-lint: disable-next-line(mixed-case-function)
     function FEE() external pure returns (uint256) {
         return 25;
     }
