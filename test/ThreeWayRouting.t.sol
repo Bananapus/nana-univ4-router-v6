@@ -731,4 +731,148 @@ contract TwoWayRoutingTest is Test {
         vm.expectRevert();
         jbSwapRouter.swap(key, params, 0);
     }
+
+    // ============================================
+    // Test 10: Dual JB Token Pool - Buy Side Priority
+    // ============================================
+
+    /// Given both currency0 and currency1 are JB project tokens (projects 123 and 456)
+    /// And currency1's project has a very high weight (10_000e18)
+    /// When the user swaps zeroForOne (selling currency0 for currency1)
+    /// Then the buy-side project (currency1's project) should be used for routing
+    /// And a BestRouteSelected event should be emitted confirming buy-side priority
+    function test_TwoWay_DualJBTokenPool_BuySidePriority() public {
+        // Create two new tokens, both will be JB project tokens
+        MockERC20 dualToken0 = new MockERC20("DualJB0", "DJB0");
+        MockERC20 dualToken1 = new MockERC20("DualJB1", "DJB1");
+
+        // Sort by address for Uniswap v4 requirement
+        if (address(dualToken0) > address(dualToken1)) {
+            (dualToken0, dualToken1) = (dualToken1, dualToken0);
+        }
+
+        // Set up project A (for whichever token is currency0)
+        uint256 projectA = 123;
+        mockJBTokens.setProjectId(address(dualToken0), projectA);
+        mockJBController.setWeight(projectA, 1000e18);
+        mockJBMultiTerminal.setProjectToken(projectA, address(dualToken0));
+
+        // Set up project B (for whichever token is currency1)
+        uint256 projectB = 456;
+        mockJBTokens.setProjectId(address(dualToken1), projectB);
+        mockJBController.setWeight(projectB, 10_000e18); // High weight so JB wins for buy-side
+        mockJBMultiTerminal.setProjectToken(projectB, address(dualToken1));
+
+        // Set price for dualToken0 in project B's pricing (so buying projectB tokens with dualToken0 works)
+        uint32 dualToken0CurrencyId = uint32(uint160(address(dualToken0)));
+        mockJBPrices.setPricePerUnitOf(projectB, dualToken0CurrencyId, 1, 1e18);
+
+        // Also set price for dualToken1 in project A's pricing
+        uint32 dualToken1CurrencyId = uint32(uint160(address(dualToken1)));
+        mockJBPrices.setPricePerUnitOf(projectA, dualToken1CurrencyId, 1, 1e18);
+
+        // Create and initialize pool with both JB tokens
+        PoolKey memory dualKey = PoolKey({
+            currency0: Currency.wrap(address(dualToken0)),
+            currency1: Currency.wrap(address(dualToken1)),
+            fee: 3000,
+            tickSpacing: 60,
+            hooks: IHooks(address(hook))
+        });
+
+        dualToken0.mint(address(this), 1000 ether);
+        dualToken1.mint(address(this), 1000 ether);
+        dualToken0.approve(address(modifyLiquidityRouter), 1000 ether);
+        dualToken1.approve(address(modifyLiquidityRouter), 1000 ether);
+        dualToken0.approve(address(hook), type(uint256).max);
+        dualToken1.approve(address(hook), type(uint256).max);
+
+        manager.initialize(dualKey, SQRT_PRICE_1_1);
+
+        modifyLiquidityRouter.modifyLiquidity(
+            dualKey,
+            ModifyLiquidityParams({tickLower: -60, tickUpper: 60, liquidityDelta: 10 ether, salt: bytes32(0)}),
+            ZERO_BYTES
+        );
+
+        PoolId dualId = dualKey.toId();
+
+        // Swap zeroForOne: selling currency0 (dualToken0) for currency1 (dualToken1)
+        // tokenOut = dualToken1 = projectB's token
+        // Per source lines 650-660, buy-side project (projectB) gets priority
+        dualToken0.approve(address(jbSwapRouter), 1 ether);
+
+        SwapParams memory params =
+            SwapParams({zeroForOne: true, amountSpecified: -1 ether, sqrtPriceLimitX96: TickMath.MIN_SQRT_PRICE + 1});
+
+        // BestRouteSelected should be emitted - JB wins because projectB has weight 10_000e18
+        // The buy-side project (projectB = 456) is used for routing, not the sell-side (projectA = 123)
+        vm.expectEmit(true, false, false, false);
+        emit JBUniswapV4Hook.BestRouteSelected(dualId, 1, 0, address(0));
+
+        jbSwapRouter.swap(dualKey, params, 0);
+
+        // Verify JB terminal was called with the buy-side project (projectB)
+        assertEq(mockJBMultiTerminal.lastProjectId(), projectB, "Should route using buy-side project (456), not sell-side (123)");
+    }
+
+    // ============================================
+    // Test 11: Native ETH Sell Path - Selling JB Token for ETH
+    // ============================================
+
+    /// Given a pool with native ETH as currency0 and a JB project token as currency1
+    /// And the JB project has cashout surplus configured
+    /// When the user swaps oneForZero (selling JB token for ETH)
+    /// Then the sell-side path (cashOutTokensOf) should be evaluated
+    /// And a BestRouteSelected event should be emitted
+    function test_TwoWay_NativeETH_SellJBTokenForETH() public {
+        MockERC20 ethPairToken = new MockERC20("ETHPair", "EP");
+        uint256 ethProjectId = 789;
+
+        mockJBTokens.setProjectId(address(ethPairToken), ethProjectId);
+        mockJBController.setWeight(ethProjectId, 10_000e18);
+        mockJBMultiTerminal.setProjectToken(ethProjectId, address(ethPairToken));
+
+        // currency0 = native ETH (address(0)), currency1 = ethPairToken (JB token)
+        Currency nativeETH = Currency.wrap(address(0));
+        Currency wrappedToken = Currency.wrap(address(ethPairToken));
+
+        PoolKey memory ethKey = PoolKey({
+            currency0: nativeETH, currency1: wrappedToken, fee: 3000, tickSpacing: 60, hooks: IHooks(address(hook))
+        });
+
+        vm.deal(address(this), 100 ether);
+        ethPairToken.mint(address(this), 1000 ether);
+        ethPairToken.approve(address(modifyLiquidityRouter), 1000 ether);
+
+        manager.initialize(ethKey, SQRT_PRICE_1_1);
+
+        modifyLiquidityRouter.modifyLiquidity{value: 10 ether}(
+            ethKey,
+            ModifyLiquidityParams({tickLower: -60, tickUpper: 60, liquidityDelta: 10 ether, salt: bytes32(0)}),
+            ZERO_BYTES
+        );
+
+        PoolId ethId = ethKey.toId();
+
+        // Set cashout surplus for the project
+        // The output token is native ETH. After normalization, JB_NATIVE_TOKEN = 0xEEEe
+        // Use that address for the surplus so calculateExpectedOutputFromSelling can look it up
+        address JB_NATIVE_TOKEN = address(0x000000000000000000000000000000000000EEEe);
+        mockJBTerminalStore.setSurplus(ethProjectId, JB_NATIVE_TOKEN, 0.5 ether);
+
+        // zeroForOne=false means selling currency1 (ethPairToken = JB token) for currency0 (native ETH)
+        // This is the sell-side path: tokenIn = JB token, tokenOut = ETH
+        ethPairToken.approve(address(jbSwapRouter), 1 ether);
+
+        SwapParams memory params =
+            SwapParams({zeroForOne: false, amountSpecified: -1 ether, sqrtPriceLimitX96: TickMath.MAX_SQRT_PRICE - 1});
+
+        // BestRouteSelected should be emitted for the sell-side path
+        // V4 is expected to win since surplus is modest (0.5 ETH per token, minus 2.5% fee)
+        vm.expectEmit(true, false, false, false);
+        emit JBUniswapV4Hook.BestRouteSelected(ethId, 0, 0, address(0));
+
+        jbSwapRouter.swap(ethKey, params, 0);
+    }
 }
