@@ -682,24 +682,16 @@ contract JBUniswapV4Hook is BaseHook {
             });
         } else if (isSellingJBToken) {
             // Selling JB tokens: compare Juicebox vs Uniswap for getting output tokens
+            // NOTE: When cashOutTaxRate == 0, the bonding curve is linear — each token redeems for its
+            // exact proportional share of surplus. The hook will repeatedly prefer JB cashout over V4
+            // because per-token value doesn't decrease, and the V4 pool price doesn't move (tokens bypass
+            // the AMM). This is accepted behavior: token holders are redeeming their fair share of surplus.
+            // The V4 pool loses its sell-side price-discovery role while JB cashout offers better rates,
+            // but no value is extracted beyond what the token holders are entitled to.
+            // See RISKS.md for full analysis.
             juiceboxExpectedOutput = calculateExpectedOutputFromSelling({
                 projectId: sellProjectId, tokenAmountIn: amountIn, outputToken: tokenOut, terminal: jbTerminal
             });
-
-            // Skip JB routing for zero-tax projects to prevent structural arbitrage.
-            // With cashOutTaxRate == 0, the bonding curve imposes no penalty, so repeated cashouts
-            // extract surplus without convergence. Let the V4 AMM handle these swaps instead.
-            if (juiceboxExpectedOutput > 0) {
-                try IJBController(address(DIRECTORY.controllerOf(sellProjectId))).currentRulesetOf(sellProjectId)
-                returns (JBRuleset memory ruleset, JBRulesetMetadata memory) {
-                    if (JBRulesetMetadataResolver.cashOutTaxRate(ruleset) == 0) {
-                        juiceboxExpectedOutput = 0;
-                    }
-                } catch {
-                    // If we can't read the ruleset, don't route through JB.
-                    juiceboxExpectedOutput = 0;
-                }
-            }
         } else {
             // No JB token involved, proceed with normal Uniswap swap
             emit RouteSelected(poolId, false, 0, msg.sender);

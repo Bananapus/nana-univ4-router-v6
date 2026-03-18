@@ -89,7 +89,7 @@ contract MockJBPricesReentrancy {
     }
 }
 
-/// @notice Mock JBController that returns configurable rulesets with non-zero cashOutTaxRate.
+/// @notice Mock JBController that returns configurable rulesets.
 contract MockJBControllerReentrancy {
     mapping(uint256 => uint256) public weights;
     mapping(uint256 => uint16) public cashOutTaxRates;
@@ -354,7 +354,7 @@ contract SellPathReentrancyTest is Test {
         // Configure JB project: token0 is the project token being sold
         mockJbTokens.setProjectId(address(token0), PROJECT_ID);
         mockJbController.setWeight(PROJECT_ID, 1000e18);
-        // Non-zero cashOutTaxRate is required for sell-path JB routing (zero-tax skips JB)
+        // Set a cashOutTaxRate for realistic bonding curve behavior.
         mockJbController.setCashOutTaxRate(PROJECT_ID, 5000); // 50%
 
         // Set price feed: 1:1 between token1 and base currency
@@ -406,7 +406,7 @@ contract SellPathReentrancyTest is Test {
     /// re-entrant swap. The _routing guard should block it.
     ///
     /// Given a reentrant terminal that attempts another swap during cashOutTokensOf
-    /// And the sell-side swap routes through Juicebox (cashOutTaxRate > 0, JB output > V4)
+    /// And the sell-side swap routes through Juicebox (JB output > V4)
     /// When the terminal triggers a second swap from inside cashOutTokensOf
     /// Then the _routing guard blocks the reentrant swap
     /// And the entire transaction reverts
