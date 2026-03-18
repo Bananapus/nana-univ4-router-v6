@@ -88,6 +88,15 @@ Forward-looking risk analysis of `JBUniswapV4Hook` (~963 lines) and `Oracle` lib
 - When JB routing wins, the hook takes input from PoolManager, routes through the JB terminal, and settles output back. The V4 pool itself is not touched (the hook returns a `BeforeSwapDelta` that cancels the pool swap). This means the V4 pool price does not move, creating a potential arb opportunity between the stale V4 pool price and the JB terminal rate.
 - This is by design: JB routing bypasses the AMM to give users a better rate. Third-party arbitrageurs can correct the V4 pool price independently.
 
+### 4.4 Zero-tax sell-path routing (accepted behavior)
+
+- When a project has `cashOutTaxRate == 0`, the bonding curve is linear: every token redeems for its exact proportional share of surplus with no penalty. The per-token reclaim value stays constant as supply drops.
+- The hook will repeatedly prefer JB cashout over V4 for sell-side swaps whenever the JB reclaim exceeds the V4 estimate. Since the V4 pool price doesn't move (tokens bypass the AMM) and the per-token reclaim doesn't decrease (no tax retention), this preference persists indefinitely. The hook does **not** converge to V4 routing for zero-tax projects.
+- With `cashOutTaxRate > 0`, each cashout retains surplus in the project (the tax portion), causing the per-token reclaim to decrease over time until V4 becomes the better route. This self-correcting behavior does not exist at zero tax.
+- **Why this is accepted:** Token holders are redeeming their entitled share of surplus — no value is extracted beyond what the bonding curve formula allocates. The surplus decreases proportionally with supply, maintaining the exact same per-token backing. The V4 pool loses its sell-side price-discovery role while JB cashout offers better rates, but this is the intended behavior of the routing hook: always pick the best rate for the user. Conservation holds exactly: `extracted + remaining_surplus = initial_surplus`.
+- **Impact:** The V4 pool's sell-side liquidity is effectively bypassed for zero-tax projects. LPs in such pools should expect reduced sell-side volume. This is a feature, not a bug — the hook exists to give users the best possible rate.
+- See `TestStructuralArbitrage.t.sol` tests 1-8 which prove bounded extraction, convergence, and conservation for projects with `cashOutTaxRate > 0`.
+
 ## 5. Composition with JBBuybackHook
 
 - **Same-pool composition**: `JBUniswapV4Hook` is designed to serve as both the V4 pool hook and the `ORACLE_HOOK` for `JBBuybackHook`. The buyback hook queries `observe()` for TWAP data and executes swaps on the same pool.

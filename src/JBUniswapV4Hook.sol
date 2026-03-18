@@ -175,6 +175,10 @@ contract JBUniswapV4Hook is BaseHook {
     //*********************************************************************//
 
     /// @notice Calculate expected output from selling JB tokens
+    /// @dev This estimate uses the ruleset's static cashOutTaxRate via the terminal store. If the project has a data
+    /// hook that overrides cashout parameters at cashout time, the actual reclaim may differ from this estimate,
+    /// potentially causing the swap-vs-cashout routing decision to diverge from what would be optimal.
+    /// The estimate also conservatively deducts fees even for feeless addresses, which may underestimate output.
     /// @param projectId The Juicebox project ID
     /// @param tokenAmountIn The amount of JB tokens being sold
     /// @param outputToken The token to receive (e.g., ETH, USDC)
@@ -226,6 +230,9 @@ contract JBUniswapV4Hook is BaseHook {
     }
 
     /// @notice Calculate expected tokens for a given payment amount in any currency
+    /// @dev This estimate uses the ruleset's static weight. If the project has a data hook (such as a buyback hook)
+    /// that overrides the weight at payment time, the actual token issuance may differ from this estimate,
+    /// potentially causing the swap-vs-mint routing decision to diverge from what would be optimal.
     /// @param projectId The Juicebox project ID
     /// @param paymentToken The token being used for payment
     /// @param paymentAmount The amount being paid (in the token's native decimals)
@@ -675,6 +682,13 @@ contract JBUniswapV4Hook is BaseHook {
             });
         } else if (isSellingJBToken) {
             // Selling JB tokens: compare Juicebox vs Uniswap for getting output tokens
+            // NOTE: When cashOutTaxRate == 0, the bonding curve is linear — each token redeems for its
+            // exact proportional share of surplus. The hook will repeatedly prefer JB cashout over V4
+            // because per-token value doesn't decrease, and the V4 pool price doesn't move (tokens bypass
+            // the AMM). This is accepted behavior: token holders are redeeming their fair share of surplus.
+            // The V4 pool loses its sell-side price-discovery role while JB cashout offers better rates,
+            // but no value is extracted beyond what the token holders are entitled to.
+            // See RISKS.md for full analysis.
             juiceboxExpectedOutput = calculateExpectedOutputFromSelling({
                 projectId: sellProjectId, tokenAmountIn: amountIn, outputToken: tokenOut, terminal: jbTerminal
             });

@@ -99,6 +99,7 @@ contract MockJBPricesSA {
 contract MockJBControllerSA {
     mapping(uint256 => uint256) public weights;
     mapping(uint256 => uint16) public reservedPercents;
+    mapping(uint256 => uint16) public cashOutTaxRates;
 
     function setWeight(uint256 projectId, uint256 weight) external {
         weights[projectId] = weight;
@@ -108,6 +109,10 @@ contract MockJBControllerSA {
         reservedPercents[projectId] = reservedPercent;
     }
 
+    function setCashOutTaxRate(uint256 projectId, uint16 rate) external {
+        cashOutTaxRates[projectId] = rate;
+    }
+
     function currentRulesetOf(uint256 projectId)
         external
         view
@@ -115,7 +120,7 @@ contract MockJBControllerSA {
     {
         metadata = JBRulesetMetadata({
             reservedPercent: reservedPercents[projectId],
-            cashOutTaxRate: 0,
+            cashOutTaxRate: cashOutTaxRates[projectId],
             baseCurrency: 1,
             pausePay: false,
             pauseCreditTransfers: false,
@@ -449,6 +454,7 @@ contract TestStructuralArbitrage is Test {
         // Configure JB project: token0 is the project token
         mockJbTokens.setProjectId(address(token0), PROJECT_ID);
         mockJbController.setWeight(PROJECT_ID, 1000e18);
+        mockJbController.setCashOutTaxRate(PROJECT_ID, uint16(CASH_OUT_TAX_RATE));
         terminal.setProjectToken(PROJECT_ID, address(token0));
 
         // Set price feed: 1:1 between token1 and base currency
@@ -888,4 +894,5 @@ contract TestStructuralArbitrage is Test {
         // --- Part C: Conservation ---
         assertEq(partialExtracted + finalReclaim, INITIAL_SURPLUS, "Conservation: total extracted = initial surplus");
     }
+
 }
