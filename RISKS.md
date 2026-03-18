@@ -105,32 +105,50 @@ Forward-looking risk analysis of `JBUniswapV4Hook` (~963 lines) and `Oracle` lib
 - **Static weight incompatibility**: This hook compares V4 pool output against the ruleset's static issuance weight. If the project's data hook overrides weight at payment time (e.g., a buyback hook adjusting based on TWAP), the static estimate may be stale. Deployers **must ensure** that any weight override does not make the static estimate dangerously inaccurate — otherwise routing decisions will consistently diverge, and users may receive suboptimal rates. This is an integration requirement, not a graceful fallback.
 - **hookData from buyback hook**: The buyback hook passes `abi.encode(uint256(0))` as hookData. The `0` value for `amountOutMin` delegates slippage protection to the hook's own TWAP-based routing — the hook will route through JB if it offers a better rate, or let V4 execute if the pool price is better.
 
-## 6. Integration Risks
+## 6. Deployment Caveats
 
-### 5.1 Hook deployment address mining
+### 6.1 Weight composition divergence (buy-side routing)
+
+When `JBUniswapV4Hook` is composed with `JBBuybackHook` (or any data hook) on the same project, the routing estimate can diverge from actual execution:
+
+1. **`calculateExpectedTokensWithCurrency`** reads the ruleset's **static weight** (`ruleset.weight`) to estimate how many tokens a Juicebox payment would mint. This estimate drives the V4-vs-JB routing decision in `_beforeSwap`.
+2. If the project's data hook **overrides weight at payment time** (e.g., `JBBuybackHook` adjusts weight based on its own TWAP comparison), the actual tokens minted will differ from the static estimate.
+3. **Consequences**:
+   - The hook may route through JB when V4 would have been better (static weight overestimates issuance, but the data hook reduces it at execution time).
+   - The hook may route through V4 when JB would have been better (static weight underestimates issuance because the data hook increases it).
+   - In the worst case, the JB route is selected but `terminal.pay()` returns fewer tokens than estimated, and the user receives a suboptimal rate. The `amountOutMin` parameter in hookData provides a safety floor against excessive slippage.
+4. **The same divergence applies to `calculateExpectedOutputFromSelling`**: it reads the terminal store's surplus estimate using the current cashOutTaxRate. If a data hook overrides cashout parameters at execution time, the estimate diverges.
+
+**Deployer requirement**: When composing this hook with a project that has an active data hook, verify that the data hook's weight/cashout overrides do not cause the static estimate to be systematically inaccurate. If the data hook only occasionally overrides weight (e.g., the buyback hook's TWAP-triggered override), the impact is bounded to individual swaps where the override fires. If the data hook always overrides weight, routing decisions will consistently diverge, and the hook's price comparison becomes unreliable.
+
+This is documented inline at `src/JBUniswapV4Hook.sol` lines 46-52 and 234-236 as `COMPOSITION WARNING`.
+
+## 7. Integration Risks
+
+### 7.1 Hook deployment address mining
 
 - V4 hooks encode permission flags in the contract address's lower bits. Deployment requires CREATE2 with a specific salt (`HookMiner.find()`) that produces an address matching the required flags.
 - If the deployer uses the wrong creation code or constructor arguments, the mined salt will produce an address with incorrect flags. Hooks will silently fail to fire, and swaps through the pool will execute without routing comparison or oracle updates.
 - The hook address is immutable after deployment. If hook permissions need to change, a new hook must be deployed at a new address, and pools must be migrated.
 
-### 5.2 afterSwap / afterInitialize callbacks
+### 7.2 afterSwap / afterInitialize callbacks
 
 - `_afterSwap` records oracle observations AND validates V4 slippage. If `_afterSwap` fails to execute (wrong address flags), neither protection operates.
 - `_afterInitialize` bootstraps the oracle with the first observation. Without it, `states[poolId]` remains zero-initialized, and all TWAP queries revert with `Oracle_CardinalityCannotBeZero`.
 - `_afterAddLiquidity` and `_afterRemoveLiquidity` also write observations. These provide additional TWAP data points between swaps, improving oracle accuracy for pools with frequent liquidity changes but infrequent swaps.
 
-### 5.3 Cross-pool interactions
+### 7.3 Cross-pool interactions
 
 - Each pool has its own independent observation buffer (`mapping(PoolId => Oracle.Observation[65_535])`). No cross-pool oracle contamination is possible.
 - Multiple pools can reference the same JB project token. The hook evaluates routing independently per pool. Different pools with different fee tiers or liquidity depths may route differently for the same JB token.
 - The hook is a singleton: one contract serves all pools that reference it in their `PoolKey.hooks` field. A bug in the hook affects all such pools simultaneously.
 
-### 5.4 Token address normalization
+### 7.4 Token address normalization
 
 - Uniswap V4 uses `address(0)` for native ETH; Juicebox uses `0x000000000000000000000000000000000000EEEe`. The `_normalizeToken` function maps between them. If a new V4 convention or JB convention is introduced, this mapping breaks silently.
 - Currency ID for JB price feeds: `uint32(uint160(token))`. This truncation means different tokens whose addresses share the same lower 32 bits would collide. Statistically unlikely for EVM CREATE/CREATE2 addresses, but theoretically possible.
 
-## 7. Invariants to Verify
+## 8. Invariants to Verify
 
 - **TWAP always dampens manipulation vs spot** -- A single-block price push should always produce smaller TWAP deviation than spot deviation. Verified in `test_SpotFallback_TWAPDampensAfterWarmup`: spot deviation from a 50 ETH push is significantly larger than TWAP deviation after warmup. This holds as long as the TWAP window contains honest observations.
 - **Recovery after manipulation stops** -- After sustained manipulation ends and normal trading resumes for one full TWAP_PERIOD, the TWAP should converge to within 5% of pre-manipulation baseline. Verified in `test_TWAPManipulation_RecoveryAfterManipulationStops`: TWAP changes after manipulation stops (not stuck), though exact convergence depends on post-manipulation equilibrium price.
