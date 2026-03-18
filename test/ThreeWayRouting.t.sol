@@ -813,7 +813,11 @@ contract TwoWayRoutingTest is Test {
         jbSwapRouter.swap(dualKey, params, 0);
 
         // Verify JB terminal was called with the buy-side project (projectB)
-        assertEq(mockJBMultiTerminal.lastProjectId(), projectB, "Should route using buy-side project (456), not sell-side (123)");
+        assertEq(
+            mockJBMultiTerminal.lastProjectId(),
+            projectB,
+            "Should route using buy-side project (456), not sell-side (123)"
+        );
     }
 
     // ============================================

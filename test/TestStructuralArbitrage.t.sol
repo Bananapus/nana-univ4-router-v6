@@ -70,13 +70,23 @@ contract MockJBPricesSA {
         return 0;
     }
 
-    function setPricePerUnitOf(uint256 projectId, uint256 pricingCurrency, uint256 unitCurrency, uint256 price)
+    function setPricePerUnitOf(
+        uint256 projectId,
+        uint256 pricingCurrency,
+        uint256 unitCurrency,
+        uint256 price
+    )
         external
     {
         prices[projectId][pricingCurrency][unitCurrency] = price;
     }
 
-    function pricePerUnitOf(uint256 projectId, uint256 pricingCurrency, uint256 unitCurrency, uint256)
+    function pricePerUnitOf(
+        uint256 projectId,
+        uint256 pricingCurrency,
+        uint256 unitCurrency,
+        uint256
+    )
         external
         view
         returns (uint256)
@@ -182,7 +192,12 @@ contract ConcaveBondingCurveStore {
     }
 
     /// @notice Read-only estimate (matches what the hook calls for route comparison).
-    function currentReclaimableSurplusOf(uint256, uint256 cashOutCount, uint256, uint256)
+    function currentReclaimableSurplusOf(
+        uint256,
+        uint256 cashOutCount,
+        uint256,
+        uint256
+    )
         external
         view
         returns (uint256)
@@ -198,7 +213,11 @@ contract ConcaveBondingCurveStore {
         JBAccountingContext[] calldata,
         uint256,
         uint256
-    ) external view returns (uint256) {
+    )
+        external
+        view
+        returns (uint256)
+    {
         return _computeReclaim(surplus, cashOutCount, totalSupply);
     }
 }
@@ -246,7 +265,11 @@ contract ConcaveBondingCurveTerminal {
         uint256,
         string calldata,
         bytes calldata
-    ) external payable returns (uint256 beneficiaryTokenCount) {
+    )
+        external
+        payable
+        returns (uint256 beneficiaryTokenCount)
+    {
         lastProjectId = projectId;
         lastToken = token;
         lastAmount = amount;
@@ -269,7 +292,10 @@ contract ConcaveBondingCurveTerminal {
         uint256 minTokensReclaimed,
         address payable beneficiary,
         bytes calldata
-    ) external returns (uint256) {
+    )
+        external
+        returns (uint256)
+    {
         lastProjectId = projectId;
         lastToken = tokenToReclaim;
         lastAmount = cashOutCount;
@@ -403,8 +429,7 @@ contract TestStructuralArbitrage is Test {
             IJBPrices(address(mockJbPrices))
         );
 
-        (, bytes32 salt) =
-            HookMiner.find(address(this), flags, type(JBUniswapV4Hook).creationCode, constructorArgs);
+        (, bytes32 salt) = HookMiner.find(address(this), flags, type(JBUniswapV4Hook).creationCode, constructorArgs);
 
         hook = new JBUniswapV4Hook{salt: salt}(
             IPoolManager(address(manager)),
@@ -517,10 +542,7 @@ contract TestStructuralArbitrage is Test {
                 surplusAfter[i],
                 surplusAfter[i - 1],
                 string.concat(
-                    "Surplus after round ",
-                    vm.toString(i),
-                    " must be less than after round ",
-                    vm.toString(i - 1)
+                    "Surplus after round ", vm.toString(i), " must be less than after round ", vm.toString(i - 1)
                 )
             );
         }
@@ -543,18 +565,14 @@ contract TestStructuralArbitrage is Test {
 
         // At each step, compute the reclaim for the ENTIRE remaining supply.
         // This represents the maximum possible future extraction.
-        uint256 initialFullReclaim = testStore.currentReclaimableSurplusOf(
-            PROJECT_ID, INITIAL_SUPPLY, 0, 0
-        );
+        uint256 initialFullReclaim = testStore.currentReclaimableSurplusOf(PROJECT_ID, INITIAL_SUPPLY, 0, 0);
         uint256[] memory fullReclaims = new uint256[](numRounds);
 
         for (uint256 i = 0; i < numRounds; i++) {
             testStore.recordCashOut(cashOutSize);
             uint256 remainingSupply = testStore.totalSupply();
             if (remainingSupply > 0) {
-                fullReclaims[i] = testStore.currentReclaimableSurplusOf(
-                    PROJECT_ID, remainingSupply, 0, 0
-                );
+                fullReclaims[i] = testStore.currentReclaimableSurplusOf(PROJECT_ID, remainingSupply, 0, 0);
             }
         }
 
@@ -571,10 +589,7 @@ contract TestStructuralArbitrage is Test {
                 fullReclaims[i],
                 fullReclaims[i - 1],
                 string.concat(
-                    "Full reclaim after round ",
-                    vm.toString(i),
-                    " must be less than after round ",
-                    vm.toString(i - 1)
+                    "Full reclaim after round ", vm.toString(i), " must be less than after round ", vm.toString(i - 1)
                 )
             );
         }
@@ -633,9 +648,7 @@ contract TestStructuralArbitrage is Test {
         jbSwapRouter.swap(
             key,
             SwapParams({
-                zeroForOne: false,
-                amountSpecified: -int256(0.001 ether),
-                sqrtPriceLimitX96: TickMath.MAX_SQRT_PRICE - 1
+                zeroForOne: false, amountSpecified: -int256(0.001 ether), sqrtPriceLimitX96: TickMath.MAX_SQRT_PRICE - 1
             }),
             0
         );
@@ -756,11 +769,7 @@ contract TestStructuralArbitrage is Test {
         console.log("  Extraction percent:  %d%%", (totalExtracted * 100) / INITIAL_SURPLUS);
 
         // Exact conservation
-        assertEq(
-            totalExtracted + remainingSurplus,
-            INITIAL_SURPLUS,
-            "Conservation: extracted + remaining = initial"
-        );
+        assertEq(totalExtracted + remainingSurplus, INITIAL_SURPLUS, "Conservation: extracted + remaining = initial");
 
         // With 50% tax, the curve retains substantial surplus even after 75% supply reduction.
         assertGt(remainingSurplus, 0, "Surplus should not be fully drained");
@@ -877,10 +886,6 @@ contract TestStructuralArbitrage is Test {
         assertEq(partialStore.totalSupply(), 0, "No supply remains");
 
         // --- Part C: Conservation ---
-        assertEq(
-            partialExtracted + finalReclaim,
-            INITIAL_SURPLUS,
-            "Conservation: total extracted = initial surplus"
-        );
+        assertEq(partialExtracted + finalReclaim, INITIAL_SURPLUS, "Conservation: total extracted = initial surplus");
     }
 }
