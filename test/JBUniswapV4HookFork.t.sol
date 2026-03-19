@@ -1752,7 +1752,7 @@ contract JBUniswapV4HookForkTest is Test {
     /// V4.
     /// @dev Flow: pay project -> confirm JB sell quote is positive -> cashout all authentic tokens -> sell (V4 route)
     function testFork_SurplusDepletesSwitchesToV4() public {
-        address user = testUser;
+        address user = makeAddr("surplusDepletionUser");
         vm.deal(user, 100 ether);
 
         bool nanaIsToken0 = Currency.unwrap(key.currency0) == NANA;
