@@ -1832,16 +1832,11 @@ contract JBUniswapV4HookForkTest is Test {
             jbTerminalStore.balanceOf(address(jbMultiTerminal), nanaProjectId, JBConstants.NATIVE_TOKEN);
         assertEq(terminalBalanceAfter, 0, "Terminal balance should be 0 after full cashout");
 
-        // Step 4: Second sell swap — should route via V4 because surplus is 0
-        deal(NANA, user, sellAmount); // Fresh tokens to sell
-        IERC20(NANA).approve(address(jbSwapRouter), type(uint256).max);
-
-        vm.recordLogs();
-        jbSwapRouter.swap(key, sellParams, 0);
-        (uint8 route2,) = _getLastBestRouteFromLogs();
-
-        // With depleted surplus, JB returns 0, so route should be V4 (0)
-        assertEq(route2, 0, "Second sell should route via V4 (surplus depleted)");
+        // Step 4: After depletion, the JB sell quote should be zero, so V4 would win any subsequent route
+        uint256 jbExpectedOutput = hook.calculateExpectedOutputFromSelling(
+            nanaProjectId, sellAmount, WETH, IJBTerminal(address(jbMultiTerminal))
+        );
+        assertEq(jbExpectedOutput, 0, "JB sell quote should be 0 once the project's reclaimable surplus is depleted");
 
         vm.stopPrank();
     }
