@@ -22,42 +22,83 @@ import {JuiceboxSwapRouter} from "./utils/JuiceboxSwapRouter.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 
-// Import Juicebox interfaces
-import {IJBTokens, IJBController, IJBPrices, IJBDirectory} from "../src/JBUniswapV4Hook.sol";
+// Import Juicebox interfaces (re-exported from the hook for convenience)
+import {IJBTokens, IJBPrices, IJBDirectory} from "../src/JBUniswapV4Hook.sol";
 import {IJBTerminal} from "@bananapus/core-v6/src/interfaces/IJBTerminal.sol";
 import {IJBToken} from "@bananapus/core-v6/src/interfaces/IJBToken.sol";
 import {JBRuleset} from "@bananapus/core-v6/src/structs/JBRuleset.sol";
 import {JBRulesetMetadata} from "@bananapus/core-v6/src/structs/JBRulesetMetadata.sol";
 import {HookMiner} from "@uniswap/v4-periphery/src/utils/HookMiner.sol";
 
+// JB core concrete implementations (deployed fresh within fork)
+import {JBPermissions} from "@bananapus/core-v6/src/JBPermissions.sol";
+import {JBProjects} from "@bananapus/core-v6/src/JBProjects.sol";
+import {JBDirectory} from "@bananapus/core-v6/src/JBDirectory.sol";
+import {JBRulesets} from "@bananapus/core-v6/src/JBRulesets.sol";
+import {JBTokens} from "@bananapus/core-v6/src/JBTokens.sol";
+import {JBERC20} from "@bananapus/core-v6/src/JBERC20.sol";
+import {JBSplits} from "@bananapus/core-v6/src/JBSplits.sol";
+import {JBPrices} from "@bananapus/core-v6/src/JBPrices.sol";
+import {JBController} from "@bananapus/core-v6/src/JBController.sol";
+import {JBFundAccessLimits} from "@bananapus/core-v6/src/JBFundAccessLimits.sol";
+import {JBFeelessAddresses} from "@bananapus/core-v6/src/JBFeelessAddresses.sol";
+import {JBTerminalStore} from "@bananapus/core-v6/src/JBTerminalStore.sol";
+import {JBMultiTerminal} from "@bananapus/core-v6/src/JBMultiTerminal.sol";
+import {JBConstants} from "@bananapus/core-v6/src/libraries/JBConstants.sol";
+import {JBAccountingContext} from "@bananapus/core-v6/src/structs/JBAccountingContext.sol";
+import {JBRulesetConfig} from "@bananapus/core-v6/src/structs/JBRulesetConfig.sol";
+import {JBTerminalConfig} from "@bananapus/core-v6/src/structs/JBTerminalConfig.sol";
+import {JBSplitGroup} from "@bananapus/core-v6/src/structs/JBSplitGroup.sol";
+import {JBFundAccessLimitGroup} from "@bananapus/core-v6/src/structs/JBFundAccessLimitGroup.sol";
+import {IJBRulesetApprovalHook} from "@bananapus/core-v6/src/interfaces/IJBRulesetApprovalHook.sol";
+import {IPermit2} from "@uniswap/permit2/src/interfaces/IPermit2.sol";
+
 /// @title JBUniswapV4HookForkTest
-/// @notice Fork tests using mainnet addresses
+/// @notice Fork tests that deploy JB v6 contracts fresh within the fork
 /// @dev To run these tests:
-///      1. Optionally set MAINNET_RPC_URL in your .env file (e.g.,
-/// MAINNET_RPC_URL=https://eth-mainnet.g.alchemy.com/v2/YOUR_KEY) If not set, defaults to
-/// https://ethereum-rpc.publicnode.com (public RPC, may have rate limits)
-///         For reliable testing, use your own RPC endpoint (Alchemy, Infura, QuickNode, etc.)
-///      2. Run: forge test --match-contract JBUniswapV4HookForkTest -vv
-/// @dev These tests use real mainnet contracts, so they require a mainnet RPC endpoint
-/// @dev Note: Public RPC endpoints may rate limit. If tests fail with 429 errors, set MAINNET_RPC_URL to your own
-/// endpoint
+///      1. Set RPC_ETHEREUM_MAINNET in your .env file (e.g.,
+/// RPC_ETHEREUM_MAINNET=https://eth-mainnet.g.alchemy.com/v2/YOUR_KEY)
+///      2. Run: source .env && forge test --match-contract JBUniswapV4HookForkTest -vv
+/// @dev JB core contracts are deployed fresh within the fork. Only ERC-20 tokens (WETH, USDC, BAN)
+///      use real mainnet addresses. NANA is replaced by a freshly deployed JB ERC-20 project token.
 contract JBUniswapV4HookForkTest is Test {
     using PoolIdLibrary for PoolKey;
     using CurrencyLibrary for Currency;
     using StateLibrary for IPoolManager;
     using SafeERC20 for IERC20;
 
-    // Mainnet Juicebox addresses
-    address constant MAINNET_JB_TOKENS = 0x4d0Edd347FB1fA21589C1E109B3474924BE87636;
-    address constant MAINNET_JB_DIRECTORY = 0x0061E516886A0540F63157f112C0588eE0651dCF;
-    address constant MAINNET_JB_CONTROLLER = 0x27da30646502e2f642bE5281322Ae8C394F7668a;
-    address constant MAINNET_JB_PRICES = 0x9b90E507cF6B7eB681A506b111f6f50245e614c4;
-    address constant MAINNET_JB_TERMINAL_STORE = 0xfE33B439Ec53748C87DcEDACb83f05aDd5014744;
-    // Mainnet token addresses
+    // Mainnet ERC-20 token addresses (exist at FORK_BLOCK)
     address constant WETH = 0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2;
     address constant USDC = 0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48;
     address constant BAN = 0x0faCEdf66a1E37714dbd748639Ea36D23254dB73;
-    address constant NANA = 0x58204a8849BF6A625D56021adfD12ce4a4A3AF13;
+
+    // Permit2 (exists at FORK_BLOCK)
+    IPermit2 constant PERMIT2 = IPermit2(0x000000000022D473030F116dDEE9F6B43aC78BA3);
+
+    // JB core (deployed fresh in setUp)
+    address multisig = address(0xBEEF);
+    address trustedForwarder = address(0);
+
+    JBPermissions jbPermissions;
+    JBProjects jbProjects;
+    JBDirectory jbDirectory;
+    JBRulesets jbRulesets;
+    JBTokens jbTokens;
+    JBSplits jbSplits;
+    JBPrices jbPrices;
+    JBFundAccessLimits jbFundAccessLimits;
+    JBFeelessAddresses jbFeelessAddresses;
+    JBController jbController;
+    JBTerminalStore jbTerminalStore;
+    JBMultiTerminal jbMultiTerminal;
+
+    // Project IDs
+    uint256 feeProjectId; // Project 1 (fee recipient)
+    uint256 nanaProjectId; // Project 2 (the "NANA" project)
+
+    // The deployed JB ERC-20 token for nanaProjectId (replaces the mainnet NANA address)
+    // forge-lint: disable-next-line(mixed-case-variable)
+    address NANA;
 
     JBUniswapV4Hook hook;
     PoolManager manager;
@@ -66,6 +107,7 @@ contract JBUniswapV4HookForkTest is Test {
     PoolModifyLiquidityTest modifyLiquidityRouter;
 
     // Test constants
+    uint256 constant FORK_BLOCK = 21_700_000;
     uint160 constant SQRT_PRICE_1_1 = 79_228_162_514_264_337_593_543_950_336; // sqrt(1.0001^0) * 2^96
     bytes constant ZERO_BYTES = "";
 
@@ -73,31 +115,37 @@ contract JBUniswapV4HookForkTest is Test {
     PoolId id;
 
     // Test user with mainnet ETH
-    address testUser = address(0xBEEF);
+    address testUser = address(0xCAFE);
 
     /// @notice Fork mainnet using RPC_ETHEREUM_MAINNET env var, falling back to a public RPC.
     function setUp() public {
         string memory rpcUrl = vm.envOr("RPC_ETHEREUM_MAINNET", string("https://ethereum-rpc.publicnode.com"));
-        vm.createSelectFork(rpcUrl);
+        vm.createSelectFork(rpcUrl, FORK_BLOCK);
 
-        // Mark mainnet contracts as persistent so they can be called in fork tests
-        vm.makePersistent(MAINNET_JB_TOKENS);
-        vm.makePersistent(MAINNET_JB_DIRECTORY);
-        vm.makePersistent(MAINNET_JB_CONTROLLER);
-        vm.makePersistent(MAINNET_JB_PRICES);
-        vm.makePersistent(MAINNET_JB_TERMINAL_STORE);
+        // Mark mainnet ERC-20 tokens as persistent so they survive fork state resets
         vm.makePersistent(WETH);
         vm.makePersistent(USDC);
         vm.makePersistent(BAN);
-        vm.makePersistent(NANA);
 
-        // Deploy core contracts
+        // Deploy all JB core contracts fresh within the fork
+        _deployJbCore();
+
+        // Launch fee project (project 1) and NANA project (project 2)
+        feeProjectId = _launchProject({acceptedToken: JBConstants.NATIVE_TOKEN, decimals: 18});
+        nanaProjectId = _launchProject({acceptedToken: JBConstants.NATIVE_TOKEN, decimals: 18});
+
+        // Deploy ERC-20 for the NANA project so it has a real token address
+        vm.prank(multisig);
+        IJBToken nanaToken = jbController.deployERC20For({projectId: nanaProjectId, name: "NANA", symbol: "NANA", salt: 0});
+        NANA = address(nanaToken);
+
+        // Deploy Uniswap v4 core contracts
         manager = new PoolManager(address(this));
         swapRouter = new PoolSwapTest(IPoolManager(address(manager)));
         jbSwapRouter = new JuiceboxSwapRouter(IPoolManager(address(manager)));
         modifyLiquidityRouter = new PoolModifyLiquidityTest(IPoolManager(address(manager)));
 
-        // Deploy the hook with mainnet addresses
+        // Deploy the hook with freshly deployed JB contracts
         uint160 flags = uint160(
             Hooks.AFTER_INITIALIZE_FLAG | Hooks.BEFORE_SWAP_FLAG | Hooks.AFTER_SWAP_FLAG
                 | Hooks.BEFORE_SWAP_RETURNS_DELTA_FLAG | Hooks.AFTER_ADD_LIQUIDITY_FLAG
@@ -106,28 +154,39 @@ contract JBUniswapV4HookForkTest is Test {
 
         bytes memory constructorArgs = abi.encode(
             IPoolManager(address(manager)),
-            IJBTokens(MAINNET_JB_TOKENS),
-            IJBDirectory(MAINNET_JB_DIRECTORY),
-            IJBPrices(MAINNET_JB_PRICES)
+            IJBTokens(address(jbTokens)),
+            IJBDirectory(address(jbDirectory)),
+            IJBPrices(address(jbPrices))
         );
 
         (, bytes32 salt) = HookMiner.find(address(this), flags, type(JBUniswapV4Hook).creationCode, constructorArgs);
 
         hook = new JBUniswapV4Hook{salt: salt}(
             IPoolManager(address(manager)),
-            IJBTokens(MAINNET_JB_TOKENS),
-            IJBDirectory(MAINNET_JB_DIRECTORY),
-            IJBPrices(MAINNET_JB_PRICES)
+            IJBTokens(address(jbTokens)),
+            IJBDirectory(address(jbDirectory)),
+            IJBPrices(address(jbPrices))
         );
 
         // Set up a simple pool with NANA/WETH (currencies must be ordered: currency0 < currency1)
-        key = PoolKey({
-            currency0: Currency.wrap(NANA),
-            currency1: Currency.wrap(WETH),
-            fee: 3000,
-            tickSpacing: 60,
-            hooks: IHooks(address(hook))
-        });
+        // The deployed NANA ERC-20 address is non-deterministic, so we order dynamically.
+        if (NANA < WETH) {
+            key = PoolKey({
+                currency0: Currency.wrap(NANA),
+                currency1: Currency.wrap(WETH),
+                fee: 3000,
+                tickSpacing: 60,
+                hooks: IHooks(address(hook))
+            });
+        } else {
+            key = PoolKey({
+                currency0: Currency.wrap(WETH),
+                currency1: Currency.wrap(NANA),
+                fee: 3000,
+                tickSpacing: 60,
+                hooks: IHooks(address(hook))
+            });
+        }
 
         id = key.toId();
 
@@ -136,15 +195,23 @@ contract JBUniswapV4HookForkTest is Test {
 
         // Try to initialize price to match the Juicebox price index (NANA per WETH)
         // Use the hook's calculation to get how many NANA are minted per 1 WETH, then convert to sqrtPriceX96.
-        // ratio token1/token0 = WETH per NANA = 1e18 / (NANA per 1e18 WETH)
         uint160 initSqrtPriceX96 = SQRT_PRICE_1_1; // Default fallback
-        uint256 projectId = IJBTokens(MAINNET_JB_TOKENS).projectIdOf(IJBToken(NANA));
+        uint256 projectId = jbTokens.projectIdOf(IJBToken(NANA));
         if (projectId != 0) {
             try hook.calculateExpectedTokensWithCurrency(projectId, WETH, 1 ether) returns (uint256 nanaPerWeth) {
                 if (nanaPerWeth > 0) {
-                    // ratioX192 = (WETH per NANA) * 2^192 = ((1e18 << 192) / nanaPerWeth)
-                    uint256 ratioX192 = (uint256(1e18) << 192) / nanaPerWeth;
-                    initSqrtPriceX96 = uint160(_sqrt(ratioX192));
+                    // Compute sqrtPriceX96 based on pool token ordering
+                    if (NANA < WETH) {
+                        // token0=NANA, token1=WETH: price = token1/token0 = WETH per NANA
+                        // ratioX192 = (WETH per NANA) * 2^192 = ((1e18 << 192) / nanaPerWeth)
+                        uint256 ratioX192 = (uint256(1e18) << 192) / nanaPerWeth;
+                        initSqrtPriceX96 = uint160(_sqrt(ratioX192));
+                    } else {
+                        // token0=WETH, token1=NANA: price = token1/token0 = NANA per WETH
+                        // ratioX192 = nanaPerWeth * 2^192 / 1e18
+                        uint256 ratioX192 = (nanaPerWeth << 192) / 1e18;
+                        initSqrtPriceX96 = uint160(_sqrt(ratioX192));
+                    }
                 }
             } catch {
                 // keep default fallback
@@ -202,22 +269,22 @@ contract JBUniswapV4HookForkTest is Test {
         }
     }
 
-    /// @notice Test that the hook can be deployed and initialized with mainnet addresses
+    /// @notice Test that the hook can be deployed and initialized with freshly deployed JB contracts
     function testHookDeployment() public view {
         assertTrue(address(hook) != address(0), "Hook should be deployed");
-        assertEq(address(hook.TOKENS()), MAINNET_JB_TOKENS, "Should use mainnet JB_TOKENS");
-        assertEq(address(hook.DIRECTORY()), MAINNET_JB_DIRECTORY, "Should use mainnet JB_DIRECTORY");
-        assertEq(address(hook.PRICES()), MAINNET_JB_PRICES, "Should use mainnet JB_PRICES");
+        assertEq(address(hook.TOKENS()), address(jbTokens), "Should use deployed JB_TOKENS");
+        assertEq(address(hook.DIRECTORY()), address(jbDirectory), "Should use deployed JB_DIRECTORY");
+        assertEq(address(hook.PRICES()), address(jbPrices), "Should use deployed JB_PRICES");
     }
 
-    /// @notice Test that the hook can query a real Juicebox project
+    /// @notice Test that the hook can query the freshly launched Juicebox project
     function testQueryRealJuiceboxProject() public view {
         // Look up the project ID based on the NANA token address via JB Tokens registry
-        uint256 projectId = IJBTokens(MAINNET_JB_TOKENS).projectIdOf(IJBToken(NANA));
+        uint256 projectId = jbTokens.projectIdOf(IJBToken(NANA));
 
         // Query the project's current ruleset
         (JBRuleset memory ruleset, JBRulesetMetadata memory metadata) =
-            IJBController(MAINNET_JB_CONTROLLER).currentRulesetOf(projectId);
+            jbController.currentRulesetOf(projectId);
 
         // Validate that the project exists and has valid ruleset data
         assertTrue(ruleset.weight > 0, "Project should have a positive weight");
@@ -228,40 +295,19 @@ contract JBUniswapV4HookForkTest is Test {
 
         // Should return tokens based on the project's weight
         assertTrue(expectedTokens > 0, "Should calculate expected tokens for ETH payment");
-        // Test calculating expected tokens with NANA payment
-        // uint256 nanaAmount = 1000 ether; // 1000 NANA
-        // uint256 expectedTokensNANA = hook.calculateExpectedTokensWithCurrency(projectId, NANA, nanaAmount);
-
-        // // Should return tokens (may be 0 if price feed doesn't exist, but should not revert)
-        // assertTrue(expectedTokensNANA >= 0, "Should calculate expected tokens for NANA payment");
-
-        // // Try to verify project token registration (if we can find the token)
-        // // Note: The exact method to get project token may vary by Juicebox version
-        // // This is optional validation - the main test is the ruleset query and calculations
-
-        // // Test calculating expected output from selling tokens (if project has reclaimable surplus)
-        // if (expectedTokens > 0) {
-        //     uint256 expectedOutput = hook.calculateExpectedOutputFromSelling(projectId, expectedTokens, USDC);
-        //     // Output may be 0 if no surplus, but should not revert
-        //     assertTrue(expectedOutput >= 0, "Should calculate expected output from selling tokens");
-        // }
     }
 
     /// @notice Test that the hook can detect if a token is a Juicebox project token
-    function testDetectJuiceboxToken() public view {
-        // This test would need a real JB project token address
-        // For now, we just verify the hook can call the TOKENS contract
-        try IJBTokens(MAINNET_JB_TOKENS).projectIdOf(IJBToken(address(NANA))) returns (uint256 projectId) {
-            // If address(0) returns 0, that's expected
-            assertTrue(projectId == 0 || projectId > 0, "Should return a project ID or 0");
+    function testDetectJuiceboxToken() public {
+        // This test verifies the hook can call the TOKENS contract
+        try jbTokens.projectIdOf(IJBToken(address(NANA))) returns (uint256 projectId) {
+            assertTrue(projectId > 0, "Should return a valid project ID for the deployed NANA token");
         } catch Error(string memory reason) {
-            // Expected to fail for invalid token - address(0) is not a valid IJBToken
-            console.log("projectIdOf failed for invalid token:", reason);
-            // This is expected behavior
+            console.log("projectIdOf failed for NANA token:", reason);
+            fail("projectIdOf should not fail for a valid JB token");
         } catch (bytes memory) {
-            // Low-level revert (e.g., invalid function selector, contract doesn't exist)
             console.log("projectIdOf reverted with low-level error");
-            // This is acceptable - the token contract may not exist or be invalid
+            fail("projectIdOf should not revert for a valid JB token");
         }
     }
 
@@ -284,7 +330,10 @@ contract JBUniswapV4HookForkTest is Test {
         // Test TWAP estimation for the NANA/WETH pool
         // With only initial observation, estimate should use spot price fallback
 
-        try hook.estimateUniswapOutput(id, key, 1 ether, false) returns (uint256 estimatedOut) {
+        // Determine zeroForOne based on token ordering: we want WETH -> NANA
+        bool zeroForOne = Currency.unwrap(key.currency0) == WETH;
+
+        try hook.estimateUniswapOutput(id, key, 1 ether, zeroForOne) returns (uint256 estimatedOut) {
             // Should return positive value (may be 0 if pool has no liquidity)
             assertTrue(estimatedOut >= 0, "Should estimate output (may be 0 for empty pool)");
         } catch Error(string memory reason) {
@@ -309,15 +358,16 @@ contract JBUniswapV4HookForkTest is Test {
         uint256 v4Output;
         uint256 juiceboxOutput = 0;
 
-        // Get v4 output estimate
-        try hook.estimateUniswapOutput(id, key, testAmount, false) returns (uint256 output) {
+        // Get v4 output estimate — WETH -> NANA direction
+        bool zeroForOne = Currency.unwrap(key.currency0) == WETH;
+        try hook.estimateUniswapOutput(id, key, testAmount, zeroForOne) returns (uint256 output) {
             v4Output = output;
         } catch {
             v4Output = 0;
         }
 
         // Try to get Juicebox output (if we can find a project)
-        uint256 projectId = IJBTokens(MAINNET_JB_TOKENS).projectIdOf(IJBToken(NANA));
+        uint256 projectId = jbTokens.projectIdOf(IJBToken(NANA));
         try hook.calculateExpectedTokensWithCurrency(projectId, address(0), testAmount) returns (uint256 output) {
             juiceboxOutput = output;
         } catch {
@@ -346,21 +396,22 @@ contract JBUniswapV4HookForkTest is Test {
         uint256 v4Output;
         uint256 juiceboxOutput;
 
-        // V4 estimate: selling token0 (NANA) for token1 (WETH) => zeroForOne = true
-        try hook.estimateUniswapOutput(id, key, testAmount, true) returns (uint256 output) {
+        // V4 estimate: selling NANA for WETH
+        bool zeroForOneNanaToWeth = Currency.unwrap(key.currency0) == NANA;
+        try hook.estimateUniswapOutput(id, key, testAmount, zeroForOneNanaToWeth) returns (uint256 output) {
             v4Output = output;
         } catch {
             v4Output = 0;
         }
 
         // Juicebox sell-path output (receive WETH when redeeming NANA)
-        uint256 projectId = IJBTokens(MAINNET_JB_TOKENS).projectIdOf(IJBToken(NANA));
+        uint256 projectId = jbTokens.projectIdOf(IJBToken(NANA));
         if (projectId != 0) {
-            // Get terminal for the output token (WETH)
+            // Get terminal for the output token (WETH -> normalized to native ETH)
             // forge-lint: disable-next-line(mixed-case-variable)
             address normalizedWETH = address(0x000000000000000000000000000000000000EEEe);
             IJBTerminal jbTerminal;
-            try IJBDirectory(MAINNET_JB_DIRECTORY).primaryTerminalOf(projectId, normalizedWETH) returns (
+            try IJBDirectory(address(jbDirectory)).primaryTerminalOf(projectId, normalizedWETH) returns (
                 IJBTerminal t
             ) {
                 jbTerminal = t;
@@ -394,12 +445,12 @@ contract JBUniswapV4HookForkTest is Test {
 
         // Prepare a user with tokens and add minimal liquidity so a swap can execute
         address user = testUser;
-        uint256 banAmount = 1000 ether;
+        uint256 nanaAmount = 1000 ether;
         uint256 wethForLiquidity = 2 ether;
         uint256 amountIn = 0.1 ether;
 
-        // Fund user with BAN and ETH, then wrap ETH to WETH
-        deal(BAN, user, banAmount);
+        // Fund user with NANA and ETH, then wrap ETH to WETH
+        deal(NANA, user, nanaAmount);
         vm.deal(user, 5 ether);
 
         vm.startPrank(user);
@@ -407,7 +458,7 @@ contract JBUniswapV4HookForkTest is Test {
         require(wrapOk, "WETH deposit failed");
 
         // Approve for liquidity and swap
-        IERC20(BAN).approve(address(modifyLiquidityRouter), type(uint256).max);
+        IERC20(NANA).approve(address(modifyLiquidityRouter), type(uint256).max);
         IERC20(WETH).approve(address(modifyLiquidityRouter), type(uint256).max);
         IERC20(WETH).approve(address(jbSwapRouter), amountIn);
 
@@ -421,12 +472,14 @@ contract JBUniswapV4HookForkTest is Test {
         // Ensure a different timestamp for a new observation slot
         vm.warp(block.timestamp + 1);
 
-        // Execute a small WETH -> BAN swap (currency1 -> currency0)
+        // Execute a small WETH -> NANA swap
+        // Determine direction: if WETH is currency1, zeroForOne=false; if WETH is currency0, zeroForOne=true
+        bool zeroForOne = Currency.unwrap(key.currency0) == WETH;
         SwapParams memory params = SwapParams({
-            zeroForOne: false,
+            zeroForOne: zeroForOne,
             // forge-lint: disable-next-line(unsafe-typecast)
             amountSpecified: -int256(amountIn),
-            sqrtPriceLimitX96: TickMath.MAX_SQRT_PRICE - 1
+            sqrtPriceLimitX96: zeroForOne ? TickMath.MIN_SQRT_PRICE + 1 : TickMath.MAX_SQRT_PRICE - 1
         });
         jbSwapRouter.swap(key, params, 0); // 1% slippage
         vm.stopPrank();
@@ -457,7 +510,7 @@ contract JBUniswapV4HookForkTest is Test {
         return (0, 0);
     }
 
-    /// @notice Make v4 clearly favorable by pushing price with a BAN->WETH swap, then verify route="v4".
+    /// @notice Make v4 clearly favorable by pushing price with a NANA->WETH swap, then verify route="v4".
     function testFork_V4BestPriceRoutesToV4_WETHtoNANA() public {
         address user = testUser;
 
@@ -481,11 +534,14 @@ contract JBUniswapV4HookForkTest is Test {
         );
 
         // Push price to make NANA cheaper vs WETH for a subsequent WETH->NANA swap:
-        // Do a large NANA->WETH swap (zeroForOne=true) which increases NANA reserves and removes WETH.
+        // Do a large NANA->WETH swap which increases NANA reserves and removes WETH.
         IERC20(NANA).approve(address(swapRouter), type(uint256).max);
+        bool nanaIsToken0 = Currency.unwrap(key.currency0) == NANA;
         // forge-lint: disable-next-line(mixed-case-variable)
         SwapParams memory pushDownNANAPrice = SwapParams({
-            zeroForOne: true, amountSpecified: -int256(5000 ether), sqrtPriceLimitX96: TickMath.MIN_SQRT_PRICE + 1
+            zeroForOne: nanaIsToken0,
+            amountSpecified: -int256(5000 ether),
+            sqrtPriceLimitX96: nanaIsToken0 ? TickMath.MIN_SQRT_PRICE + 1 : TickMath.MAX_SQRT_PRICE - 1
         });
         // Best-effort; ignore failure due to liquidity limits
         try swapRouter.swap(
@@ -496,11 +552,12 @@ contract JBUniswapV4HookForkTest is Test {
         // Now do the priced swap via JB router (so hook can choose route)
         vm.recordLogs();
         uint256 amountIn = 1 ether;
+        bool wethToNana = !nanaIsToken0; // If NANA is token0, then WETH is token1 => zeroForOne=false to buy NANA
         SwapParams memory testSwap = SwapParams({
-            zeroForOne: false,
+            zeroForOne: !nanaIsToken0,
             // forge-lint: disable-next-line(unsafe-typecast)
             amountSpecified: -int256(amountIn),
-            sqrtPriceLimitX96: TickMath.MAX_SQRT_PRICE - 1
+            sqrtPriceLimitX96: wethToNana ? TickMath.MAX_SQRT_PRICE - 1 : TickMath.MIN_SQRT_PRICE + 1
         });
         try jbSwapRouter.swap(key, testSwap, 0) { // 1% slippage
             (uint8 route,) = _getLastBestRouteFromLogs();
@@ -540,10 +597,13 @@ contract JBUniswapV4HookForkTest is Test {
         );
 
         // Push price to make WETH cheaper vs NANA for a subsequent NANA->WETH swap:
-        // Do a large WETH->NANA swap (zeroForOne=false) which increases WETH reserves and removes NANA.
+        // Do a large WETH->NANA swap which increases WETH reserves and removes NANA.
+        bool nanaIsToken0 = Currency.unwrap(key.currency0) == NANA;
         // forge-lint: disable-next-line(mixed-case-variable)
         SwapParams memory pushUpWETHSupply = SwapParams({
-            zeroForOne: false, amountSpecified: -int256(5000 ether), sqrtPriceLimitX96: TickMath.MAX_SQRT_PRICE - 1
+            zeroForOne: !nanaIsToken0, // WETH -> NANA direction
+            amountSpecified: -int256(5000 ether),
+            sqrtPriceLimitX96: !nanaIsToken0 ? TickMath.MIN_SQRT_PRICE + 1 : TickMath.MAX_SQRT_PRICE - 1
         });
         // Best-effort; ignore failure due to liquidity limits
         try swapRouter.swap(key, pushUpWETHSupply, PoolSwapTest.TestSettings(false, false), abi.encode(uint256(100))) {}
@@ -553,10 +613,10 @@ contract JBUniswapV4HookForkTest is Test {
         vm.recordLogs();
         uint256 amountIn = 1000 ether;
         SwapParams memory testSwap = SwapParams({
-            zeroForOne: true,
+            zeroForOne: nanaIsToken0, // NANA -> WETH direction
             // forge-lint: disable-next-line(unsafe-typecast)
             amountSpecified: -int256(amountIn),
-            sqrtPriceLimitX96: TickMath.MIN_SQRT_PRICE + 1
+            sqrtPriceLimitX96: nanaIsToken0 ? TickMath.MIN_SQRT_PRICE + 1 : TickMath.MAX_SQRT_PRICE - 1
         });
         try jbSwapRouter.swap(key, testSwap, 0) { // 1% slippage
             (uint8 route,) = _getLastBestRouteFromLogs();
@@ -573,7 +633,7 @@ contract JBUniswapV4HookForkTest is Test {
     /// @notice Prefer JB when JB quote beats v4; otherwise fall back to v4.
     function testFork_JuiceboxBestOrV4Fallback_WETHtoNANA() public {
         // Get NANA projectId
-        uint256 projectId = IJBTokens(MAINNET_JB_TOKENS).projectIdOf(IJBToken(NANA));
+        uint256 projectId = jbTokens.projectIdOf(IJBToken(NANA));
         vm.assume(projectId != 0);
 
         // Create a pool with native ETH (address(0)) instead of WETH
@@ -593,8 +653,9 @@ contract JBUniswapV4HookForkTest is Test {
             try hook.calculateExpectedTokensWithCurrency(projectId, address(0), 1 ether) returns (uint256 nanaPerEth) {
                 if (nanaPerEth > 0) {
                     // sqrtPriceX96 = sqrt((token1/token0) * 2^192)
-                    // token1/token0 (ETH per NANA) = (1e18 / nanaPerEth)
-                    uint256 ratioX192 = (uint256(1e18) << 192) / nanaPerEth;
+                    // token0=ETH (address(0)), token1=NANA
+                    // price = NANA per ETH = nanaPerEth / 1e18
+                    uint256 ratioX192 = (nanaPerEth << 192) / 1e18;
                     uint160 jbSqrtPriceX96 = uint160(_sqrt(ratioX192));
                     // Initialize the pool at JB price
                     manager.initialize(useKey, jbSqrtPriceX96);
@@ -657,11 +718,10 @@ contract JBUniswapV4HookForkTest is Test {
             (uint8 route,) = _getLastBestRouteFromLogs();
 
             // Check for primary terminal (same check as in JBUniswapV4Hook.sol)
-            // When buying with WETH, we need to look up terminal that accepts native ETH (JB_NATIVE_TOKEN)
-            // because terminals don't accept WETH directly - we'd need to unwrap WETH first
+            // When buying with ETH, we need to look up terminal that accepts native ETH (JB_NATIVE_TOKEN)
             IJBTerminal jbTerminal;
             address terminalToken = address(0x000000000000000000000000000000000000EEEe); // JB_NATIVE_TOKEN
-            try IJBDirectory(MAINNET_JB_DIRECTORY).primaryTerminalOf(projectId, terminalToken) returns (IJBTerminal t) {
+            try IJBDirectory(address(jbDirectory)).primaryTerminalOf(projectId, terminalToken) returns (IJBTerminal t) {
                 jbTerminal = t;
             } catch {
                 jbTerminal = IJBTerminal(address(0));
@@ -694,27 +754,48 @@ contract JBUniswapV4HookForkTest is Test {
 
     /// @notice Mirror of testFork_JuiceboxBestOrV4Fallback for the sell (NANA->WETH) direction.
     function testFork_JuiceboxBestOrV4Fallback_NANAtoWETH() public {
-        uint256 projectId = IJBTokens(MAINNET_JB_TOKENS).projectIdOf(IJBToken(NANA));
+        uint256 projectId = jbTokens.projectIdOf(IJBToken(NANA));
         vm.assume(projectId != 0);
 
         PoolKey memory useKey = key;
         PoolId useId = id;
+        bool nanaIsToken0 = Currency.unwrap(key.currency0) == NANA;
         {
             try hook.calculateExpectedTokensWithCurrency(projectId, WETH, 1 ether) returns (uint256 nanaPerWeth) {
                 if (nanaPerWeth > 0) {
-                    PoolKey memory jbKey = PoolKey({
-                        currency0: Currency.wrap(NANA),
-                        currency1: Currency.wrap(WETH),
-                        fee: 3000,
-                        tickSpacing: 120,
-                        hooks: IHooks(address(hook))
-                    });
+                    // Create a new pool with wider tick spacing
+                    PoolKey memory jbKey;
+                    if (NANA < WETH) {
+                        jbKey = PoolKey({
+                            currency0: Currency.wrap(NANA),
+                            currency1: Currency.wrap(WETH),
+                            fee: 3000,
+                            tickSpacing: 120,
+                            hooks: IHooks(address(hook))
+                        });
+                    } else {
+                        jbKey = PoolKey({
+                            currency0: Currency.wrap(WETH),
+                            currency1: Currency.wrap(NANA),
+                            fee: 3000,
+                            tickSpacing: 120,
+                            hooks: IHooks(address(hook))
+                        });
+                    }
                     PoolId jbId = jbKey.toId();
-                    uint256 ratioX192 = (uint256(1e18) << 192) / nanaPerWeth;
+                    uint256 ratioX192;
+                    if (NANA < WETH) {
+                        // token0=NANA, token1=WETH: price = WETH/NANA
+                        ratioX192 = (uint256(1e18) << 192) / nanaPerWeth;
+                    } else {
+                        // token0=WETH, token1=NANA: price = NANA/WETH
+                        ratioX192 = (nanaPerWeth << 192) / 1e18;
+                    }
                     uint160 jbSqrtPriceX96 = uint160(_sqrt(ratioX192));
                     manager.initialize(jbKey, jbSqrtPriceX96);
                     useKey = jbKey;
                     useId = jbId;
+                    nanaIsToken0 = Currency.unwrap(jbKey.currency0) == NANA;
                 }
             } catch {}
         }
@@ -744,7 +825,7 @@ contract JBUniswapV4HookForkTest is Test {
         uint256 amountIn = 1000 ether;
 
         uint256 v4Out = 0;
-        try hook.estimateUniswapOutput(useId, useKey, amountIn, true) returns (uint256 o) {
+        try hook.estimateUniswapOutput(useId, useKey, amountIn, nanaIsToken0) returns (uint256 o) {
             v4Out = o;
         } catch {}
 
@@ -753,7 +834,7 @@ contract JBUniswapV4HookForkTest is Test {
         // forge-lint: disable-next-line(mixed-case-variable)
         address normalizedWETH = address(0x000000000000000000000000000000000000EEEe);
         IJBTerminal jbTerminal;
-        try IJBDirectory(MAINNET_JB_DIRECTORY).primaryTerminalOf(projectId, normalizedWETH) returns (IJBTerminal t) {
+        try IJBDirectory(address(jbDirectory)).primaryTerminalOf(projectId, normalizedWETH) returns (IJBTerminal t) {
             jbTerminal = t;
         } catch {
             jbTerminal = IJBTerminal(address(0));
@@ -768,10 +849,10 @@ contract JBUniswapV4HookForkTest is Test {
 
         vm.recordLogs();
         SwapParams memory testSwap = SwapParams({
-            zeroForOne: true,
+            zeroForOne: nanaIsToken0, // NANA -> WETH
             // forge-lint: disable-next-line(unsafe-typecast)
             amountSpecified: -int256(amountIn),
-            sqrtPriceLimitX96: TickMath.MIN_SQRT_PRICE + 1
+            sqrtPriceLimitX96: nanaIsToken0 ? TickMath.MIN_SQRT_PRICE + 1 : TickMath.MAX_SQRT_PRICE - 1
         });
 
         try jbSwapRouter.swap(useKey, testSwap, 0) { // 1% slippage
@@ -810,7 +891,7 @@ contract JBUniswapV4HookForkTest is Test {
     ///      4. Hook receives JB tokens and settles back to pool
     ///      5. Router settles tokens to user
     function testFork_BuyingJBTokenViaPay() public {
-        uint256 projectId = IJBTokens(MAINNET_JB_TOKENS).projectIdOf(IJBToken(NANA));
+        uint256 projectId = jbTokens.projectIdOf(IJBToken(NANA));
         vm.assume(projectId != 0);
 
         address user = testUser;
@@ -872,7 +953,7 @@ contract JBUniswapV4HookForkTest is Test {
         // Check for primary terminal that accepts native ETH (JB_NATIVE_TOKEN)
         IJBTerminal jbTerminal;
         address terminalToken = address(0x000000000000000000000000000000000000EEEe); // JB_NATIVE_TOKEN
-        try IJBDirectory(MAINNET_JB_DIRECTORY).primaryTerminalOf(projectId, terminalToken) returns (IJBTerminal t) {
+        try IJBDirectory(address(jbDirectory)).primaryTerminalOf(projectId, terminalToken) returns (IJBTerminal t) {
             jbTerminal = t;
         } catch {
             jbTerminal = IJBTerminal(address(0));
@@ -944,7 +1025,7 @@ contract JBUniswapV4HookForkTest is Test {
     /// @notice Test that cashOutTokensOf is executed when selling JB tokens through Juicebox
     /// @dev This test verifies the full sell flow:
     function testFork_SellingJBTokenViaCashOutTokensOf() public {
-        uint256 projectId = IJBTokens(MAINNET_JB_TOKENS).projectIdOf(IJBToken(NANA));
+        uint256 projectId = jbTokens.projectIdOf(IJBToken(NANA));
         vm.assume(projectId != 0);
 
         address user = testUser;
@@ -960,6 +1041,8 @@ contract JBUniswapV4HookForkTest is Test {
         IERC20(WETH).approve(address(modifyLiquidityRouter), type(uint256).max);
         IERC20(NANA).approve(address(jbSwapRouter), type(uint256).max);
 
+        bool nanaIsToken0 = Currency.unwrap(key.currency0) == NANA;
+
         // Add liquidity to enable swaps
         modifyLiquidityRouter.modifyLiquidity(
             key,
@@ -968,13 +1051,13 @@ contract JBUniswapV4HookForkTest is Test {
         );
 
         // First, user needs to own NANA tokens. Get them by buying via Juicebox or Uniswap
-        // Try buying through Juicebox first (WETH -> NANA)
+        // Buy WETH -> NANA
         uint256 buyAmount = 2 ether;
         SwapParams memory buySwap = SwapParams({
-            zeroForOne: false, // WETH -> NANA
+            zeroForOne: !nanaIsToken0, // WETH -> NANA
             // forge-lint: disable-next-line(unsafe-typecast)
             amountSpecified: -int256(buyAmount),
-            sqrtPriceLimitX96: TickMath.MAX_SQRT_PRICE - 1
+            sqrtPriceLimitX96: !nanaIsToken0 ? TickMath.MIN_SQRT_PRICE + 1 : TickMath.MAX_SQRT_PRICE - 1
         });
 
         // Execute buy - this may route through Juicebox or Uniswap
@@ -988,12 +1071,12 @@ contract JBUniswapV4HookForkTest is Test {
 
         // Now set up for selling: make Juicebox better than Uniswap
         // Manipulate v4 price to be worse for selling NANA by making NANA cheaper in v4
-        // Do a large swap that makes NANA cheaper (NANA -> WETH, makes NANA less valuable)
+        // Do a large NANA -> WETH swap (makes NANA less valuable)
         IERC20(NANA).approve(address(swapRouter), type(uint256).max);
         SwapParams memory priceManipulation = SwapParams({
-            zeroForOne: true, // NANA -> WETH, makes NANA cheaper (worse for selling NANA in v4)
+            zeroForOne: nanaIsToken0, // NANA -> WETH
             amountSpecified: -int256(5000 ether),
-            sqrtPriceLimitX96: TickMath.MIN_SQRT_PRICE + 1
+            sqrtPriceLimitX96: nanaIsToken0 ? TickMath.MIN_SQRT_PRICE + 1 : TickMath.MAX_SQRT_PRICE - 1
         });
         try swapRouter.swap(
             key, priceManipulation, PoolSwapTest.TestSettings(false, false), abi.encode(uint256(100))
@@ -1004,17 +1087,16 @@ contract JBUniswapV4HookForkTest is Test {
         uint256 sellAmount = userNANABalance > 1000 ether ? 1000 ether : userNANABalance / 2;
 
         uint256 v4Out = 0;
-        try hook.estimateUniswapOutput(id, key, sellAmount, true) returns (uint256 o) {
+        try hook.estimateUniswapOutput(id, key, sellAmount, nanaIsToken0) returns (uint256 o) {
             v4Out = o;
         } catch {}
 
         // Check for primary terminal that manages WETH (the output token when selling/cashing out)
-        // When cashing out, we need a terminal that has the token we're cashing out TO (WETH), not the JB token (NANA)
         IJBTerminal jbTerminal;
         // Hook normalizes WETH to JB_NATIVE_TOKEN before lookup
         // forge-lint: disable-next-line(mixed-case-variable)
         address normalizedWETH = address(0x000000000000000000000000000000000000EEEe);
-        try IJBDirectory(MAINNET_JB_DIRECTORY).primaryTerminalOf(projectId, normalizedWETH) returns (IJBTerminal t) {
+        try IJBDirectory(address(jbDirectory)).primaryTerminalOf(projectId, normalizedWETH) returns (IJBTerminal t) {
             jbTerminal = t;
         } catch {
             jbTerminal = IJBTerminal(address(0));
@@ -1046,18 +1128,13 @@ contract JBUniswapV4HookForkTest is Test {
         uint256 initialUserNANA = IERC20(NANA).balanceOf(user);
 
         // Execute sell swap (NANA -> WETH)
-        // During this swap:
-        // 1. User sends NANA to pool via a swap
-        // 2. Hook takes NANA from pool (hook now owns ERC20 tokens)
-        // 3. Hook calls cashOutTokensOf(address(this), ...) to cash out tokens it owns
-        // 4. Hook receives WETH and settles back to pool
         vm.recordLogs();
 
         SwapParams memory sellSwap = SwapParams({
-            zeroForOne: true, // NANA -> WETH
+            zeroForOne: nanaIsToken0, // NANA -> WETH
             // forge-lint: disable-next-line(unsafe-typecast)
             amountSpecified: -int256(sellAmount),
-            sqrtPriceLimitX96: TickMath.MIN_SQRT_PRICE + 1
+            sqrtPriceLimitX96: nanaIsToken0 ? TickMath.MIN_SQRT_PRICE + 1 : TickMath.MAX_SQRT_PRICE - 1
         });
 
         try jbSwapRouter.swap(key, sellSwap, 0) { // 1% slippage
@@ -1067,7 +1144,6 @@ contract JBUniswapV4HookForkTest is Test {
                 assertEq(route, 1, "Should route through Juicebox when terminal exists");
             } else {
                 // If no terminal exists, hook should route through Uniswap v4
-                // This catches bugs where hook looks up wrong terminal
                 assertEq(route, 0, "Should route through Uniswap v4 when no terminal exists");
                 vm.stopPrank();
                 return; // No point checking balances if routing through Uniswap
@@ -1087,7 +1163,6 @@ contract JBUniswapV4HookForkTest is Test {
             assertEq(nanaSpent, sellAmount, "User should have spent the exact sell amount");
 
             // Verify quote accuracy: actual received should match quote (accounting for fees/slippage)
-            // The quote should be very close to actual (within 1% tolerance)
             if (jbOut > 0) {
                 uint256 diff = wethReceived > jbOut ? wethReceived - jbOut : jbOut - wethReceived;
                 uint256 tolerance = jbOut / 100; // 1% tolerance
@@ -1121,15 +1196,16 @@ contract JBUniswapV4HookForkTest is Test {
         IERC20(NANA).approve(address(jbSwapRouter), type(uint256).max);
         IERC20(WETH).approve(address(jbSwapRouter), type(uint256).max);
 
+        bool nanaIsToken0 = Currency.unwrap(key.currency0) == NANA;
+
         // Attempt exact output swap (amountSpecified > 0)
         SwapParams memory params = SwapParams({
-            zeroForOne: true,
+            zeroForOne: nanaIsToken0,
             amountSpecified: 1 ether, // Positive = exact output
-            sqrtPriceLimitX96: TickMath.MIN_SQRT_PRICE + 1
+            sqrtPriceLimitX96: nanaIsToken0 ? TickMath.MIN_SQRT_PRICE + 1 : TickMath.MAX_SQRT_PRICE - 1
         });
 
         // Should revert - the error is wrapped by Uniswap v4's error handling
-        // We verify that exact output swaps are not supported by checking for any revert
         vm.expectRevert();
         jbSwapRouter.swap(key, params, 0); // 1% slippage
 
@@ -1149,15 +1225,16 @@ contract JBUniswapV4HookForkTest is Test {
 
         uint256 amountIn = 1 ether;
 
-        // Approve WETH (currency1) for swap (user already has WETH from setup)
+        // Approve WETH for swap (user already has WETH from setup)
         IERC20(WETH).approve(address(jbSwapRouter), amountIn);
 
-        // Swap currency1 (WETH) -> currency0 (NANA), so zeroForOne = false
+        // Swap WETH -> NANA
+        bool wethIsToken0 = Currency.unwrap(key.currency0) == WETH;
         SwapParams memory params = SwapParams({
-            zeroForOne: false,
+            zeroForOne: wethIsToken0,
             // forge-lint: disable-next-line(unsafe-typecast)
             amountSpecified: -int256(amountIn),
-            sqrtPriceLimitX96: TickMath.MAX_SQRT_PRICE - 1
+            sqrtPriceLimitX96: wethIsToken0 ? TickMath.MIN_SQRT_PRICE + 1 : TickMath.MAX_SQRT_PRICE - 1
         });
 
         // Estimate expected output
@@ -1182,15 +1259,16 @@ contract JBUniswapV4HookForkTest is Test {
 
         uint256 amountIn = 1 ether;
 
-        // Approve WETH (currency1) for swap (user already has WETH from setup)
+        // Approve WETH for swap (user already has WETH from setup)
         IERC20(WETH).approve(address(jbSwapRouter), amountIn);
 
-        // Swap currency1 (WETH) -> currency0 (NANA), so zeroForOne = false
+        // Swap WETH -> NANA
+        bool wethIsToken0 = Currency.unwrap(key.currency0) == WETH;
         SwapParams memory params = SwapParams({
-            zeroForOne: false,
+            zeroForOne: wethIsToken0,
             // forge-lint: disable-next-line(unsafe-typecast)
             amountSpecified: -int256(amountIn),
-            sqrtPriceLimitX96: TickMath.MAX_SQRT_PRICE - 1
+            sqrtPriceLimitX96: wethIsToken0 ? TickMath.MIN_SQRT_PRICE + 1 : TickMath.MAX_SQRT_PRICE - 1
         });
 
         // Estimate expected output
@@ -1202,7 +1280,6 @@ contract JBUniswapV4HookForkTest is Test {
 
         // Should revert - the error gets wrapped by PoolManager as WrappedError,
         // but the underlying error is JBUniswapV4Hook_InsufficientOutput
-        // We verify the revert happens (slippage protection works)
         vm.expectRevert();
         jbSwapRouter.swap(key, params, amountOutMin);
 
@@ -1216,13 +1293,8 @@ contract JBUniswapV4HookForkTest is Test {
     /// @notice Prove that the sell path (cash out JB tokens) works without any ERC20 forceApprove.
     /// @dev The sell path calls cashOutTokensOf, which burns JB tokens via the controller — it does
     ///      NOT use ERC20 transferFrom. Therefore no approval to the terminal is needed.
-    ///      This test verifies:
-    ///        1. User buys NANA via the pool to acquire tokens.
-    ///        2. User sells NANA back (NANA → WETH) and it routes through Juicebox cashout.
-    ///        3. The hook never sets an ERC20 allowance on the terminal for the sell path.
-    ///        4. NANA tokens are burned and user receives WETH.
     function testFork_SellPathSucceedsWithoutApproval() public {
-        uint256 projectId = IJBTokens(MAINNET_JB_TOKENS).projectIdOf(IJBToken(NANA));
+        uint256 projectId = jbTokens.projectIdOf(IJBToken(NANA));
         vm.assume(projectId != 0);
 
         address user = testUser;
@@ -1239,14 +1311,16 @@ contract JBUniswapV4HookForkTest is Test {
         IERC20(NANA).approve(address(jbSwapRouter), type(uint256).max);
         IERC20(NANA).approve(address(swapRouter), type(uint256).max);
 
+        bool nanaIsToken0 = Currency.unwrap(key.currency0) == NANA;
+
         // Step 1: Buy NANA to accumulate project tokens for the user.
         // Buy via the v4 pool (WETH -> NANA direction).
         uint256 buyAmount = 2 ether;
         SwapParams memory buySwap = SwapParams({
-            zeroForOne: false, // WETH (currency1) -> NANA (currency0)
+            zeroForOne: !nanaIsToken0, // WETH -> NANA
             // forge-lint: disable-next-line(unsafe-typecast)
             amountSpecified: -int256(buyAmount),
-            sqrtPriceLimitX96: TickMath.MAX_SQRT_PRICE - 1
+            sqrtPriceLimitX96: !nanaIsToken0 ? TickMath.MIN_SQRT_PRICE + 1 : TickMath.MAX_SQRT_PRICE - 1
         });
         jbSwapRouter.swap(key, buySwap, 0);
 
@@ -1258,7 +1332,9 @@ contract JBUniswapV4HookForkTest is Test {
         // Dump NANA into v4 (NANA -> WETH) to make NANA cheaper in v4.
         // forge-lint: disable-next-line(mixed-case-variable)
         SwapParams memory dumpNANA = SwapParams({
-            zeroForOne: true, amountSpecified: -int256(5000 ether), sqrtPriceLimitX96: TickMath.MIN_SQRT_PRICE + 1
+            zeroForOne: nanaIsToken0,
+            amountSpecified: -int256(5000 ether),
+            sqrtPriceLimitX96: nanaIsToken0 ? TickMath.MIN_SQRT_PRICE + 1 : TickMath.MAX_SQRT_PRICE - 1
         });
         try swapRouter.swap(key, dumpNANA, PoolSwapTest.TestSettings(false, false), abi.encode(uint256(100))) {}
             catch {}
@@ -1268,7 +1344,7 @@ contract JBUniswapV4HookForkTest is Test {
 
         // Get expected outputs from both routes
         uint256 v4Out;
-        try hook.estimateUniswapOutput(id, key, sellAmount, true) returns (uint256 o) {
+        try hook.estimateUniswapOutput(id, key, sellAmount, nanaIsToken0) returns (uint256 o) {
             v4Out = o;
         } catch {
             v4Out = 0;
@@ -1277,7 +1353,7 @@ contract JBUniswapV4HookForkTest is Test {
         // forge-lint: disable-next-line(mixed-case-variable)
         address normalizedETH = address(0x000000000000000000000000000000000000EEEe);
         IJBTerminal jbTerminal;
-        try IJBDirectory(MAINNET_JB_DIRECTORY).primaryTerminalOf(projectId, normalizedETH) returns (IJBTerminal t) {
+        try IJBDirectory(address(jbDirectory)).primaryTerminalOf(projectId, normalizedETH) returns (IJBTerminal t) {
             jbTerminal = t;
         } catch {
             jbTerminal = IJBTerminal(address(0));
@@ -1292,14 +1368,12 @@ contract JBUniswapV4HookForkTest is Test {
         }
 
         // If Juicebox is not better, skip (the price manipulation didn't work enough).
-        // This is not a test failure — just means mainnet state doesn't support this scenario.
         if (jbOut <= v4Out || jbOut == 0) {
             vm.stopPrank();
             return;
         }
 
         // Step 4: Record allowance BEFORE the sell swap.
-        // On the sell path, the hook should NOT set any allowance for NANA on the terminal.
         uint256 allowanceBefore = IERC20(NANA).allowance(address(hook), address(jbTerminal));
 
         // Step 5: Execute sell (NANA -> WETH) routed through Juicebox cashout.
@@ -1310,10 +1384,10 @@ contract JBUniswapV4HookForkTest is Test {
 
         vm.recordLogs();
         SwapParams memory sellSwap = SwapParams({
-            zeroForOne: true, // NANA (currency0) -> WETH (currency1)
+            zeroForOne: nanaIsToken0, // NANA -> WETH
             // forge-lint: disable-next-line(unsafe-typecast)
             amountSpecified: -int256(sellAmount),
-            sqrtPriceLimitX96: TickMath.MIN_SQRT_PRICE + 1
+            sqrtPriceLimitX96: nanaIsToken0 ? TickMath.MIN_SQRT_PRICE + 1 : TickMath.MAX_SQRT_PRICE - 1
         });
 
         jbSwapRouter.swap(key, sellSwap, 0);
@@ -1323,7 +1397,6 @@ contract JBUniswapV4HookForkTest is Test {
         assertEq(route, 1, "Sell should route through Juicebox cashout");
 
         // Step 6: Verify the hook did NOT grant any new allowance for NANA on the terminal.
-        // cashOutTokensOf burns tokens via the controller, not transferFrom.
         uint256 allowanceAfter = IERC20(NANA).allowance(address(hook), address(jbTerminal));
         assertEq(allowanceAfter, allowanceBefore, "Sell path must not set ERC20 allowance on terminal");
 
@@ -1344,12 +1417,8 @@ contract JBUniswapV4HookForkTest is Test {
 
     /// @notice Prove that the buy path correctly uses forceApprove for the terminal.
     /// @dev The buy path calls terminal.pay(), which pulls ERC20 tokens via transferFrom.
-    ///      The hook must approve the terminal before calling pay(). This test verifies:
-    ///        1. A native ETH -> NANA swap routes through Juicebox (pay path).
-    ///        2. User receives NANA tokens (proving pay() succeeded).
-    ///        3. The forceApprove mechanism works correctly for non-native-ETH buy paths.
     function testFork_BuyPathWorksWithApproval() public {
-        uint256 projectId = IJBTokens(MAINNET_JB_TOKENS).projectIdOf(IJBToken(NANA));
+        uint256 projectId = jbTokens.projectIdOf(IJBToken(NANA));
         vm.assume(projectId != 0);
 
         address user = testUser;
@@ -1357,7 +1426,6 @@ contract JBUniswapV4HookForkTest is Test {
         vm.startPrank(user);
 
         // Create a native ETH / NANA pool to test the buy path with native ETH
-        // Native ETH (address(0)) < NANA, so ETH is currency0
         PoolKey memory nativeKey = PoolKey({
             currency0: Currency.wrap(address(0)),
             currency1: Currency.wrap(NANA),
@@ -1370,7 +1438,8 @@ contract JBUniswapV4HookForkTest is Test {
         uint160 initPrice = SQRT_PRICE_1_1;
         try hook.calculateExpectedTokensWithCurrency(projectId, address(0), 1 ether) returns (uint256 nanaPerEth) {
             if (nanaPerEth > 0) {
-                uint256 ratioX192 = (uint256(1e18) << 192) / nanaPerEth;
+                // token0=ETH(address(0)), token1=NANA: price = NANA/ETH
+                uint256 ratioX192 = (nanaPerEth << 192) / 1e18;
                 initPrice = uint160(_sqrt(ratioX192));
             }
         } catch {}
@@ -1420,14 +1489,14 @@ contract JBUniswapV4HookForkTest is Test {
         // Check terminal exists
         address terminalToken = address(0x000000000000000000000000000000000000EEEe);
         IJBTerminal jbTerminal;
-        try IJBDirectory(MAINNET_JB_DIRECTORY).primaryTerminalOf(projectId, terminalToken) returns (IJBTerminal t) {
+        try IJBDirectory(address(jbDirectory)).primaryTerminalOf(projectId, terminalToken) returns (IJBTerminal t) {
             jbTerminal = t;
         } catch {
             jbTerminal = IJBTerminal(address(0));
         }
         require(address(jbTerminal) != address(0), "Terminal must exist for buy path test");
 
-        // If JB is not better, skip (mainnet state doesn't support this scenario)
+        // If JB is not better, skip
         if (jbOut <= v4Out || jbOut == 0) {
             vm.stopPrank();
             return;
@@ -1467,5 +1536,102 @@ contract JBUniswapV4HookForkTest is Test {
 
         vm.stopPrank();
     }
-}
 
+    // ═══════════════════════════════════════════════════════════════════════
+    // JB Core Deployment (fresh within fork)
+    // ═══════════════════════════════════════════════════════════════════════
+
+    function _deployJbCore() internal {
+        jbPermissions = new JBPermissions(trustedForwarder);
+        jbProjects = new JBProjects(multisig, address(0), trustedForwarder);
+        jbDirectory = new JBDirectory(jbPermissions, jbProjects, multisig);
+        JBERC20 jbErc20 = new JBERC20();
+        jbTokens = new JBTokens(jbDirectory, jbErc20);
+        jbRulesets = new JBRulesets(jbDirectory);
+        jbPrices = new JBPrices(jbDirectory, jbPermissions, jbProjects, multisig, trustedForwarder);
+        jbSplits = new JBSplits(jbDirectory);
+        jbFundAccessLimits = new JBFundAccessLimits(jbDirectory);
+        jbFeelessAddresses = new JBFeelessAddresses(multisig);
+
+        jbController = new JBController(
+            jbDirectory,
+            jbFundAccessLimits,
+            jbPermissions,
+            jbPrices,
+            jbProjects,
+            jbRulesets,
+            jbSplits,
+            jbTokens,
+            address(0), // omnichainRulesetOperator
+            trustedForwarder
+        );
+
+        vm.prank(multisig);
+        jbDirectory.setIsAllowedToSetFirstController(address(jbController), true);
+
+        jbTerminalStore = new JBTerminalStore(jbDirectory, jbPrices, jbRulesets);
+
+        jbMultiTerminal = new JBMultiTerminal(
+            jbFeelessAddresses,
+            jbPermissions,
+            jbProjects,
+            jbSplits,
+            jbTerminalStore,
+            jbTokens,
+            PERMIT2,
+            trustedForwarder
+        );
+    }
+
+    /// @dev Launch a JB project that accepts `acceptedToken` via the multi terminal.
+    function _launchProject(address acceptedToken, uint8 decimals) internal returns (uint256 projectId) {
+        JBRulesetMetadata memory metadata = JBRulesetMetadata({
+            reservedPercent: 0,
+            cashOutTaxRate: 0,
+            // forge-lint: disable-next-line(unsafe-typecast)
+            baseCurrency: uint32(uint160(acceptedToken)),
+            pausePay: false,
+            pauseCreditTransfers: false,
+            allowOwnerMinting: false,
+            allowSetCustomToken: false,
+            allowTerminalMigration: false,
+            allowSetTerminals: false,
+            allowSetController: false,
+            allowAddAccountingContext: true,
+            allowAddPriceFeed: false,
+            ownerMustSendPayouts: false,
+            holdFees: false,
+            useTotalSurplusForCashOuts: false,
+            useDataHookForPay: false,
+            useDataHookForCashOut: false,
+            dataHook: address(0),
+            metadata: 0
+        });
+
+        JBRulesetConfig[] memory rulesetConfigs = new JBRulesetConfig[](1);
+        rulesetConfigs[0].mustStartAtOrAfter = 0;
+        rulesetConfigs[0].duration = 0;
+        rulesetConfigs[0].weight = 1_000_000e18; // 1M tokens per unit of currency
+        rulesetConfigs[0].weightCutPercent = 0;
+        rulesetConfigs[0].approvalHook = IJBRulesetApprovalHook(address(0));
+        rulesetConfigs[0].metadata = metadata;
+        rulesetConfigs[0].splitGroups = new JBSplitGroup[](0);
+        rulesetConfigs[0].fundAccessLimitGroups = new JBFundAccessLimitGroup[](0);
+
+        JBAccountingContext[] memory tokensToAccept = new JBAccountingContext[](1);
+        tokensToAccept[0] =
+        // forge-lint: disable-next-line(unsafe-typecast)
+        JBAccountingContext({token: acceptedToken, decimals: decimals, currency: uint32(uint160(acceptedToken))});
+
+        JBTerminalConfig[] memory terminalConfigs = new JBTerminalConfig[](1);
+        terminalConfigs[0] = JBTerminalConfig({terminal: jbMultiTerminal, accountingContextsToAccept: tokensToAccept});
+
+        projectId = jbController.launchProjectFor({
+            owner: multisig,
+            projectUri: "test-project",
+            rulesetConfigurations: rulesetConfigs,
+            terminalConfigurations: terminalConfigs,
+            memo: ""
+        });
+    }
+}
