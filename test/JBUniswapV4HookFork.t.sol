@@ -1791,9 +1791,10 @@ contract JBUniswapV4HookForkTest is Test {
         });
         try swapRouter.swap(key, dumpNANA, PoolSwapTest.TestSettings(false, false), abi.encode(uint256(0))) {} catch {}
 
-        // Use a modest sell amount so the JB route can reasonably be better
-        uint256 sellAmount = 100 ether;
-        deal(NANA, user, userNanaBalance + sellAmount); // Ensure user has enough
+        // Use only authentically issued project tokens so the subsequent full cashout
+        // depletes real surplus instead of mixing in test-minted ERC-20 balance.
+        uint256 sellAmount = userNanaBalance / 10;
+        assertTrue(sellAmount > 0, "Sell amount should be non-zero");
 
         SwapParams memory sellParams = SwapParams({
             zeroForOne: nanaIsToken0,
