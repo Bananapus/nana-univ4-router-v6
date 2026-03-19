@@ -1789,8 +1789,7 @@ contract JBUniswapV4HookForkTest is Test {
             amountSpecified: -int256(5000 ether),
             sqrtPriceLimitX96: nanaIsToken0 ? TickMath.MIN_SQRT_PRICE + 1 : TickMath.MAX_SQRT_PRICE - 1
         });
-        try swapRouter.swap(key, dumpNANA, PoolSwapTest.TestSettings(false, false), abi.encode(uint256(0))) {}
-            catch {}
+        try swapRouter.swap(key, dumpNANA, PoolSwapTest.TestSettings(false, false), abi.encode(uint256(0))) {} catch {}
 
         // Use a modest sell amount so the JB route can reasonably be better
         uint256 sellAmount = 100 ether;
