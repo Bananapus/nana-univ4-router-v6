@@ -51,7 +51,48 @@ import {JBTerminalConfig} from "@bananapus/core-v6/src/structs/JBTerminalConfig.
 import {JBSplitGroup} from "@bananapus/core-v6/src/structs/JBSplitGroup.sol";
 import {JBFundAccessLimitGroup} from "@bananapus/core-v6/src/structs/JBFundAccessLimitGroup.sol";
 import {IJBRulesetApprovalHook} from "@bananapus/core-v6/src/interfaces/IJBRulesetApprovalHook.sol";
+import {IJBRulesetDataHook} from "@bananapus/core-v6/src/interfaces/IJBRulesetDataHook.sol";
+import {JBBeforeCashOutRecordedContext} from "@bananapus/core-v6/src/structs/JBBeforeCashOutRecordedContext.sol";
+import {JBBeforePayRecordedContext} from "@bananapus/core-v6/src/structs/JBBeforePayRecordedContext.sol";
+import {JBCashOutHookSpecification} from "@bananapus/core-v6/src/structs/JBCashOutHookSpecification.sol";
+import {JBPayHookSpecification} from "@bananapus/core-v6/src/structs/JBPayHookSpecification.sol";
 import {IPermit2} from "@uniswap/permit2/src/interfaces/IPermit2.sol";
+import {IERC165} from "@openzeppelin/contracts/utils/introspection/IERC165.sol";
+
+contract ZeroPreviewCashOutDataHook is IJBRulesetDataHook {
+    function beforeCashOutRecordedWith(JBBeforeCashOutRecordedContext calldata context)
+        external
+        pure
+        returns (
+            uint256 cashOutTaxRate,
+            uint256 cashOutCount,
+            uint256 totalSupply,
+            JBCashOutHookSpecification[] memory hookSpecifications
+        )
+    {
+        cashOutTaxRate = context.cashOutTaxRate;
+        cashOutCount = 0;
+        totalSupply = context.totalSupply;
+        hookSpecifications = new JBCashOutHookSpecification[](0);
+    }
+
+    function beforePayRecordedWith(JBBeforePayRecordedContext calldata)
+        external
+        pure
+        returns (uint256 weight, JBPayHookSpecification[] memory hookSpecifications)
+    {
+        weight = 0;
+        hookSpecifications = new JBPayHookSpecification[](0);
+    }
+
+    function hasMintPermissionFor(uint256, JBRuleset memory, address) external pure returns (bool flag) {
+        flag = false;
+    }
+
+    function supportsInterface(bytes4 interfaceId) external pure returns (bool) {
+        return interfaceId == type(IJBRulesetDataHook).interfaceId || interfaceId == type(IERC165).interfaceId;
+    }
+}
 
 /// @title JBUniswapV4HookForkTest
 /// @notice Fork tests that deploy JB v6 contracts fresh within the fork
@@ -1694,6 +1735,64 @@ contract JBUniswapV4HookForkTest is Test {
         });
     }
 
+    function _launchProjectWithCashOutDataHook(
+        address acceptedToken,
+        uint8 decimals,
+        address dataHook
+    )
+        internal
+        returns (uint256 projectId)
+    {
+        JBRulesetMetadata memory metadata = JBRulesetMetadata({
+            reservedPercent: 0,
+            cashOutTaxRate: 0,
+            // forge-lint: disable-next-line(unsafe-typecast)
+            baseCurrency: uint32(uint160(acceptedToken)),
+            pausePay: false,
+            pauseCreditTransfers: false,
+            allowOwnerMinting: false,
+            allowSetCustomToken: false,
+            allowTerminalMigration: false,
+            allowSetTerminals: false,
+            allowSetController: false,
+            allowAddAccountingContext: true,
+            allowAddPriceFeed: false,
+            ownerMustSendPayouts: false,
+            holdFees: false,
+            useTotalSurplusForCashOuts: false,
+            useDataHookForPay: false,
+            useDataHookForCashOut: true,
+            dataHook: dataHook,
+            metadata: 0
+        });
+
+        JBRulesetConfig[] memory rulesetConfigs = new JBRulesetConfig[](1);
+        rulesetConfigs[0].mustStartAtOrAfter = 0;
+        rulesetConfigs[0].duration = 0;
+        rulesetConfigs[0].weight = 1_000_000e18;
+        rulesetConfigs[0].weightCutPercent = 0;
+        rulesetConfigs[0].approvalHook = IJBRulesetApprovalHook(address(0));
+        rulesetConfigs[0].metadata = metadata;
+        rulesetConfigs[0].splitGroups = new JBSplitGroup[](0);
+        rulesetConfigs[0].fundAccessLimitGroups = new JBFundAccessLimitGroup[](0);
+
+        JBAccountingContext[] memory tokensToAccept = new JBAccountingContext[](1);
+        tokensToAccept[0] =
+        // forge-lint: disable-next-line(unsafe-typecast)
+        JBAccountingContext({token: acceptedToken, decimals: decimals, currency: uint32(uint160(acceptedToken))});
+
+        JBTerminalConfig[] memory terminalConfigs = new JBTerminalConfig[](1);
+        terminalConfigs[0] = JBTerminalConfig({terminal: jbMultiTerminal, accountingContextsToAccept: tokensToAccept});
+
+        projectId = jbController.launchProjectFor({
+            owner: multisig,
+            projectUri: "test-project-with-cash-out-data-hook",
+            rulesetConfigurations: rulesetConfigs,
+            terminalConfigurations: terminalConfigs,
+            memo: ""
+        });
+    }
+
     // ============================================================
     // Zero-Surplus & Second-Project Tests
     // ============================================================
@@ -1852,6 +1951,100 @@ contract JBUniswapV4HookForkTest is Test {
         jbSwapRouter.swap(nativeKey, sellParams, 0);
         (uint8 route2,) = _getLastBestRouteFromLogs();
         assertEq(route2, 0, "Post-depletion sell should route via V4");
+
+        vm.stopPrank();
+    }
+
+    /// @notice A live cash-out data hook should influence sell routing through terminal-store preview.
+    /// @dev Proves the preview path can suppress a sell quote even while the static reclaim path remains positive.
+    function testFork_CashOutPreviewRoutesToV4WhenDataHookSuppressesReclaim() public {
+        ZeroPreviewCashOutDataHook dataHook = new ZeroPreviewCashOutDataHook();
+        uint256 hookedProjectId = _launchProjectWithCashOutDataHook({
+            acceptedToken: JBConstants.NATIVE_TOKEN, decimals: 18, dataHook: address(dataHook)
+        });
+
+        vm.prank(multisig);
+        IJBToken hookedToken =
+            jbController.deployERC20For({projectId: hookedProjectId, name: "HOOKED", symbol: "HKD", salt: 0});
+        address HOOKED = address(hookedToken);
+
+        address user = makeAddr("cashOutPreviewUser");
+        vm.deal(user, 100 ether);
+
+        vm.startPrank(user);
+        uint256 payAmount = 10 ether;
+        jbMultiTerminal.pay{value: payAmount}({
+            projectId: hookedProjectId,
+            token: JBConstants.NATIVE_TOKEN,
+            amount: payAmount,
+            beneficiary: user,
+            minReturnedTokens: 0,
+            memo: "create hooked surplus",
+            metadata: ""
+        });
+
+        uint256 sellAmount = IERC20(HOOKED).balanceOf(user) / 10;
+        assertTrue(sellAmount > 0, "Sell amount should be non-zero");
+
+        uint256 staticReclaim = jbTerminalStore.currentReclaimableSurplusOf({
+            projectId: hookedProjectId,
+            cashOutCount: sellAmount,
+            terminals: new IJBTerminal[](0),
+            accountingContexts: new JBAccountingContext[](0),
+            decimals: 18,
+            currency: uint32(uint160(JBConstants.NATIVE_TOKEN))
+        });
+        assertTrue(staticReclaim > 0, "Static reclaim should remain positive before preview override");
+
+        uint256 previewedOutput = hook.calculateExpectedOutputFromSelling({
+            projectId: hookedProjectId,
+            tokenAmountIn: sellAmount,
+            outputToken: JBConstants.NATIVE_TOKEN,
+            terminal: IJBTerminal(address(jbMultiTerminal))
+        });
+        assertEq(previewedOutput, 0, "Sell quote should use previewed reclaim from the live cash-out data hook");
+        vm.stopPrank();
+
+        PoolKey memory nativeKey = PoolKey({
+            currency0: Currency.wrap(address(0)),
+            currency1: Currency.wrap(HOOKED),
+            fee: 3000,
+            tickSpacing: 60,
+            hooks: IHooks(address(hook))
+        });
+
+        manager.initialize(nativeKey, SQRT_PRICE_1_1);
+
+        address liquidityProvider = makeAddr("hookedNativeLiquidityProvider");
+        vm.deal(liquidityProvider, 500 ether);
+        deal(HOOKED, liquidityProvider, 500_000 ether);
+
+        vm.startPrank(liquidityProvider);
+        IERC20(HOOKED).approve(address(modifyLiquidityRouter), type(uint256).max);
+        modifyLiquidityRouter.modifyLiquidity{value: 500 ether}(
+            nativeKey,
+            ModifyLiquidityParams({tickLower: -120, tickUpper: 120, liquidityDelta: 500 ether, salt: bytes32(0)}),
+            ZERO_BYTES
+        );
+        vm.stopPrank();
+
+        vm.startPrank(user);
+        deal(HOOKED, user, sellAmount);
+        IERC20(HOOKED).approve(address(jbSwapRouter), type(uint256).max);
+
+        vm.recordLogs();
+        jbSwapRouter.swap(
+            nativeKey,
+            SwapParams({
+                zeroForOne: false,
+                // forge-lint: disable-next-line(unsafe-typecast)
+                amountSpecified: -int256(sellAmount),
+                sqrtPriceLimitX96: TickMath.MAX_SQRT_PRICE - 1
+            }),
+            0
+        );
+        (uint8 route,) = _getLastBestRouteFromLogs();
+        assertEq(route, 0, "Preview-suppressed sell should route via V4");
 
         vm.stopPrank();
     }
