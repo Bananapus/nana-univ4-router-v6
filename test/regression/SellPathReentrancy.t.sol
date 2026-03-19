@@ -20,7 +20,9 @@ import {MockERC20} from "../mock/MockERC20.sol";
 import {JuiceboxSwapRouter} from "../utils/JuiceboxSwapRouter.sol";
 import {IJBTokens, IJBPrices, IJBDirectory, IJBTerminalStore} from "../../src/JBUniswapV4Hook.sol";
 import {IJBTerminal} from "@bananapus/core-v6/src/interfaces/IJBTerminal.sol";
+import {IJBRulesetApprovalHook} from "@bananapus/core-v6/src/interfaces/IJBRulesetApprovalHook.sol";
 import {JBAccountingContext} from "@bananapus/core-v6/src/structs/JBAccountingContext.sol";
+import {JBCashOutHookSpecification} from "@bananapus/core-v6/src/structs/JBCashOutHookSpecification.sol";
 import {JBRuleset} from "@bananapus/core-v6/src/structs/JBRuleset.sol";
 import {JBRulesetMetadata} from "@bananapus/core-v6/src/structs/JBRulesetMetadata.sol";
 import {JBRulesetMetadataResolver} from "@bananapus/core-v6/src/libraries/JBRulesetMetadataResolver.sol";
@@ -159,9 +161,16 @@ contract MockJBControllerReentrancy {
 /// @notice Mock terminal store that returns a large surplus so JB route is chosen over V4.
 contract MockStoreReentrancy {
     uint256 public fixedSurplus;
+    uint256 public previewReclaimAmount;
+    bool public usePreviewOverride;
 
     function setFixedSurplus(uint256 surplus) external {
         fixedSurplus = surplus;
+    }
+
+    function setPreviewReclaimAmount(uint256 reclaimAmount) external {
+        previewReclaimAmount = reclaimAmount;
+        usePreviewOverride = true;
     }
 
     function currentReclaimableSurplusOf(uint256, uint256, uint256, uint256) external view returns (uint256) {
@@ -181,6 +190,38 @@ contract MockStoreReentrancy {
         returns (uint256)
     {
         return fixedSurplus;
+    }
+
+    function previewCashOutFrom(
+        address,
+        address,
+        uint256,
+        uint256,
+        JBAccountingContext calldata,
+        JBAccountingContext[] calldata,
+        bool,
+        bytes calldata
+    )
+        external
+        view
+        returns (JBRuleset memory, uint256, uint256, JBCashOutHookSpecification[] memory)
+    {
+        return (
+            JBRuleset({
+                cycleNumber: 0,
+                id: 0,
+                basedOnId: 0,
+                start: 0,
+                duration: 0,
+                weight: 0,
+                weightCutPercent: 0,
+                approvalHook: IJBRulesetApprovalHook(address(0)),
+                metadata: 0
+            }),
+            usePreviewOverride ? previewReclaimAmount : fixedSurplus,
+            0,
+            new JBCashOutHookSpecification[](0)
+        );
     }
 }
 
@@ -499,8 +540,9 @@ contract SellPathReentrancyTest is Test {
     /// @notice Projects that opt into cash-out data-hook overrides are not sell-side best-execution candidates.
     /// The hook should decline JB routing and let the V4 pool handle the swap instead of relying on a stale static
     /// terminal-store estimate.
-    function test_sellPathWithCashOutDataHook_prefersV4OverStaticJBEstimate() public {
+    function test_sellPathWithCashOutDataHook_prefersV4OverPreviewedJBEstimate() public {
         mockJbController.setUseDataHookForCashOut(PROJECT_ID, true);
+        mockStore.setPreviewReclaimAmount(0);
 
         token0.mint(address(this), 1 ether);
         token0.approve(address(jbSwapRouter), 1 ether);

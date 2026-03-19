@@ -67,7 +67,9 @@ Forward-looking risk analysis of `JBUniswapV4Hook` (~963 lines) and `Oracle` lib
 
 - `calculateExpectedOutputFromSelling` always deducts the terminal fee (read dynamically via `terminal.FEE()` / `JBConstants.MAX_FEE`) even if the hook address is registered as feeless. This systematically disadvantages JB sell routing.
 - Uses total surplus (empty terminals/accountingContexts arrays) regardless of the project's `useTotalSurplusForCashOuts` flag. May overestimate JB cashout output for projects with local-surplus-only configuration. Actual cashout would return less, but `amountOutMin` protects the user.
-- If the active ruleset enables `useDataHookForCashOut`, the hook now returns `0` for the JB sell estimate and falls back to V4. Sell-side best execution is intentionally limited to projects whose cash-out economics are fully described by the terminal store plus protocol fee.
+- Sell-side estimation now prefers `previewCashOutFrom`, which can incorporate cash-out data-hook effects when the
+  terminal store supports that preview surface. If previewing is unavailable or reverts, the hook falls back to the
+  static surplus estimate and then to V4 if estimation fails entirely.
 
 ## 4. MEV Surface
 
@@ -118,9 +120,16 @@ When `JBUniswapV4Hook` is composed with `JBBuybackHook` (or any data hook) on th
    - The hook may route through JB when V4 would have been better (static weight overestimates issuance, but the data hook reduces it at execution time).
    - The hook may route through V4 when JB would have been better (static weight underestimates issuance because the data hook increases it).
    - In the worst case, the JB route is selected but `terminal.pay()` returns fewer tokens than estimated, and the user receives a suboptimal rate. The `amountOutMin` parameter in hookData provides a safety floor against excessive slippage.
-4. **Sell-side data-hook overrides are treated as unsupported for JB routing**: if `useDataHookForCashOut` is enabled, `calculateExpectedOutputFromSelling` returns `0` and the hook declines the JB route rather than relying on a stale terminal-store estimate.
+4. **Sell-side estimation is only as strong as the store preview surface**: `calculateExpectedOutputFromSelling`
+   now prefers `previewCashOutFrom`, which is materially better for cash-out-hooked projects because it can simulate
+   `beforeCashOutRecordedWith(...)`. If a store implementation lacks that preview or if the preview reverts, the hook
+   falls back to the older static surplus estimate.
 
-**Deployer requirement**: When composing this hook with a project that has an active data hook, treat buy-side and sell-side differently. Buy-side routing still assumes static issuance weight, so deployers must verify that pay-side overrides do not make the estimate dangerously stale. Sell-side routing, by contrast, now refuses JB best execution whenever `useDataHookForCashOut` is enabled and falls back to the V4 pool instead.
+**Deployer requirement**: When composing this hook with a project that has an active data hook, treat buy-side and
+sell-side differently. Buy-side routing still assumes static issuance weight, so deployers must verify that pay-side
+overrides do not make the estimate dangerously stale. Sell-side routing is stronger than before because it prefers
+`previewCashOutFrom`, but it still depends on the underlying store preview faithfully matching the terminal's real
+cash-out path.
 
 This is documented inline at `src/JBUniswapV4Hook.sol` lines 46-52 and 234-236 as `COMPOSITION WARNING`.
 

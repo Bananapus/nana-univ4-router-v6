@@ -59,10 +59,11 @@ The oracle is a ring buffer of up to 65,535 observations per pool. Cardinality a
 **Selling project tokens** (cashing out):
 1. Query `terminal.STORE().currentReclaimableSurplusOf()` with empty terminals/accountingContexts so the store uses total surplus across all terminals
 2. Deduct protocol fee (read dynamically from terminal via `IJBFeeTerminal.FEE()`)
-3. If the active ruleset enables `useDataHookForCashOut`, return 0 and decline JB sell routing because the terminal-store quote is no longer a trustworthy best-execution estimate
-4. Deduct protocol fee (read dynamically from terminal via `IJBFeeTerminal.FEE()`)
-5. Return net output
-6. All external calls are wrapped in try-catch -- if any call reverts, the estimate returns 0 and the swap falls back to V4
+3. Prefer `terminal.STORE().previewCashOutFrom(...)` so the estimate can include cash-out data-hook effects when the underlying store supports that preview surface
+4. Fall back to a static terminal-store surplus estimate if previewing is unavailable
+5. Deduct protocol fee (read dynamically from terminal via `IJBFeeTerminal.FEE()`)
+6. Return net output
+7. All external calls are wrapped in try-catch -- if any call reverts, the estimate returns 0 and the swap falls back to V4
 
 ## Architecture
 
