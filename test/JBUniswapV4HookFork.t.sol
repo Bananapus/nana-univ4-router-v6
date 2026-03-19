@@ -1783,10 +1783,10 @@ contract JBUniswapV4HookForkTest is Test {
         uint256 sellAmount = userNanaBalance / 10;
         assertTrue(sellAmount > 0, "Sell amount should be non-zero");
 
-        uint256 jbExpectedOutputBefore = hook.calculateExpectedOutputFromSelling(
-            nanaProjectId, sellAmount, WETH, IJBTerminal(address(jbMultiTerminal))
+        uint256 jbExpectedNativeOutputBefore = hook.calculateExpectedOutputFromSelling(
+            nanaProjectId, sellAmount, JBConstants.NATIVE_TOKEN, IJBTerminal(address(jbMultiTerminal))
         );
-        assertTrue(jbExpectedOutputBefore > 0, "JB sell quote should be positive while surplus exists");
+        assertTrue(jbExpectedNativeOutputBefore > 0, "JB native sell quote should be positive while surplus exists");
 
         // Step 3: Deplete surplus by cashing out all tokens
         uint256 cashOutCount = jbTokens.totalBalanceOf(user, nanaProjectId);
