@@ -899,8 +899,8 @@ contract JBUniswapV4Hook is BaseHook {
         // slither-disable-next-line incorrect-equality
         if (state.cardinality == state.cardinalityNext && state.index == state.cardinality - 1) {
             // Double the cardinality until the configured cap is reached.
-            uint16 targetCardinality = state.cardinalityNext * 2;
-            if (targetCardinality > MAX_TWAP_CARDINALITY) targetCardinality = MAX_TWAP_CARDINALITY;
+            uint16 targetCardinality =
+                state.cardinalityNext * 2 > MAX_TWAP_CARDINALITY ? MAX_TWAP_CARDINALITY : state.cardinalityNext * 2;
 
             // Grow the oracle array
             newCardinalityNext = observations[poolId].grow({current: state.cardinalityNext, next: targetCardinality});
