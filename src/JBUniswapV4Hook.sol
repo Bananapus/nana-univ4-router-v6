@@ -229,7 +229,10 @@ contract JBUniswapV4Hook is BaseHook {
                 JBCashOutHookSpecification[] memory previewHookSpecifications
             ) {
                 grossReclaim = _previewedCashOutReclaimAmount(
-                    previewRuleset, reclaimAmount, previewCashOutTaxRate, previewHookSpecifications
+                    /* previewRuleset: */ previewRuleset,
+                    /* reclaimAmount: */ reclaimAmount,
+                    /* previewCashOutTaxRate: */ previewCashOutTaxRate,
+                    /* previewHookSpecifications: */ previewHookSpecifications
                 );
             } catch {
                 // Fallback: use the static surplus estimate if previewing is unavailable.
