@@ -2066,44 +2066,44 @@ contract JBUniswapV4HookForkTest is Test {
         // forge-lint: disable-next-line(mixed-case-variable)
         address PROJ3 = address(project3Token);
 
-        // Step 2: Create a pool for project 3 (PROJ3/WETH)
-        PoolKey memory key3;
-        if (PROJ3 < WETH) {
-            key3 = PoolKey({
-                currency0: Currency.wrap(PROJ3),
-                currency1: Currency.wrap(WETH),
-                fee: 3000,
-                tickSpacing: 60,
-                hooks: IHooks(address(hook))
-            });
-        } else {
-            key3 = PoolKey({
-                currency0: Currency.wrap(WETH),
-                currency1: Currency.wrap(PROJ3),
-                fee: 3000,
-                tickSpacing: 60,
-                hooks: IHooks(address(hook))
-            });
-        }
+        // Step 2: Create native-output pools for both projects so sell routing uses the projects' real terminal token.
+        PoolKey memory key2 = PoolKey({
+            currency0: Currency.wrap(address(0)),
+            currency1: Currency.wrap(NANA),
+            fee: 3000,
+            tickSpacing: 60,
+            hooks: IHooks(address(hook))
+        });
+        PoolKey memory key3 = PoolKey({
+            currency0: Currency.wrap(address(0)),
+            currency1: Currency.wrap(PROJ3),
+            fee: 3000,
+            tickSpacing: 60,
+            hooks: IHooks(address(hook))
+        });
 
+        manager.initialize(key2, SQRT_PRICE_1_1);
         manager.initialize(key3, SQRT_PRICE_1_1);
 
-        // Step 3: Add liquidity to project 3's pool
+        // Step 3: Add liquidity to both native-output pools
         address user = testUser;
+        uint256 proj2Amount = 500_000 ether;
         uint256 proj3Amount = 500_000 ether;
-        uint256 wethAmount = 500_000 ether;
+        uint256 nativeAmount = 500_000 ether;
+        deal(NANA, user, proj2Amount);
         deal(PROJ3, user, proj3Amount);
-        vm.deal(user, wethAmount + 200 ether);
+        vm.deal(user, nativeAmount * 2 + 200 ether);
 
         vm.startPrank(user);
-
-        (bool wrapOk,) = WETH.call{value: wethAmount}(abi.encodeWithSignature("deposit()"));
-        require(wrapOk, "WETH deposit failed");
-
+        IERC20(NANA).approve(address(modifyLiquidityRouter), type(uint256).max);
         IERC20(PROJ3).approve(address(modifyLiquidityRouter), type(uint256).max);
-        IERC20(WETH).approve(address(modifyLiquidityRouter), type(uint256).max);
 
-        modifyLiquidityRouter.modifyLiquidity(
+        modifyLiquidityRouter.modifyLiquidity{value: nativeAmount}(
+            key2,
+            ModifyLiquidityParams({tickLower: -600, tickUpper: 600, liquidityDelta: 500_000 ether, salt: bytes32(0)}),
+            ZERO_BYTES
+        );
+        modifyLiquidityRouter.modifyLiquidity{value: nativeAmount}(
             key3,
             ModifyLiquidityParams({tickLower: -600, tickUpper: 600, liquidityDelta: 500_000 ether, salt: bytes32(0)}),
             ZERO_BYTES
@@ -2147,17 +2147,14 @@ contract JBUniswapV4HookForkTest is Test {
         assertTrue(project2BalanceBefore > 0, "Project 2 should have terminal balance");
         assertTrue(project3BalanceBefore > 0, "Project 3 should have terminal balance");
 
-        // Step 5: Swap on project 2's pool (NANA -> WETH)
+        // Step 5: Swap on project 2's native-output pool (NANA -> ETH)
         IERC20(NANA).approve(address(jbSwapRouter), type(uint256).max);
         deal(NANA, user, 100 ether);
 
-        bool nanaIsToken0 = Currency.unwrap(key.currency0) == NANA;
         SwapParams memory swap2 = SwapParams({
-            zeroForOne: nanaIsToken0,
-            amountSpecified: -int256(100 ether),
-            sqrtPriceLimitX96: nanaIsToken0 ? TickMath.MIN_SQRT_PRICE + 1 : TickMath.MAX_SQRT_PRICE - 1
+            zeroForOne: false, amountSpecified: -int256(100 ether), sqrtPriceLimitX96: TickMath.MAX_SQRT_PRICE - 1
         });
-        jbSwapRouter.swap(key, swap2, 0);
+        jbSwapRouter.swap(key2, swap2, 0);
 
         // Assert project 3's terminal balance unchanged after project 2 swap
         uint256 project3BalanceAfterSwap2 =
@@ -2166,15 +2163,12 @@ contract JBUniswapV4HookForkTest is Test {
             project3BalanceAfterSwap2, project3BalanceBefore, "Project 3 balance must not change from project 2 swap"
         );
 
-        // Step 6: Swap on project 3's pool (PROJ3 -> WETH)
+        // Step 6: Swap on project 3's native-output pool (PROJ3 -> ETH)
         IERC20(PROJ3).approve(address(jbSwapRouter), type(uint256).max);
         deal(PROJ3, user, 100 ether);
 
-        bool proj3IsToken0 = Currency.unwrap(key3.currency0) == PROJ3;
         SwapParams memory swap3 = SwapParams({
-            zeroForOne: proj3IsToken0,
-            amountSpecified: -int256(100 ether),
-            sqrtPriceLimitX96: proj3IsToken0 ? TickMath.MIN_SQRT_PRICE + 1 : TickMath.MAX_SQRT_PRICE - 1
+            zeroForOne: false, amountSpecified: -int256(100 ether), sqrtPriceLimitX96: TickMath.MAX_SQRT_PRICE - 1
         });
         jbSwapRouter.swap(key3, swap3, 0);
 
