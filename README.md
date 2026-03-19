@@ -9,7 +9,7 @@ Uniswap V4 hook that intelligently routes swaps involving Juicebox project token
 When a Juicebox project token is traded on Uniswap V4, the `JBUniswapV4Hook` intercepts the swap in `beforeSwap` and compares the output from two routes:
 
 1. **V4 pool** -- the pool the user is swapping in, priced via 30-minute TWAP
-2. **Juicebox protocol** -- minting tokens via `terminal.pay()` (buying) or cashing out via `terminal.cashOutTokensOf()` (selling), priced from the project's ruleset weight and surplus
+2. **Juicebox protocol** -- minting tokens via `terminal.pay()` (buying) or cashing out via `terminal.cashOutTokensOf()` (selling), priced from the project's ruleset weight and surplus when the project's sell-side economics are not data-hook controlled
 
 Whichever route yields the most output tokens wins. If Juicebox is chosen, the hook takes the input from the V4 PoolManager, executes the pay/cashout, and settles the output back -- all within the same transaction. If V4 wins, it returns `ZERO_DELTA` and lets the V4 AMM execute normally.
 
@@ -59,8 +59,10 @@ The oracle is a ring buffer of up to 65,535 observations per pool. Cardinality a
 **Selling project tokens** (cashing out):
 1. Query `terminal.STORE().currentReclaimableSurplusOf()` with empty terminals/accountingContexts so the store uses total surplus across all terminals
 2. Deduct protocol fee (read dynamically from terminal via `IJBFeeTerminal.FEE()`)
-3. Return net output
-4. All external calls are wrapped in try-catch -- if any call reverts, the estimate returns 0 and the swap falls back to V4
+3. If the active ruleset enables `useDataHookForCashOut`, return 0 and decline JB sell routing because the terminal-store quote is no longer a trustworthy best-execution estimate
+4. Deduct protocol fee (read dynamically from terminal via `IJBFeeTerminal.FEE()`)
+5. Return net output
+6. All external calls are wrapped in try-catch -- if any call reverts, the estimate returns 0 and the swap falls back to V4
 
 ## Architecture
 

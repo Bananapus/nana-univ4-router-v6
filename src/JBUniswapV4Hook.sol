@@ -48,9 +48,10 @@ import {Oracle} from "./libraries/Oracle.sol";
 /// When the buyback hook attempts a swap, it flows through this hook's `_beforeSwap` routing logic. If the routing
 /// decision leads back to Juicebox (via `_routeThroughJuicebox`), the `_routing` reentrancy guard prevents infinite
 /// recursion and the buyback hook falls back to minting. This weight comparison uses static issuance weight while
-/// the buyback hook uses TWAP-derived estimates, so the two may occasionally disagree on routing. Deployers MUST
-/// ensure that the project's data hook does not override weight in a way that makes the static estimate dangerously
-/// stale — otherwise routing decisions will consistently diverge, causing users to receive suboptimal rates.
+/// the buyback hook uses TWAP-derived estimates, so the two may occasionally disagree on routing. Buy-side routing
+/// remains incompatible with projects whose data hooks override pay weight, and sell-side routing is intentionally
+/// disabled for projects whose data hooks override cash-out economics. Deployers MUST keep those composition limits
+/// in mind when choosing this hook for best-execution routing.
 contract JBUniswapV4Hook is BaseHook {
     using PoolIdLibrary for PoolKey;
     using StateLibrary for IPoolManager;
@@ -178,8 +179,8 @@ contract JBUniswapV4Hook is BaseHook {
 
     /// @notice Calculate expected output from selling JB tokens
     /// @dev This estimate uses the ruleset's static cashOutTaxRate via the terminal store. If the project has a data
-    /// hook that overrides cashout parameters at cashout time, the actual reclaim may differ from this estimate,
-    /// potentially causing the swap-vs-cashout routing decision to diverge from what would be optimal.
+    /// hook that overrides cashout parameters at cashout time, this function returns 0 to force V4 routing instead
+    /// of pretending the sell-side JB route can still be priced safely.
     /// The estimate also conservatively deducts fees even for feeless addresses, which may underestimate output.
     /// @param projectId The Juicebox project ID
     /// @param tokenAmountIn The amount of JB tokens being sold
@@ -196,6 +197,14 @@ contract JBUniswapV4Hook is BaseHook {
         view
         returns (uint256 expectedOutput)
     {
+        try IJBController(address(DIRECTORY.controllerOf(projectId))).currentRulesetOf(projectId) returns (
+            JBRuleset memory ruleset, JBRulesetMetadata memory
+        ) {
+            if (JBRulesetMetadataResolver.useDataHookForCashOut(ruleset)) return 0;
+        } catch {
+            return 0;
+        }
+
         // Normalize output token to Juicebox's native token representation
         outputToken = _normalizeToken(outputToken);
 

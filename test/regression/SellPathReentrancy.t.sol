@@ -101,6 +101,7 @@ contract MockJBPricesReentrancy {
 contract MockJBControllerReentrancy {
     mapping(uint256 => uint256) public weights;
     mapping(uint256 => uint16) public cashOutTaxRates;
+    mapping(uint256 => bool) public useDataHookForCashOuts;
 
     function setWeight(uint256 projectId, uint256 weight) external {
         weights[projectId] = weight;
@@ -108,6 +109,10 @@ contract MockJBControllerReentrancy {
 
     function setCashOutTaxRate(uint256 projectId, uint16 rate) external {
         cashOutTaxRates[projectId] = rate;
+    }
+
+    function setUseDataHookForCashOut(uint256 projectId, bool flag) external {
+        useDataHookForCashOuts[projectId] = flag;
     }
 
     function currentRulesetOf(uint256 projectId)
@@ -132,7 +137,7 @@ contract MockJBControllerReentrancy {
             holdFees: false,
             useTotalSurplusForCashOuts: false,
             useDataHookForPay: false,
-            useDataHookForCashOut: false,
+            useDataHookForCashOut: useDataHookForCashOuts[projectId],
             dataHook: address(0),
             metadata: 0
         });
@@ -489,6 +494,26 @@ contract SellPathReentrancyTest is Test {
         // Verify the terminal was called
         assertEq(goodTerminal.lastProjectId(), PROJECT_ID, "Terminal should have been called with correct project ID");
         assertGt(goodTerminal.lastCashOutCount(), 0, "Terminal should have processed a cash out");
+    }
+
+    /// @notice Projects that opt into cash-out data-hook overrides are not sell-side best-execution candidates.
+    /// The hook should decline JB routing and let the V4 pool handle the swap instead of relying on a stale static
+    /// terminal-store estimate.
+    function test_sellPathWithCashOutDataHook_prefersV4OverStaticJBEstimate() public {
+        mockJbController.setUseDataHookForCashOut(PROJECT_ID, true);
+
+        token0.mint(address(this), 1 ether);
+        token0.approve(address(jbSwapRouter), 1 ether);
+
+        SwapParams memory params =
+            SwapParams({zeroForOne: true, amountSpecified: -1 ether, sqrtPriceLimitX96: TickMath.MIN_SQRT_PRICE + 1});
+
+        uint256 balanceBefore = token1.balanceOf(address(this));
+        jbSwapRouter.swap(key, params, 0);
+        uint256 balanceAfter = token1.balanceOf(address(this));
+
+        assertGt(balanceAfter, balanceBefore, "swap should execute through V4");
+        assertFalse(reentrantTerminal.reentrancyAttempted(), "sell path should not route through JB");
     }
 }
 
