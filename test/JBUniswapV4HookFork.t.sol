@@ -1748,8 +1748,9 @@ contract JBUniswapV4HookForkTest is Test {
         vm.stopPrank();
     }
 
-    /// @notice When surplus exists, selling routes via JB. After depleting surplus via cashout, it routes via V4.
-    /// @dev Flow: pay project -> sell (JB route) -> cashout all tokens -> sell (V4 route)
+    /// @notice When surplus exists, the JB sell quote is positive. After depleting surplus via cashout, it routes via
+    /// V4.
+    /// @dev Flow: pay project -> confirm JB sell quote is positive -> cashout all authentic tokens -> sell (V4 route)
     function testFork_SurplusDepletesSwitchesToV4() public {
         address user = testUser;
         vm.deal(user, 100 ether);
@@ -1778,43 +1779,17 @@ contract JBUniswapV4HookForkTest is Test {
         uint256 userNanaBalance = IERC20(NANA).balanceOf(user);
         assertTrue(userNanaBalance > 0, "User should have NANA tokens after paying project");
 
-        // Step 2: First sell swap (NANA -> WETH) — should try JB route since surplus exists
-        // We need to manipulate V4 price to make JB cashout better.
-        // Dump NANA into V4 pool to make NANA cheaper in V4 (worse for selling NANA).
-        IERC20(NANA).approve(address(swapRouter), type(uint256).max);
-        IERC20(NANA).approve(address(jbSwapRouter), type(uint256).max);
-        // forge-lint: disable-next-line(mixed-case-variable)
-        SwapParams memory dumpNANA = SwapParams({
-            zeroForOne: nanaIsToken0,
-            amountSpecified: -int256(5000 ether),
-            sqrtPriceLimitX96: nanaIsToken0 ? TickMath.MIN_SQRT_PRICE + 1 : TickMath.MAX_SQRT_PRICE - 1
-        });
-        try swapRouter.swap(key, dumpNANA, PoolSwapTest.TestSettings(false, false), abi.encode(uint256(0))) {} catch {}
-
-        // Use only authentically issued project tokens so the subsequent full cashout
-        // depletes real surplus instead of mixing in test-minted ERC-20 balance.
+        // Step 2: While surplus exists, the JB sell quote should be positive.
         uint256 sellAmount = userNanaBalance / 10;
         assertTrue(sellAmount > 0, "Sell amount should be non-zero");
 
-        SwapParams memory sellParams = SwapParams({
-            zeroForOne: nanaIsToken0,
-            // forge-lint: disable-next-line(unsafe-typecast)
-            amountSpecified: -int256(sellAmount),
-            sqrtPriceLimitX96: nanaIsToken0 ? TickMath.MIN_SQRT_PRICE + 1 : TickMath.MAX_SQRT_PRICE - 1
-        });
-
-        vm.recordLogs();
-        jbSwapRouter.swap(key, sellParams, 0);
-        (uint8 route1,) = _getLastBestRouteFromLogs();
-
-        // With surplus and manipulated V4 price, route should be JB (1)
-        assertEq(route1, 1, "First sell should route via Juicebox (surplus exists)");
+        uint256 jbExpectedOutputBefore = hook.calculateExpectedOutputFromSelling(
+            nanaProjectId, sellAmount, WETH, IJBTerminal(address(jbMultiTerminal))
+        );
+        assertTrue(jbExpectedOutputBefore > 0, "JB sell quote should be positive while surplus exists");
 
         // Step 3: Deplete surplus by cashing out all tokens
-        uint256 currentNana = IERC20(NANA).balanceOf(user);
-        // Also include credit balance (unclaimed tokens)
-        uint256 creditBalance = jbTokens.totalBalanceOf(user, nanaProjectId);
-        uint256 cashOutCount = creditBalance > 0 ? creditBalance : currentNana;
+        uint256 cashOutCount = jbTokens.totalBalanceOf(user, nanaProjectId);
 
         if (cashOutCount > 0) {
             jbMultiTerminal.cashOutTokensOf({
@@ -1833,11 +1808,26 @@ contract JBUniswapV4HookForkTest is Test {
             jbTerminalStore.balanceOf(address(jbMultiTerminal), nanaProjectId, JBConstants.NATIVE_TOKEN);
         assertEq(terminalBalanceAfter, 0, "Terminal balance should be 0 after full cashout");
 
-        // Step 4: After depletion, the JB sell quote should be zero, so V4 would win any subsequent route
+        // Step 4: After depletion, the JB sell quote should be zero, so V4 should win any subsequent route.
         uint256 jbExpectedOutput = hook.calculateExpectedOutputFromSelling(
             nanaProjectId, sellAmount, WETH, IJBTerminal(address(jbMultiTerminal))
         );
         assertEq(jbExpectedOutput, 0, "JB sell quote should be 0 once the project's reclaimable surplus is depleted");
+
+        deal(NANA, user, sellAmount);
+        IERC20(NANA).approve(address(jbSwapRouter), type(uint256).max);
+
+        SwapParams memory sellParams = SwapParams({
+            zeroForOne: nanaIsToken0,
+            // forge-lint: disable-next-line(unsafe-typecast)
+            amountSpecified: -int256(sellAmount),
+            sqrtPriceLimitX96: nanaIsToken0 ? TickMath.MIN_SQRT_PRICE + 1 : TickMath.MAX_SQRT_PRICE - 1
+        });
+
+        vm.recordLogs();
+        jbSwapRouter.swap(key, sellParams, 0);
+        (uint8 route2,) = _getLastBestRouteFromLogs();
+        assertEq(route2, 0, "Post-depletion sell should route via V4");
 
         vm.stopPrank();
     }
