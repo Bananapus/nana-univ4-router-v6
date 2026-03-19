@@ -1719,21 +1719,45 @@ contract JBUniswapV4HookForkTest is Test {
             jbTerminalStore.balanceOf(address(jbMultiTerminal), nanaProjectId, JBConstants.NATIVE_TOKEN);
         assertEq(terminalBalance, 0, "Terminal balance should be 0 (no payments made)");
 
-        // Perform sell swap: NANA -> WETH
-        bool nanaIsToken0 = Currency.unwrap(key.currency0) == NANA;
-        SwapParams memory params = SwapParams({
-            zeroForOne: nanaIsToken0,
-            // forge-lint: disable-next-line(unsafe-typecast)
-            amountSpecified: -int256(sellAmount),
-            sqrtPriceLimitX96: nanaIsToken0 ? TickMath.MIN_SQRT_PRICE + 1 : TickMath.MAX_SQRT_PRICE - 1
+        PoolKey memory nativeKey = PoolKey({
+            currency0: Currency.wrap(address(0)),
+            currency1: Currency.wrap(NANA),
+            fee: 3000,
+            tickSpacing: 60,
+            hooks: IHooks(address(hook))
         });
 
-        // Record WETH balance before swap
-        uint256 wethBefore = IERC20(WETH).balanceOf(user);
+        manager.initialize(nativeKey, SQRT_PRICE_1_1);
+
+        address liquidityProvider = makeAddr("zeroSurplusLiquidityProvider");
+        uint256 nativeAmount = 500_000 ether;
+        uint256 nanaAmount = 500_000 ether;
+        vm.deal(liquidityProvider, nativeAmount);
+        deal(NANA, liquidityProvider, nanaAmount);
+
+        vm.startPrank(liquidityProvider);
+        IERC20(NANA).approve(address(modifyLiquidityRouter), type(uint256).max);
+        modifyLiquidityRouter.modifyLiquidity{value: nativeAmount}(
+            nativeKey,
+            ModifyLiquidityParams({tickLower: -600, tickUpper: 600, liquidityDelta: 500_000 ether, salt: bytes32(0)}),
+            ZERO_BYTES
+        );
+        vm.stopPrank();
+
+        vm.startPrank(user);
+
+        // Perform sell swap: NANA -> ETH
+        SwapParams memory params = SwapParams({
+            zeroForOne: false,
+            // forge-lint: disable-next-line(unsafe-typecast)
+            amountSpecified: -int256(sellAmount),
+            sqrtPriceLimitX96: TickMath.MAX_SQRT_PRICE - 1
+        });
+        uint256 ethBefore = user.balance;
 
         // Record logs so we can extract BestRouteSelected event
         vm.recordLogs();
-        jbSwapRouter.swap(key, params, 0);
+        jbSwapRouter.swap(nativeKey, params, 0);
 
         // Extract route from logs
         (uint8 route,) = _getLastBestRouteFromLogs();
@@ -1741,9 +1765,9 @@ contract JBUniswapV4HookForkTest is Test {
         // Route should be V4 (0) because JB surplus is 0 -> calculateExpectedOutputFromSelling returns 0
         assertEq(route, 0, "Should route via V4 when project has zero surplus");
 
-        // Swap should succeed with nonzero WETH output (V4 pool has liquidity from setUp)
-        uint256 wethAfter = IERC20(WETH).balanceOf(user);
-        assertTrue(wethAfter > wethBefore, "User should receive WETH from V4 swap");
+        // Swap should succeed with nonzero native output from the V4 pool.
+        uint256 ethAfter = user.balance;
+        assertTrue(ethAfter > ethBefore, "User should receive native ETH from the V4 swap");
 
         vm.stopPrank();
     }
