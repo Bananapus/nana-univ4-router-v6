@@ -213,22 +213,30 @@ contract JBUniswapV4Hook is BaseHook {
             // First preference: use the store's cash-out preview path, which simulates any configured cash-out data
             // hook and therefore better matches the real `cashOutTokensOf` route.
             uint256 grossReclaim;
-            // slither-disable-next-line unused-return
-            try store.previewCashOutFrom({
-                terminal: address(terminal),
-                holder: address(this),
-                projectId: projectId,
-                cashOutCount: tokenAmountIn,
-                accountingContext: accountingContext,
-                balanceAccountingContexts: new JBAccountingContext[](0),
-                beneficiaryIsFeeless: false,
-                metadata: bytes("")
-            }) returns (
-                JBRuleset memory, uint256 reclaimAmount, uint256, JBCashOutHookSpecification[] memory
+            bool previewSucceeded;
+            try terminal.accountingContextsOf(projectId) returns (
+                JBAccountingContext[] memory balanceAccountingContexts
             ) {
-                grossReclaim = reclaimAmount;
-            } catch {
-                // Fallback: use the static surplus estimate if previewing is unavailable.
+                // slither-disable-next-line unused-return
+                try store.previewCashOutFrom({
+                    terminal: address(terminal),
+                    holder: address(this),
+                    projectId: projectId,
+                    cashOutCount: tokenAmountIn,
+                    accountingContext: accountingContext,
+                    balanceAccountingContexts: balanceAccountingContexts,
+                    beneficiaryIsFeeless: false,
+                    metadata: bytes("")
+                }) returns (
+                    JBRuleset memory, uint256 reclaimAmount, uint256, JBCashOutHookSpecification[] memory
+                ) {
+                    grossReclaim = reclaimAmount;
+                    previewSucceeded = true;
+                } catch {}
+            } catch {}
+
+            // Fallback: use the static surplus estimate if previewing is unavailable.
+            if (!previewSucceeded) {
                 try store.currentReclaimableSurplusOf({
                     projectId: projectId,
                     cashOutCount: tokenAmountIn,
