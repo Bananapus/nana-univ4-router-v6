@@ -213,6 +213,7 @@ contract JBUniswapV4Hook is BaseHook {
             // First preference: use the store's cash-out preview path, which simulates any configured cash-out data
             // hook and therefore better matches the real `cashOutTokensOf` route.
             uint256 grossReclaim;
+            // slither-disable-next-line unused-return
             try store.previewCashOutFrom({
                 terminal: address(terminal),
                 holder: address(this),
@@ -223,17 +224,9 @@ contract JBUniswapV4Hook is BaseHook {
                 beneficiaryIsFeeless: false,
                 metadata: bytes("")
             }) returns (
-                JBRuleset memory previewRuleset,
-                uint256 reclaimAmount,
-                uint256 previewCashOutTaxRate,
-                JBCashOutHookSpecification[] memory previewHookSpecifications
+                JBRuleset memory, uint256 reclaimAmount, uint256, JBCashOutHookSpecification[] memory
             ) {
-                grossReclaim = _previewedCashOutReclaimAmount(
-                    /* previewRuleset: */ previewRuleset,
-                    /* reclaimAmount: */ reclaimAmount,
-                    /* previewCashOutTaxRate: */ previewCashOutTaxRate,
-                    /* previewHookSpecifications: */ previewHookSpecifications
-                );
+                grossReclaim = reclaimAmount;
             } catch {
                 // Fallback: use the static surplus estimate if previewing is unavailable.
                 try store.currentReclaimableSurplusOf({
@@ -261,22 +254,6 @@ contract JBUniswapV4Hook is BaseHook {
         } catch {
             return 0;
         }
-    }
-
-    /// @notice Consume the full terminal-store preview surface while pricing only the reclaim amount.
-    /// @dev The auxiliary preview return values still matter for parity with the real cash-out path, even though the
-    /// router only needs the reclaim amount for route comparison.
-    function _previewedCashOutReclaimAmount(
-        JBRuleset memory,
-        uint256 reclaimAmount,
-        uint256,
-        JBCashOutHookSpecification[] memory
-    )
-        internal
-        pure
-        returns (uint256)
-    {
-        return reclaimAmount;
     }
 
     /// @notice Calculate expected tokens for a given payment amount in any currency
