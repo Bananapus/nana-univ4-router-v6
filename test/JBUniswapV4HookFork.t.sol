@@ -1752,10 +1752,8 @@ contract JBUniswapV4HookForkTest is Test {
     /// V4.
     /// @dev Flow: pay project -> confirm JB sell quote is positive -> cashout all authentic tokens -> sell (V4 route)
     function testFork_SurplusDepletesSwitchesToV4() public {
-        address user = testUser;
+        address user = makeAddr("surplusDepletionUser");
         vm.deal(user, 100 ether);
-
-        bool nanaIsToken0 = Currency.unwrap(key.currency0) == NANA;
 
         // Step 1: Pay project to create surplus
         vm.startPrank(user);
@@ -1808,24 +1806,50 @@ contract JBUniswapV4HookForkTest is Test {
             jbTerminalStore.balanceOf(address(jbMultiTerminal), nanaProjectId, JBConstants.NATIVE_TOKEN);
         assertEq(terminalBalanceAfter, 0, "Terminal balance should be 0 after full cashout");
 
-        // Step 4: After depletion, the JB sell quote should be zero, so V4 should win any subsequent route.
+        // Step 4: After depletion, the JB native sell quote should be zero, so V4 should win a native-output route.
         uint256 jbExpectedOutput = hook.calculateExpectedOutputFromSelling(
-            nanaProjectId, sellAmount, WETH, IJBTerminal(address(jbMultiTerminal))
+            nanaProjectId, sellAmount, JBConstants.NATIVE_TOKEN, IJBTerminal(address(jbMultiTerminal))
         );
         assertEq(jbExpectedOutput, 0, "JB sell quote should be 0 once the project's reclaimable surplus is depleted");
 
+        vm.stopPrank();
+
+        PoolKey memory nativeKey = PoolKey({
+            currency0: Currency.wrap(address(0)),
+            currency1: Currency.wrap(NANA),
+            fee: 3000,
+            tickSpacing: 60,
+            hooks: IHooks(address(hook))
+        });
+
+        manager.initialize(nativeKey, SQRT_PRICE_1_1);
+
+        address liquidityProvider = makeAddr("nativeLiquidityProvider");
+        vm.deal(liquidityProvider, 500 ether);
+        deal(NANA, liquidityProvider, 500_000 ether);
+
+        vm.startPrank(liquidityProvider);
+        IERC20(NANA).approve(address(modifyLiquidityRouter), type(uint256).max);
+        modifyLiquidityRouter.modifyLiquidity{value: 500 ether}(
+            nativeKey,
+            ModifyLiquidityParams({tickLower: -120, tickUpper: 120, liquidityDelta: 500 ether, salt: bytes32(0)}),
+            ZERO_BYTES
+        );
+        vm.stopPrank();
+
+        vm.startPrank(user);
         deal(NANA, user, sellAmount);
         IERC20(NANA).approve(address(jbSwapRouter), type(uint256).max);
 
         SwapParams memory sellParams = SwapParams({
-            zeroForOne: nanaIsToken0,
+            zeroForOne: false,
             // forge-lint: disable-next-line(unsafe-typecast)
             amountSpecified: -int256(sellAmount),
-            sqrtPriceLimitX96: nanaIsToken0 ? TickMath.MIN_SQRT_PRICE + 1 : TickMath.MAX_SQRT_PRICE - 1
+            sqrtPriceLimitX96: TickMath.MAX_SQRT_PRICE - 1
         });
 
         vm.recordLogs();
-        jbSwapRouter.swap(key, sellParams, 0);
+        jbSwapRouter.swap(nativeKey, sellParams, 0);
         (uint8 route2,) = _getLastBestRouteFromLogs();
         assertEq(route2, 0, "Post-depletion sell should route via V4");
 
