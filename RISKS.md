@@ -23,10 +23,9 @@ Forward-looking risk analysis of `JBUniswapV4Hook` (~963 lines) and `Oracle` lib
 
 ### 2.2 Observation cardinality limits
 
-- Oracle starts at cardinality 1, auto-grows by doubling at capacity boundaries (1 -> 2 -> 4 -> ... -> 128 -> 256 cap).
-- Largest single growth (128 -> 256) costs ~128 cold SSTOREs (~2.56M gas). This cost is borne by the swap/liquidity caller that triggers the growth. An attacker could grief callers by timing transactions to coincide with growth boundaries.
-- At cardinality 256 with 12-second blocks, the oracle stores ~51 minutes of history -- sufficient for the 30-minute TWAP window with margin.
-- The cardinality cap at 256 means the oracle cannot store more than ~51 minutes at 12-second block times. If block production is faster (L2 with 2s blocks), 256 observations cover only ~8.5 minutes, which is less than `TWAP_PERIOD`. On such chains, the oracle would never fully warm up and would permanently use spot fallback.
+- Oracle starts at cardinality 1, auto-grows by doubling at capacity boundaries until `MAX_TWAP_CARDINALITY = 1024`.
+- Largest single growth (512 -> 1024) costs ~512 cold SSTOREs. This cost is borne by the swap/liquidity caller that triggers the growth. An attacker could grief callers by timing transactions to coincide with growth boundaries.
+- At cardinality 1024 with 12-second blocks, the oracle stores ~205 minutes of history. At 2-second blocks, it stores just over 34 minutes -- enough to support the 30-minute TWAP window after warmup.
 
 ### 2.3 TWAP_PERIOD selection tradeoffs
 
@@ -155,5 +154,5 @@ This is documented inline at `src/JBUniswapV4Hook.sol` lines 46-52 and 234-236 a
 - **Warmup boundary transition smoothness** -- The transition from spot fallback to TWAP at exactly `TWAP_PERIOD` seconds should not create a price discontinuity >5%. Verified in `test_SpotFallback_WarmupBoundary`: estimates at `TWAP_PERIOD - 1` and `TWAP_PERIOD` differ by <500 bps.
 - **Oracle observation monotonicity** -- `blockTimestamp` in observations increases monotonically (modulo uint32 wraparound). Same-block writes are no-ops (`Oracle.write` returns early when `last.blockTimestamp == blockTimestamp`). Verified in `test_OracleWrite_SameBlock_NoOp`.
 - **Flash-accounting conservation** -- For every `poolManager.take()`, a corresponding `_settleOutput()` must execute within the same `unlock()` call, or PoolManager reverts. The hook never holds tokens across transactions.
-- **Cardinality cap** -- `cardinalityNext` never exceeds 256. Growth logic: doubles up to 128, then caps at 256. Verified in `test_OracleCardinality_CapsAt256`.
+- **Cardinality cap** -- `cardinalityNext` never exceeds `MAX_TWAP_CARDINALITY` (1024). Growth logic doubles until the cap. Verified in `test_OracleCardinality_CapsAtConfiguredMaximum`.
 - **Routing never blocks V4 swaps** -- All JB protocol calls in the routing path (`currentRulesetOf`, `currentReclaimableSurplusOf`, `pricePerUnitOf`, `primaryTerminalOf`) are try-catch wrapped. A revert in any JB contract results in V4 fallback, not a failed swap.

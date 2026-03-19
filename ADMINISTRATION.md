@@ -66,7 +66,7 @@ What **nobody** can do after deployment:
 - **Cannot modify oracle state directly.** Oracle observations can only be written through V4 hook callbacks triggered by legitimate pool operations.
 - **Cannot extract funds.** The hook holds no persistent balances between transactions. All take/settle operations are atomic within a single swap.
 - **Cannot force a specific route.** Route selection is purely algorithmic -- the route with the highest estimated output wins.
-- **Cannot change the observation buffer cap.** Auto-growth caps at 256 observations and cannot be reconfigured.
+- **Cannot change the observation buffer cap.** Auto-growth caps at `MAX_TWAP_CARDINALITY = 1024` observations and cannot be reconfigured.
 
 ## Design Implications
 

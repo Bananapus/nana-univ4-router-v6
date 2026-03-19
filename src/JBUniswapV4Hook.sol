@@ -116,6 +116,11 @@ contract JBUniswapV4Hook is BaseHook {
     /// @notice The denominator used when calculating TWAP slippage percent values.
     uint256 public constant TWAP_SLIPPAGE_DENOMINATOR = 10_000;
 
+    /// @notice Maximum retained observation cardinality for a pool oracle.
+    /// @dev 1024 observations cover just over 34 minutes at 2-second block times, keeping a 30-minute TWAP
+    /// window available on fast-block L2s while staying well below the storage array's 65,535 hard limit.
+    uint16 public constant MAX_TWAP_CARDINALITY = 1024;
+
     //*********************************************************************//
     // --------------------- public stored properties -------------------- //
     //*********************************************************************//
@@ -893,11 +898,9 @@ contract JBUniswapV4Hook is BaseHook {
         uint16 newCardinalityNext = state.cardinalityNext;
         // slither-disable-next-line incorrect-equality
         if (state.cardinality == state.cardinalityNext && state.index == state.cardinality - 1) {
-            // Double the cardinality, capped at a reasonable maximum (e.g., 256 for 30-minute TWAP with 1-hour window)
-            // This allows storing ~256 observations = ~128 hours of data at 1 observation per 30 minutes
-            uint16 targetCardinality = state.cardinalityNext < 128
-                ? state.cardinalityNext * 2
-                : (state.cardinalityNext < 256 ? 256 : state.cardinalityNext);
+            // Double the cardinality until the configured cap is reached.
+            uint16 targetCardinality = state.cardinalityNext * 2;
+            if (targetCardinality > MAX_TWAP_CARDINALITY) targetCardinality = MAX_TWAP_CARDINALITY;
 
             // Grow the oracle array
             newCardinalityNext = observations[poolId].grow({current: state.cardinalityNext, next: targetCardinality});

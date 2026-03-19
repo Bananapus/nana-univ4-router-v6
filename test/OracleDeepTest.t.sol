@@ -541,24 +541,24 @@ contract OracleDeepTest is Test {
     }
 
     // ---------------------------------------------------------------
-    // 5. OracleCardinality_CapsAt256
+    // 5. OracleCardinality_CapsAtConfiguredMaximum
     // ---------------------------------------------------------------
 
-    /// @notice After enough growth cycles, cardinalityNext should cap at 256.
-    function test_OracleCardinality_CapsAt256() public {
+    /// @notice After enough growth cycles, cardinalityNext should cap at the configured maximum.
+    function test_OracleCardinality_CapsAtConfiguredMaximum() public {
         // We need to trigger auto-grow repeatedly.
-        // Growth pattern: 1 -> 2 -> 4 -> 8 -> 16 -> 32 -> 64 -> 128 -> 256 (8 doublings)
+        // Growth pattern: 1 -> 2 -> 4 -> 8 -> 16 -> 32 -> 64 -> 128 -> 256 -> 512 -> 1024.
         // Each growth cycle requires filling up to cardinality slots.
-        // Total swaps needed: 1 + 2 + 4 + 8 + 16 + 32 + 64 + 128 = 255 + some margin.
+        // Total swaps needed: 1 + 2 + 4 + 8 + 16 + 32 + 64 + 128 + 256 + 512 = 1023 plus some margin.
 
-        uint256 maxSwaps = 600;
+        uint256 maxSwaps = 2200;
         uint256 ts = 10_100; // start from an explicit timestamp
 
         for (uint256 swapCount = 0; swapCount < maxSwaps; swapCount++) {
             (,, uint16 cardNext) = hook.states(id);
 
             // Stop once we've reached the cap
-            if (cardNext >= 256) break;
+            if (cardNext >= hook.MAX_TWAP_CARDINALITY()) break;
 
             ts += 12;
             vm.warp(ts);
@@ -572,8 +572,36 @@ contract OracleDeepTest is Test {
         }
 
         (, uint16 finalCard, uint16 finalCardNext) = hook.states(id);
-        assertEq(finalCardNext, 256, "CardinalityNext should cap at 256");
-        assertLe(finalCard, 256, "Cardinality should not exceed 256");
+        assertEq(finalCardNext, hook.MAX_TWAP_CARDINALITY(), "CardinalityNext should reach the cap");
+        assertLe(finalCard, hook.MAX_TWAP_CARDINALITY(), "Cardinality should not exceed the cap");
+    }
+
+    /// @notice A 30-minute TWAP should still warm up under a 2-second block cadence.
+    function test_TWAPWarmup_RemainsAvailableOnFastBlockCadence() public {
+        uint256 ts = 10_100;
+        uint256 swapCount = 950;
+
+        for (uint256 i = 0; i < swapCount; i++) {
+            ts += 2;
+            vm.warp(ts);
+
+            if (i % 2 == 0) {
+                _doSwap(true, -0.0001 ether);
+            } else {
+                _doSwap(false, -0.0001 ether);
+            }
+        }
+
+        (uint16 index, uint16 cardinality,) = hook.states(id);
+        assertGe(cardinality, 900, "Fast-block cadence should retain enough observations for a 30-minute TWAP");
+
+        IPoolManager pm = IPoolManager(address(manager));
+        (, int24 currentTick,,) = pm.getSlot0(id);
+        uint128 currentLiquidity = pm.getLiquidity(id);
+
+        int24 meanTick = hook.observeTWAP(id, hook.TWAP_PERIOD(), currentTick, index, currentLiquidity, cardinality);
+        assertGe(meanTick, -1000, "Mean tick should remain bounded after fast-block warmup");
+        assertLe(meanTick, 1000, "Mean tick should remain bounded after fast-block warmup");
     }
 
     // ---------------------------------------------------------------
