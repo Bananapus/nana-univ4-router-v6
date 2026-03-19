@@ -53,7 +53,7 @@ Pool creation → JBUniswapV4Hook registered as hook
 ### TWAP Oracle
 ```
 Each swap/liquidity event → Oracle.write(tick, liquidity, timestamp)
-  → Ring buffer of 65,535 observations
+  → Ring buffer of 65,535 observations, auto-growing up to 1024 retained entries per pool
   → TWAP queried via _getTWAPSqrtPrice (30-min window)
   → Falls back to spot price if < 2 observations or < 30 min history
   → Protects against single-block price manipulation

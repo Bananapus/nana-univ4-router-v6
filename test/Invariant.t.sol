@@ -589,12 +589,13 @@ contract InvariantTest is Test {
     // Invariant 3: Oracle cardinality never exceeds cap
     // ---------------------------------------------------------------
 
-    /// @notice The oracle cardinality should never exceed 256 (the hard cap).
+    /// @notice The oracle cardinality should never exceed the configured hard cap.
     function invariant_oracleCardinalityCapped() public view {
         (, uint16 cardinality, uint16 cardinalityNext) = hook.states(id);
+        uint16 maxCardinality = hook.MAX_TWAP_CARDINALITY();
 
-        assertLe(cardinality, 256, "Oracle cardinality must not exceed 256");
-        assertLe(cardinalityNext, 256, "Oracle cardinalityNext must not exceed 256");
+        assertLe(cardinality, maxCardinality, "Oracle cardinality must not exceed the configured cap");
+        assertLe(cardinalityNext, maxCardinality, "Oracle cardinalityNext must not exceed the configured cap");
 
         // Cardinality must be >= 1 (initialized in afterInitialize)
         assertGe(cardinality, 1, "Oracle cardinality must be at least 1 after initialization");
