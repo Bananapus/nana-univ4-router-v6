@@ -136,7 +136,8 @@ contract JBUniswapV4HookForkTest is Test {
 
         // Deploy ERC-20 for the NANA project so it has a real token address
         vm.prank(multisig);
-        IJBToken nanaToken = jbController.deployERC20For({projectId: nanaProjectId, name: "NANA", symbol: "NANA", salt: 0});
+        IJBToken nanaToken =
+            jbController.deployERC20For({projectId: nanaProjectId, name: "NANA", symbol: "NANA", salt: 0});
         NANA = address(nanaToken);
 
         // Deploy Uniswap v4 core contracts
@@ -283,8 +284,7 @@ contract JBUniswapV4HookForkTest is Test {
         uint256 projectId = jbTokens.projectIdOf(IJBToken(NANA));
 
         // Query the project's current ruleset
-        (JBRuleset memory ruleset, JBRulesetMetadata memory metadata) =
-            jbController.currentRulesetOf(projectId);
+        (JBRuleset memory ruleset, JBRulesetMetadata memory metadata) = jbController.currentRulesetOf(projectId);
 
         // Validate that the project exists and has valid ruleset data
         assertTrue(ruleset.weight > 0, "Project should have a positive weight");
