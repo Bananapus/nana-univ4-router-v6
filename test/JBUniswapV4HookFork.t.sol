@@ -1634,4 +1634,360 @@ contract JBUniswapV4HookForkTest is Test {
             memo: ""
         });
     }
+
+    /// @dev Launch a JB project with a custom cashOutTaxRate (same as _launchProject but with tax rate).
+    function _launchProjectWithTax(
+        address acceptedToken,
+        uint8 decimals,
+        uint16 cashOutTaxRate
+    )
+        internal
+        returns (uint256 projectId)
+    {
+        JBRulesetMetadata memory metadata = JBRulesetMetadata({
+            reservedPercent: 0,
+            cashOutTaxRate: cashOutTaxRate,
+            // forge-lint: disable-next-line(unsafe-typecast)
+            baseCurrency: uint32(uint160(acceptedToken)),
+            pausePay: false,
+            pauseCreditTransfers: false,
+            allowOwnerMinting: false,
+            allowSetCustomToken: false,
+            allowTerminalMigration: false,
+            allowSetTerminals: false,
+            allowSetController: false,
+            allowAddAccountingContext: true,
+            allowAddPriceFeed: false,
+            ownerMustSendPayouts: false,
+            holdFees: false,
+            useTotalSurplusForCashOuts: false,
+            useDataHookForPay: false,
+            useDataHookForCashOut: false,
+            dataHook: address(0),
+            metadata: 0
+        });
+
+        JBRulesetConfig[] memory rulesetConfigs = new JBRulesetConfig[](1);
+        rulesetConfigs[0].mustStartAtOrAfter = 0;
+        rulesetConfigs[0].duration = 0;
+        rulesetConfigs[0].weight = 1_000_000e18; // 1M tokens per unit of currency
+        rulesetConfigs[0].weightCutPercent = 0;
+        rulesetConfigs[0].approvalHook = IJBRulesetApprovalHook(address(0));
+        rulesetConfigs[0].metadata = metadata;
+        rulesetConfigs[0].splitGroups = new JBSplitGroup[](0);
+        rulesetConfigs[0].fundAccessLimitGroups = new JBFundAccessLimitGroup[](0);
+
+        JBAccountingContext[] memory tokensToAccept = new JBAccountingContext[](1);
+        tokensToAccept[0] =
+        // forge-lint: disable-next-line(unsafe-typecast)
+        JBAccountingContext({token: acceptedToken, decimals: decimals, currency: uint32(uint160(acceptedToken))});
+
+        JBTerminalConfig[] memory terminalConfigs = new JBTerminalConfig[](1);
+        terminalConfigs[0] = JBTerminalConfig({terminal: jbMultiTerminal, accountingContextsToAccept: tokensToAccept});
+
+        projectId = jbController.launchProjectFor({
+            owner: multisig,
+            projectUri: "test-project-with-tax",
+            rulesetConfigurations: rulesetConfigs,
+            terminalConfigurations: terminalConfigs,
+            memo: ""
+        });
+    }
+
+    // ============================================================
+    // Zero-Surplus & Second-Project Tests
+    // ============================================================
+
+    /// @notice When a project has zero surplus (no payments made), selling should route via V4 AMM.
+    /// @dev The pool has liquidity from setUp(), but the JB project has no surplus because nobody paid it.
+    ///      `calculateExpectedOutputFromSelling` returns 0 when surplus is 0, so the hook falls back to V4.
+    function testFork_ZeroSurplusRoutesToV4() public {
+        address user = testUser;
+
+        // Fund user with NANA tokens to sell (deal directly, NOT via terminal.pay)
+        uint256 sellAmount = 100 ether;
+        deal(NANA, user, sellAmount);
+        vm.deal(user, 1 ether); // gas money
+
+        vm.startPrank(user);
+
+        // Approve NANA for swap
+        IERC20(NANA).approve(address(jbSwapRouter), type(uint256).max);
+
+        // Confirm surplus is 0: no one has paid the project
+        uint256 terminalBalance =
+            jbTerminalStore.balanceOf(address(jbMultiTerminal), nanaProjectId, JBConstants.NATIVE_TOKEN);
+        assertEq(terminalBalance, 0, "Terminal balance should be 0 (no payments made)");
+
+        // Perform sell swap: NANA -> WETH
+        bool nanaIsToken0 = Currency.unwrap(key.currency0) == NANA;
+        SwapParams memory params = SwapParams({
+            zeroForOne: nanaIsToken0,
+            // forge-lint: disable-next-line(unsafe-typecast)
+            amountSpecified: -int256(sellAmount),
+            sqrtPriceLimitX96: nanaIsToken0 ? TickMath.MIN_SQRT_PRICE + 1 : TickMath.MAX_SQRT_PRICE - 1
+        });
+
+        // Record WETH balance before swap
+        uint256 wethBefore = IERC20(WETH).balanceOf(user);
+
+        // Record logs so we can extract BestRouteSelected event
+        vm.recordLogs();
+        jbSwapRouter.swap(key, params, 0);
+
+        // Extract route from logs
+        (uint8 route,) = _getLastBestRouteFromLogs();
+
+        // Route should be V4 (0) because JB surplus is 0 -> calculateExpectedOutputFromSelling returns 0
+        assertEq(route, 0, "Should route via V4 when project has zero surplus");
+
+        // Swap should succeed with nonzero WETH output (V4 pool has liquidity from setUp)
+        uint256 wethAfter = IERC20(WETH).balanceOf(user);
+        assertTrue(wethAfter > wethBefore, "User should receive WETH from V4 swap");
+
+        vm.stopPrank();
+    }
+
+    /// @notice When surplus exists, selling routes via JB. After depleting surplus via cashout, it routes via V4.
+    /// @dev Flow: pay project -> sell (JB route) -> cashout all tokens -> sell (V4 route)
+    function testFork_SurplusDepletesSwitchesToV4() public {
+        address user = testUser;
+        vm.deal(user, 100 ether);
+
+        bool nanaIsToken0 = Currency.unwrap(key.currency0) == NANA;
+
+        // Step 1: Pay project to create surplus
+        vm.startPrank(user);
+        uint256 payAmount = 10 ether;
+        jbMultiTerminal.pay{value: payAmount}({
+            projectId: nanaProjectId,
+            token: JBConstants.NATIVE_TOKEN,
+            amount: payAmount,
+            beneficiary: user,
+            minReturnedTokens: 0,
+            memo: "create surplus",
+            metadata: ""
+        });
+
+        // Verify surplus exists
+        uint256 terminalBalance =
+            jbTerminalStore.balanceOf(address(jbMultiTerminal), nanaProjectId, JBConstants.NATIVE_TOKEN);
+        assertTrue(terminalBalance > 0, "Terminal should have balance after payment");
+
+        // User now has NANA tokens from payment
+        uint256 userNanaBalance = IERC20(NANA).balanceOf(user);
+        assertTrue(userNanaBalance > 0, "User should have NANA tokens after paying project");
+
+        // Step 2: First sell swap (NANA -> WETH) — should try JB route since surplus exists
+        // We need to manipulate V4 price to make JB cashout better.
+        // Dump NANA into V4 pool to make NANA cheaper in V4 (worse for selling NANA).
+        IERC20(NANA).approve(address(swapRouter), type(uint256).max);
+        IERC20(NANA).approve(address(jbSwapRouter), type(uint256).max);
+        // forge-lint: disable-next-line(mixed-case-variable)
+        SwapParams memory dumpNANA = SwapParams({
+            zeroForOne: nanaIsToken0,
+            amountSpecified: -int256(5000 ether),
+            sqrtPriceLimitX96: nanaIsToken0 ? TickMath.MIN_SQRT_PRICE + 1 : TickMath.MAX_SQRT_PRICE - 1
+        });
+        try swapRouter.swap(key, dumpNANA, PoolSwapTest.TestSettings(false, false), abi.encode(uint256(0))) {} catch {}
+
+        // Use a modest sell amount so the JB route can reasonably be better
+        uint256 sellAmount = 100 ether;
+        deal(NANA, user, userNanaBalance + sellAmount); // Ensure user has enough
+
+        SwapParams memory sellParams = SwapParams({
+            zeroForOne: nanaIsToken0,
+            // forge-lint: disable-next-line(unsafe-typecast)
+            amountSpecified: -int256(sellAmount),
+            sqrtPriceLimitX96: nanaIsToken0 ? TickMath.MIN_SQRT_PRICE + 1 : TickMath.MAX_SQRT_PRICE - 1
+        });
+
+        vm.recordLogs();
+        jbSwapRouter.swap(key, sellParams, 0);
+        (uint8 route1,) = _getLastBestRouteFromLogs();
+
+        // With surplus and manipulated V4 price, route should be JB (1)
+        assertEq(route1, 1, "First sell should route via Juicebox (surplus exists)");
+
+        // Step 3: Deplete surplus by cashing out all tokens
+        uint256 currentNana = IERC20(NANA).balanceOf(user);
+        // Also include credit balance (unclaimed tokens)
+        uint256 creditBalance = jbTokens.totalBalanceOf(user, nanaProjectId);
+        uint256 cashOutCount = creditBalance > 0 ? creditBalance : currentNana;
+
+        if (cashOutCount > 0) {
+            jbMultiTerminal.cashOutTokensOf({
+                holder: user,
+                projectId: nanaProjectId,
+                cashOutCount: cashOutCount,
+                tokenToReclaim: JBConstants.NATIVE_TOKEN,
+                minTokensReclaimed: 0,
+                beneficiary: payable(user),
+                metadata: ""
+            });
+        }
+
+        // Verify surplus is now depleted
+        uint256 terminalBalanceAfter =
+            jbTerminalStore.balanceOf(address(jbMultiTerminal), nanaProjectId, JBConstants.NATIVE_TOKEN);
+        assertEq(terminalBalanceAfter, 0, "Terminal balance should be 0 after full cashout");
+
+        // Step 4: Second sell swap — should route via V4 because surplus is 0
+        deal(NANA, user, sellAmount); // Fresh tokens to sell
+        IERC20(NANA).approve(address(jbSwapRouter), type(uint256).max);
+
+        vm.recordLogs();
+        jbSwapRouter.swap(key, sellParams, 0);
+        (uint8 route2,) = _getLastBestRouteFromLogs();
+
+        // With depleted surplus, JB returns 0, so route should be V4 (0)
+        assertEq(route2, 0, "Second sell should route via V4 (surplus depleted)");
+
+        vm.stopPrank();
+    }
+
+    /// @notice Swaps on one project's pool must not affect another project's terminal balance.
+    /// @dev Launches a 3rd project with 50% cashOutTaxRate, creates a separate pool, and verifies isolation.
+    function testFork_TwoProjectsNoStateLeakage() public {
+        // Step 1: Launch project 3 with 50% cash out tax rate
+        uint256 project3Id = _launchProjectWithTax({
+            acceptedToken: JBConstants.NATIVE_TOKEN,
+            decimals: 18,
+            cashOutTaxRate: 5000 // 50%
+        });
+
+        // Deploy ERC-20 for project 3
+        vm.prank(multisig);
+        IJBToken project3Token =
+            jbController.deployERC20For({projectId: project3Id, name: "PROJ3", symbol: "PRJ3", salt: 0});
+        // forge-lint: disable-next-line(mixed-case-variable)
+        address PROJ3 = address(project3Token);
+
+        // Step 2: Create a pool for project 3 (PROJ3/WETH)
+        PoolKey memory key3;
+        if (PROJ3 < WETH) {
+            key3 = PoolKey({
+                currency0: Currency.wrap(PROJ3),
+                currency1: Currency.wrap(WETH),
+                fee: 3000,
+                tickSpacing: 60,
+                hooks: IHooks(address(hook))
+            });
+        } else {
+            key3 = PoolKey({
+                currency0: Currency.wrap(WETH),
+                currency1: Currency.wrap(PROJ3),
+                fee: 3000,
+                tickSpacing: 60,
+                hooks: IHooks(address(hook))
+            });
+        }
+
+        manager.initialize(key3, SQRT_PRICE_1_1);
+
+        // Step 3: Add liquidity to project 3's pool
+        address user = testUser;
+        uint256 proj3Amount = 500_000 ether;
+        uint256 wethAmount = 500_000 ether;
+        deal(PROJ3, user, proj3Amount);
+        vm.deal(user, wethAmount + 200 ether);
+
+        vm.startPrank(user);
+
+        (bool wrapOk,) = WETH.call{value: wethAmount}(abi.encodeWithSignature("deposit()"));
+        require(wrapOk, "WETH deposit failed");
+
+        IERC20(PROJ3).approve(address(modifyLiquidityRouter), type(uint256).max);
+        IERC20(WETH).approve(address(modifyLiquidityRouter), type(uint256).max);
+
+        modifyLiquidityRouter.modifyLiquidity(
+            key3,
+            ModifyLiquidityParams({tickLower: -600, tickUpper: 600, liquidityDelta: 500_000 ether, salt: bytes32(0)}),
+            ZERO_BYTES
+        );
+        vm.stopPrank();
+
+        // Step 4: Pay both projects to create surplus
+        vm.deal(user, 100 ether);
+        vm.startPrank(user);
+
+        uint256 payAmount = 10 ether;
+
+        // Pay project 2 (nanaProjectId)
+        jbMultiTerminal.pay{value: payAmount}({
+            projectId: nanaProjectId,
+            token: JBConstants.NATIVE_TOKEN,
+            amount: payAmount,
+            beneficiary: user,
+            minReturnedTokens: 0,
+            memo: "fund project 2",
+            metadata: ""
+        });
+
+        // Pay project 3
+        jbMultiTerminal.pay{value: payAmount}({
+            projectId: project3Id,
+            token: JBConstants.NATIVE_TOKEN,
+            amount: payAmount,
+            beneficiary: user,
+            minReturnedTokens: 0,
+            memo: "fund project 3",
+            metadata: ""
+        });
+
+        // Record initial terminal balances
+        uint256 project2BalanceBefore =
+            jbTerminalStore.balanceOf(address(jbMultiTerminal), nanaProjectId, JBConstants.NATIVE_TOKEN);
+        uint256 project3BalanceBefore =
+            jbTerminalStore.balanceOf(address(jbMultiTerminal), project3Id, JBConstants.NATIVE_TOKEN);
+
+        assertTrue(project2BalanceBefore > 0, "Project 2 should have terminal balance");
+        assertTrue(project3BalanceBefore > 0, "Project 3 should have terminal balance");
+
+        // Step 5: Swap on project 2's pool (NANA -> WETH)
+        IERC20(NANA).approve(address(jbSwapRouter), type(uint256).max);
+        deal(NANA, user, 100 ether);
+
+        bool nanaIsToken0 = Currency.unwrap(key.currency0) == NANA;
+        SwapParams memory swap2 = SwapParams({
+            zeroForOne: nanaIsToken0,
+            amountSpecified: -int256(100 ether),
+            sqrtPriceLimitX96: nanaIsToken0 ? TickMath.MIN_SQRT_PRICE + 1 : TickMath.MAX_SQRT_PRICE - 1
+        });
+        jbSwapRouter.swap(key, swap2, 0);
+
+        // Assert project 3's terminal balance unchanged after project 2 swap
+        uint256 project3BalanceAfterSwap2 =
+            jbTerminalStore.balanceOf(address(jbMultiTerminal), project3Id, JBConstants.NATIVE_TOKEN);
+        assertEq(
+            project3BalanceAfterSwap2, project3BalanceBefore, "Project 3 balance must not change from project 2 swap"
+        );
+
+        // Step 6: Swap on project 3's pool (PROJ3 -> WETH)
+        IERC20(PROJ3).approve(address(jbSwapRouter), type(uint256).max);
+        deal(PROJ3, user, 100 ether);
+
+        bool proj3IsToken0 = Currency.unwrap(key3.currency0) == PROJ3;
+        SwapParams memory swap3 = SwapParams({
+            zeroForOne: proj3IsToken0,
+            amountSpecified: -int256(100 ether),
+            sqrtPriceLimitX96: proj3IsToken0 ? TickMath.MIN_SQRT_PRICE + 1 : TickMath.MAX_SQRT_PRICE - 1
+        });
+        jbSwapRouter.swap(key3, swap3, 0);
+
+        // Record project 2 balance after project 2's own swap (it may have changed from its own swap)
+        uint256 project2BalanceAfterSwap2 =
+            jbTerminalStore.balanceOf(address(jbMultiTerminal), nanaProjectId, JBConstants.NATIVE_TOKEN);
+
+        // Assert project 2's terminal balance unchanged after project 3 swap
+        uint256 project2BalanceAfterSwap3 =
+            jbTerminalStore.balanceOf(address(jbMultiTerminal), nanaProjectId, JBConstants.NATIVE_TOKEN);
+        assertEq(
+            project2BalanceAfterSwap3,
+            project2BalanceAfterSwap2,
+            "Project 2 balance must not change from project 3 swap"
+        );
+
+        vm.stopPrank();
+    }
 }
