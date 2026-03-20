@@ -33,6 +33,7 @@ import {IJBTokens} from "@bananapus/core-v6/src/interfaces/IJBTokens.sol";
 import {JBConstants} from "@bananapus/core-v6/src/libraries/JBConstants.sol";
 import {JBRulesetMetadataResolver} from "@bananapus/core-v6/src/libraries/JBRulesetMetadataResolver.sol";
 import {JBAccountingContext} from "@bananapus/core-v6/src/structs/JBAccountingContext.sol";
+import {JBCashOutHookSpecification} from "@bananapus/core-v6/src/structs/JBCashOutHookSpecification.sol";
 import {JBRuleset} from "@bananapus/core-v6/src/structs/JBRuleset.sol";
 import {JBRulesetMetadata} from "@bananapus/core-v6/src/structs/JBRulesetMetadata.sol";
 
@@ -48,9 +49,10 @@ import {Oracle} from "./libraries/Oracle.sol";
 /// When the buyback hook attempts a swap, it flows through this hook's `_beforeSwap` routing logic. If the routing
 /// decision leads back to Juicebox (via `_routeThroughJuicebox`), the `_routing` reentrancy guard prevents infinite
 /// recursion and the buyback hook falls back to minting. This weight comparison uses static issuance weight while
-/// the buyback hook uses TWAP-derived estimates, so the two may occasionally disagree on routing. Deployers MUST
-/// ensure that the project's data hook does not override weight in a way that makes the static estimate dangerously
-/// stale — otherwise routing decisions will consistently diverge, causing users to receive suboptimal rates.
+/// the buyback hook uses TWAP-derived estimates, so the two may occasionally disagree on routing. Buy-side routing
+/// remains incompatible with projects whose data hooks override pay weight, and sell-side routing is intentionally
+/// disabled for projects whose data hooks override cash-out economics. Deployers MUST keep those composition limits
+/// in mind when choosing this hook for best-execution routing.
 contract JBUniswapV4Hook is BaseHook {
     using PoolIdLibrary for PoolKey;
     using StateLibrary for IPoolManager;
@@ -182,9 +184,9 @@ contract JBUniswapV4Hook is BaseHook {
     //*********************************************************************//
 
     /// @notice Calculate expected output from selling JB tokens
-    /// @dev This estimate uses the ruleset's static cashOutTaxRate via the terminal store. If the project has a data
-    /// hook that overrides cashout parameters at cashout time, the actual reclaim may differ from this estimate,
-    /// potentially causing the swap-vs-cashout routing decision to diverge from what would be optimal.
+    /// @dev Prefers the terminal store's `previewCashOutFrom` simulation so sell-side estimates can incorporate
+    /// cash-out data-hook effects when the underlying store supports that surface. Falls back to a static surplus
+    /// estimate if previewing is unavailable or reverts.
     /// The estimate also conservatively deducts fees even for feeless addresses, which may underestimate output.
     /// @param projectId The Juicebox project ID
     /// @param tokenAmountIn The amount of JB tokens being sold
@@ -206,23 +208,54 @@ contract JBUniswapV4Hook is BaseHook {
 
         // Get the terminal store for the project
         try IJBMultiTerminal(address(terminal)).STORE() returns (IJBTerminalStore store) {
-            // Get the current reclaimable surplus for the project (gross, before fees).
-            // Pass empty terminals/accountingContexts so the store uses total surplus across all terminals.
+            uint8 outputTokenDecimals = _getTokenDecimals(outputToken);
+            // forge-lint: disable-next-line(unsafe-typecast)
+            uint32 outputCurrency = uint32(uint160(outputToken));
+
+            JBAccountingContext memory accountingContext =
+                JBAccountingContext({token: outputToken, decimals: outputTokenDecimals, currency: outputCurrency});
+
+            // First preference: use the store's cash-out preview path, which simulates any configured cash-out data
+            // hook and therefore better matches the real `cashOutTokensOf` route.
             uint256 grossReclaim;
-            try store.currentReclaimableSurplusOf({
-                projectId: projectId,
-                cashOutCount: tokenAmountIn,
-                terminals: new IJBTerminal[](0),
-                accountingContexts: new JBAccountingContext[](0),
-                decimals: _getTokenDecimals(outputToken),
-                // forge-lint: disable-next-line(unsafe-typecast)
-                currency: uint32(uint160(outputToken))
-            }) returns (
-                uint256 reclaim
+            bool previewSucceeded;
+            try terminal.accountingContextsOf(projectId) returns (
+                JBAccountingContext[] memory balanceAccountingContexts
             ) {
-                grossReclaim = reclaim;
-            } catch {
-                return 0;
+                // slither-disable-next-line unused-return
+                try store.previewCashOutFrom({
+                    terminal: address(terminal),
+                    holder: address(this),
+                    projectId: projectId,
+                    cashOutCount: tokenAmountIn,
+                    accountingContext: accountingContext,
+                    balanceAccountingContexts: balanceAccountingContexts,
+                    beneficiaryIsFeeless: false,
+                    metadata: bytes("")
+                }) returns (
+                    JBRuleset memory, uint256 reclaimAmount, uint256, JBCashOutHookSpecification[] memory
+                ) {
+                    grossReclaim = reclaimAmount;
+                    previewSucceeded = true;
+                } catch {}
+            } catch {}
+
+            // Fallback: use the static surplus estimate if previewing is unavailable.
+            if (!previewSucceeded) {
+                try store.currentReclaimableSurplusOf({
+                    projectId: projectId,
+                    cashOutCount: tokenAmountIn,
+                    terminals: new IJBTerminal[](0),
+                    accountingContexts: new JBAccountingContext[](0),
+                    decimals: outputTokenDecimals,
+                    currency: outputCurrency
+                }) returns (
+                    uint256 reclaim
+                ) {
+                    grossReclaim = reclaim;
+                } catch {
+                    return 0;
+                }
             }
             // Deduct JB protocol fee dynamically read from the terminal.
             // The JB sell estimate conservatively includes fee deductions even for feeless addresses. This
