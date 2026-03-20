@@ -46,7 +46,7 @@ The hook maintains its own TWAP oracle per pool, recording observations on every
 
 - **V4**: 30-minute lookback (`TWAP_PERIOD = 1800`). Falls back to spot price if fewer than 2 observations or less than 30 minutes of history.
 
-The oracle is a ring buffer of up to 65,535 observations per pool. Cardinality auto-grows (doubling up to 256) when the buffer fills. No manual management needed. The hook exposes an `observe()` function (IGeomeanOracle-compatible) so external contracts can query TWAP data.
+The oracle is a ring buffer of up to 65,535 observations per pool. Cardinality auto-grows (doubling up to `MAX_TWAP_CARDINALITY = 1024`) when the buffer fills. That keeps a 30-minute TWAP available even on fast-block L2s with roughly 2-second block times. The hook exposes an `observe()` function (IGeomeanOracle-compatible) so external contracts can query TWAP data.
 
 ### Juicebox Price Estimation
 
@@ -167,7 +167,7 @@ Deployment scripts support:
 
 ## Risks
 
-- **TWAP manipulation**: With low cardinality (few observations), the TWAP window may be shorter than intended. The auto-grow mechanism mitigates this over time, but early pools are more vulnerable.
+- **TWAP manipulation**: With low cardinality (few observations), the TWAP window may be shorter than intended. The auto-grow mechanism now expands to 1024 observations so the full 30-minute window remains available on fast-block L2s after warmup, but early pools are still more vulnerable.
 - **Spot price fallback**: When TWAP data is insufficient, spot price is used silently. This removes manipulation protection for that swap.
 - **Juicebox route depends on terminal availability**: If `DIRECTORY.primaryTerminalOf()` returns address(0), the JB route is skipped entirely.
 - **Surplus estimation uses total surplus**: The sell-side estimate always uses total surplus across all terminals (empty arrays to `currentReclaimableSurplusOf`). This may overestimate reclaim value for projects that don't use `useTotalSurplusForCashOuts`.

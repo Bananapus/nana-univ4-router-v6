@@ -44,7 +44,7 @@ Uniswap V4 hook that automatically routes swaps involving Juicebox project token
 | Function | What it does |
 |----------|-------------|
 | `_getTWAPSqrtPrice(poolId)` | Returns TWAP sqrtPriceX96 for V4 pool (30-min window). Returns 0 if insufficient data (< 2 observations or < 30 min). |
-| `_recordObservation(poolId)` | Writes new observation to ring buffer. Auto-grows cardinality: doubles up to 128, then jumps to 256 max. |
+| `_recordObservation(poolId)` | Writes new observation to ring buffer. Auto-grows cardinality by doubling until `MAX_TWAP_CARDINALITY = 1024`. |
 
 ### Oracle Library
 
@@ -97,7 +97,7 @@ Uniswap V4 hook that automatically routes swaps involving Juicebox project token
 | `JB_NATIVE_TOKEN` | `0x000000000000000000000000000000000000EEEe` | Juicebox native ETH sentinel |
 | `UNISWAP_NATIVE_ETH` | `address(0)` | Uniswap native ETH sentinel |
 | `TWAP_SLIPPAGE_DENOMINATOR` | 10000 | Basis point divisor |
-| Max cardinality | 256 | Oracle auto-grow cap |
+| Max cardinality | 1024 | Oracle auto-grow cap |
 | Max observation slots | 65,535 | Ring buffer size per pool |
 
 ## Gotchas
@@ -106,7 +106,7 @@ Uniswap V4 hook that automatically routes swaps involving Juicebox project token
 2. **`hookData` must encode `uint256 amountOutMin`.** Exactly 32 bytes required; otherwise reverts with `JBUniswapV4Hook_AmountOutMinRequired`. This is NOT optional -- every swap through this hook needs it. `abi.encode(uint256(0))` delegates slippage protection to the hook's own TWAP oracle. The buyback hook uses this value when composing on the same pool.
 3. **TWAP falls back to spot price silently.** If fewer than 2 observations or less than `TWAP_PERIOD` seconds of data exist, `_getTWAPSqrtPrice` returns 0 and the estimator uses `getSlot0` spot price. No revert, no event.
 4. **Native ETH normalization.** For Juicebox terminal calls, `address(0)` maps to `JB_NATIVE_TOKEN` (`0x000000000000000000000000000000000000EEEe`).
-5. **Oracle auto-grows cardinality** when the buffer fills: doubles up to 128, then jumps to 256 max. The gas cost is paid by whoever triggers the observation write that fills the buffer.
+5. **Oracle auto-grows cardinality** when the buffer fills: doubles until the `MAX_TWAP_CARDINALITY = 1024` cap. The gas cost is paid by whoever triggers the observation write that fills the buffer.
 6. **Slippage validation differs by route.** V4 swaps validate `amountOutMin` in `_afterSwap`. JB routes validate during execution in `_beforeSwap` (via the pay/cashOut call itself or explicit checks).
 7. **The hook has `receive() external payable {}`** to accept ETH during terminal cash outs.
 8. **Deployment requires HookMiner.** The hook address must have specific bits set to match the permission flags. Use `HookMiner.find()` to discover a valid salt.
