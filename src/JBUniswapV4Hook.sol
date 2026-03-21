@@ -24,6 +24,7 @@ import {BaseHook} from "@uniswap/v4-periphery/src/utils/BaseHook.sol";
 import {IJBController} from "@bananapus/core-v6/src/interfaces/IJBController.sol";
 import {IJBDirectory} from "@bananapus/core-v6/src/interfaces/IJBDirectory.sol";
 import {IJBFeeTerminal} from "@bananapus/core-v6/src/interfaces/IJBFeeTerminal.sol";
+import {IJBCashOutTerminal} from "@bananapus/core-v6/src/interfaces/IJBCashOutTerminal.sol";
 import {IJBMultiTerminal} from "@bananapus/core-v6/src/interfaces/IJBMultiTerminal.sol";
 import {IJBPrices} from "@bananapus/core-v6/src/interfaces/IJBPrices.sol";
 import {IJBTerminal} from "@bananapus/core-v6/src/interfaces/IJBTerminal.sol";
@@ -207,7 +208,7 @@ contract JBUniswapV4Hook is BaseHook {
 
         // Use the terminal's cash-out preview, which simulates any configured cash-out data hook.
         // slither-disable-next-line unused-return
-        try IJBMultiTerminal(address(terminal))
+        try IJBCashOutTerminal(address(terminal))
             .previewCashOutFrom({
                 holder: address(this),
                 projectId: projectId,
