@@ -20,13 +20,15 @@ import {Hooks} from "@uniswap/v4-core/src/libraries/Hooks.sol";
 import {JBUniswapV4Hook} from "../src/JBUniswapV4Hook.sol";
 import {MockERC20} from "./mock/MockERC20.sol";
 import {JuiceboxSwapRouter} from "./utils/JuiceboxSwapRouter.sol";
-import {IJBTokens, IJBPrices, IJBDirectory, IJBTerminalStore} from "../src/JBUniswapV4Hook.sol";
+import {IJBTokens, IJBPrices, IJBDirectory} from "../src/JBUniswapV4Hook.sol";
 import {IJBTerminal} from "@bananapus/core-v6/src/interfaces/IJBTerminal.sol";
 import {JBAccountingContext} from "@bananapus/core-v6/src/structs/JBAccountingContext.sol";
 import {JBRuleset} from "@bananapus/core-v6/src/structs/JBRuleset.sol";
 import {JBRulesetMetadata} from "@bananapus/core-v6/src/structs/JBRulesetMetadata.sol";
 import {JBRulesetMetadataResolver} from "@bananapus/core-v6/src/libraries/JBRulesetMetadataResolver.sol";
 import {IJBRulesetApprovalHook} from "@bananapus/core-v6/src/interfaces/IJBRulesetApprovalHook.sol";
+import {IJBTerminalStore} from "@bananapus/core-v6/src/interfaces/IJBTerminalStore.sol";
+import {JBCashOutHookSpecification} from "@bananapus/core-v6/src/structs/JBCashOutHookSpecification.sol";
 import {HookMiner} from "@uniswap/v4-periphery/src/utils/HookMiner.sol";
 
 // ============================================
@@ -215,7 +217,20 @@ contract ConcaveBondingCurveStore {
         uint256,
         uint256 cashOutCount,
         IJBTerminal[] calldata,
-        JBAccountingContext[] calldata,
+        address[] calldata,
+        uint256,
+        uint256
+    )
+        external
+        view
+        returns (uint256)
+    {
+        return _computeReclaim(surplus, cashOutCount, totalSupply);
+    }
+
+    function currentTotalReclaimableSurplusOf(
+        uint256,
+        uint256 cashOutCount,
         uint256,
         uint256
     )
@@ -330,6 +345,23 @@ contract ConcaveBondingCurveTerminal {
 
     function getOutputHistory() external view returns (uint256[] memory) {
         return outputHistory;
+    }
+
+    function previewCashOutFrom(
+        address,
+        uint256,
+        uint256 cashOutCount,
+        address,
+        address payable,
+        bytes calldata
+    )
+        external
+        view
+        returns (JBRuleset memory, uint256, uint256, JBCashOutHookSpecification[] memory)
+    {
+        uint256 reclaimAmount = store.currentReclaimableSurplusOf(0, cashOutCount, 0, 0);
+        JBRuleset memory ruleset;
+        return (ruleset, reclaimAmount, 0, new JBCashOutHookSpecification[](0));
     }
 }
 

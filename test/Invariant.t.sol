@@ -19,13 +19,15 @@ import {Hooks} from "@uniswap/v4-core/src/libraries/Hooks.sol";
 
 import {JBUniswapV4Hook} from "../src/JBUniswapV4Hook.sol";
 import {MockERC20} from "./mock/MockERC20.sol";
-import {IJBTokens, IJBPrices, IJBDirectory, IJBTerminalStore} from "../src/JBUniswapV4Hook.sol";
+import {IJBTokens, IJBPrices, IJBDirectory} from "../src/JBUniswapV4Hook.sol";
 import {IJBTerminal} from "@bananapus/core-v6/src/interfaces/IJBTerminal.sol";
 import {JBAccountingContext} from "@bananapus/core-v6/src/structs/JBAccountingContext.sol";
 import {JBRuleset} from "@bananapus/core-v6/src/structs/JBRuleset.sol";
 import {JBRulesetMetadata} from "@bananapus/core-v6/src/structs/JBRulesetMetadata.sol";
 import {JBRulesetMetadataResolver} from "@bananapus/core-v6/src/libraries/JBRulesetMetadataResolver.sol";
 import {IJBRulesetApprovalHook} from "@bananapus/core-v6/src/interfaces/IJBRulesetApprovalHook.sol";
+import {IJBTerminalStore} from "@bananapus/core-v6/src/interfaces/IJBTerminalStore.sol";
+import {JBCashOutHookSpecification} from "@bananapus/core-v6/src/structs/JBCashOutHookSpecification.sol";
 import {HookMiner} from "@uniswap/v4-periphery/src/utils/HookMiner.sol";
 
 // ============================================================
@@ -129,7 +131,7 @@ contract MockJBTerminalStoreInv {
         uint256,
         uint256,
         IJBTerminal[] calldata,
-        JBAccountingContext[] calldata,
+        address[] calldata,
         uint256,
         uint256
     )
@@ -137,6 +139,10 @@ contract MockJBTerminalStoreInv {
         pure
         returns (uint256)
     {
+        return 0;
+    }
+
+    function currentTotalReclaimableSurplusOf(uint256, uint256, uint256, uint256) external pure returns (uint256) {
         return 0;
     }
 }
@@ -201,6 +207,22 @@ contract MockJBMultiTerminalInv {
 
     function accountingContextsOf(uint256) external pure returns (JBAccountingContext[] memory contexts) {
         return contexts;
+    }
+
+    function previewCashOutFrom(
+        address,
+        uint256,
+        uint256,
+        address,
+        address payable,
+        bytes calldata
+    )
+        external
+        pure
+        returns (JBRuleset memory, uint256, uint256, JBCashOutHookSpecification[] memory)
+    {
+        JBRuleset memory ruleset;
+        return (ruleset, 0, 0, new JBCashOutHookSpecification[](0));
     }
 }
 

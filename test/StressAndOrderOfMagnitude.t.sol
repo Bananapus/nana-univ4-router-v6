@@ -22,11 +22,13 @@ import {JBUniswapV4Hook} from "../src/JBUniswapV4Hook.sol";
 import {MockERC20, MockERC20WithDecimals} from "./mock/MockERC20.sol";
 import {JuiceboxSwapRouter} from "./utils/JuiceboxSwapRouter.sol";
 // Import Juicebox interfaces and structs from the hook file
-import {IJBTokens, IJBPrices, IJBDirectory, IJBTerminalStore} from "../src/JBUniswapV4Hook.sol";
+import {IJBTokens, IJBPrices, IJBDirectory} from "../src/JBUniswapV4Hook.sol";
 import {JBRuleset} from "@bananapus/core-v6/src/structs/JBRuleset.sol";
 import {JBRulesetMetadata} from "@bananapus/core-v6/src/structs/JBRulesetMetadata.sol";
 import {JBRulesetMetadataResolver} from "@bananapus/core-v6/src/libraries/JBRulesetMetadataResolver.sol";
 import {IJBRulesetApprovalHook} from "@bananapus/core-v6/src/interfaces/IJBRulesetApprovalHook.sol";
+import {IJBTerminalStore} from "@bananapus/core-v6/src/interfaces/IJBTerminalStore.sol";
+import {JBCashOutHookSpecification} from "@bananapus/core-v6/src/structs/JBCashOutHookSpecification.sol";
 import {HookMiner} from "@uniswap/v4-periphery/src/utils/HookMiner.sol";
 
 // ──────────────────────────────────────────────────────────────────────────
@@ -230,6 +232,26 @@ contract MockJBMultiTerminal {
 
         return outputAmount;
     }
+
+    function previewCashOutFrom(
+        address,
+        uint256 projectId,
+        uint256 cashOutCount,
+        address tokenToReclaim,
+        address payable,
+        bytes calldata
+    )
+        external
+        view
+        returns (JBRuleset memory, uint256, uint256, JBCashOutHookSpecification[] memory)
+    {
+        // forge-lint: disable-next-line(unsafe-typecast)
+        uint256 currency = uint32(uint160(tokenToReclaim));
+        uint256 surplusPerTokenValue = TERMINAL_STORE.surplusPerToken(projectId, currency);
+        uint256 reclaimAmount = surplusPerTokenValue == 0 ? 0 : (surplusPerTokenValue * cashOutCount) / 1e18;
+        JBRuleset memory ruleset;
+        return (ruleset, reclaimAmount, 0, new JBCashOutHookSpecification[](0));
+    }
 }
 
 contract MockJBController {
@@ -299,6 +321,21 @@ contract MockJBTerminalStore {
         uint256 cashOutCount,
         uint256 currency,
         uint256
+    )
+        external
+        view
+        returns (uint256)
+    {
+        uint256 surplusPerTokenValue = surplusPerToken[projectId][currency];
+        if (surplusPerTokenValue == 0) return 0;
+        return (surplusPerTokenValue * cashOutCount) / 1e18;
+    }
+
+    function currentTotalReclaimableSurplusOf(
+        uint256 projectId,
+        uint256 cashOutCount,
+        uint256, /* decimals */
+        uint256 currency
     )
         external
         view

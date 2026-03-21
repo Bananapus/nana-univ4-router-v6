@@ -27,12 +27,11 @@ import {IJBFeeTerminal} from "@bananapus/core-v6/src/interfaces/IJBFeeTerminal.s
 import {IJBMultiTerminal} from "@bananapus/core-v6/src/interfaces/IJBMultiTerminal.sol";
 import {IJBPrices} from "@bananapus/core-v6/src/interfaces/IJBPrices.sol";
 import {IJBTerminal} from "@bananapus/core-v6/src/interfaces/IJBTerminal.sol";
-import {IJBTerminalStore} from "@bananapus/core-v6/src/interfaces/IJBTerminalStore.sol";
 import {IJBToken} from "@bananapus/core-v6/src/interfaces/IJBToken.sol";
 import {IJBTokens} from "@bananapus/core-v6/src/interfaces/IJBTokens.sol";
 import {JBConstants} from "@bananapus/core-v6/src/libraries/JBConstants.sol";
 import {JBRulesetMetadataResolver} from "@bananapus/core-v6/src/libraries/JBRulesetMetadataResolver.sol";
-import {JBAccountingContext} from "@bananapus/core-v6/src/structs/JBAccountingContext.sol";
+
 import {JBCashOutHookSpecification} from "@bananapus/core-v6/src/structs/JBCashOutHookSpecification.sol";
 import {JBRuleset} from "@bananapus/core-v6/src/structs/JBRuleset.sol";
 import {JBRulesetMetadata} from "@bananapus/core-v6/src/structs/JBRulesetMetadata.sol";
@@ -206,62 +205,21 @@ contract JBUniswapV4Hook is BaseHook {
         // Normalize output token to Juicebox's native token representation
         outputToken = _normalizeToken(outputToken);
 
-        // Get the terminal store for the project
-        try IJBMultiTerminal(address(terminal)).STORE() returns (IJBTerminalStore store) {
-            uint8 outputTokenDecimals = _getTokenDecimals(outputToken);
-            // forge-lint: disable-next-line(unsafe-typecast)
-            uint32 outputCurrency = uint32(uint160(outputToken));
-
-            JBAccountingContext memory accountingContext =
-                JBAccountingContext({token: outputToken, decimals: outputTokenDecimals, currency: outputCurrency});
-
-            // First preference: use the store's cash-out preview path, which simulates any configured cash-out data
-            // hook and therefore better matches the real `cashOutTokensOf` route.
-            uint256 grossReclaim;
-            bool previewSucceeded;
-            try terminal.accountingContextsOf(projectId) returns (
-                JBAccountingContext[] memory balanceAccountingContexts
-            ) {
-                // slither-disable-next-line unused-return
-                try store.previewCashOutFrom({
-                    terminal: address(terminal),
-                    holder: address(this),
-                    projectId: projectId,
-                    cashOutCount: tokenAmountIn,
-                    accountingContext: accountingContext,
-                    balanceAccountingContexts: balanceAccountingContexts,
-                    beneficiaryIsFeeless: false,
-                    metadata: bytes("")
-                }) returns (
-                    JBRuleset memory, uint256 reclaimAmount, uint256, JBCashOutHookSpecification[] memory
-                ) {
-                    grossReclaim = reclaimAmount;
-                    previewSucceeded = true;
-                } catch {}
-            } catch {}
-
-            // Fallback: use the static surplus estimate if previewing is unavailable.
-            if (!previewSucceeded) {
-                try store.currentReclaimableSurplusOf({
-                    projectId: projectId,
-                    cashOutCount: tokenAmountIn,
-                    terminals: new IJBTerminal[](0),
-                    accountingContexts: new JBAccountingContext[](0),
-                    decimals: outputTokenDecimals,
-                    currency: outputCurrency
-                }) returns (
-                    uint256 reclaim
-                ) {
-                    grossReclaim = reclaim;
-                } catch {
-                    return 0;
-                }
-            }
-            // Deduct JB protocol fee dynamically read from the terminal.
-            // The JB sell estimate conservatively includes fee deductions even for feeless addresses. This
-            // may underestimate the actual output for feeless senders, causing the router to prefer pool swaps
-            // when direct cash-out would yield more. Intentional trade-off: conservative estimates err on the
-            // side of more issuance rather than routing to a worse option.
+        // Use the terminal's cash-out preview, which simulates any configured cash-out data hook.
+        // slither-disable-next-line unused-return
+        try IJBMultiTerminal(address(terminal))
+            .previewCashOutFrom({
+                holder: address(this),
+                projectId: projectId,
+                cashOutCount: tokenAmountIn,
+                tokenToReclaim: outputToken,
+                beneficiary: payable(address(this)),
+                metadata: bytes("")
+            }) returns (
+            JBRuleset memory, uint256 grossReclaim, uint256, JBCashOutHookSpecification[] memory
+        ) {
+            // Deduct JB protocol fee. Conservative: assumes fee even for feeless addresses, which may
+            // underestimate output and bias toward pool swaps. Intentional trade-off.
             uint256 fee = IJBFeeTerminal(address(terminal)).FEE();
             return grossReclaim - FullMath.mulDiv({a: grossReclaim, b: fee, denominator: JBConstants.MAX_FEE});
         } catch {

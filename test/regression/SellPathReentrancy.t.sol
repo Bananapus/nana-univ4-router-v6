@@ -18,7 +18,7 @@ import {Hooks} from "@uniswap/v4-core/src/libraries/Hooks.sol";
 import {JBUniswapV4Hook} from "../../src/JBUniswapV4Hook.sol";
 import {MockERC20} from "../mock/MockERC20.sol";
 import {JuiceboxSwapRouter} from "../utils/JuiceboxSwapRouter.sol";
-import {IJBTokens, IJBPrices, IJBDirectory, IJBTerminalStore} from "../../src/JBUniswapV4Hook.sol";
+import {IJBTokens, IJBPrices, IJBDirectory} from "../../src/JBUniswapV4Hook.sol";
 import {IJBTerminal} from "@bananapus/core-v6/src/interfaces/IJBTerminal.sol";
 import {IJBRulesetApprovalHook} from "@bananapus/core-v6/src/interfaces/IJBRulesetApprovalHook.sol";
 import {JBAccountingContext} from "@bananapus/core-v6/src/structs/JBAccountingContext.sol";
@@ -27,6 +27,7 @@ import {JBRuleset} from "@bananapus/core-v6/src/structs/JBRuleset.sol";
 import {JBRulesetMetadata} from "@bananapus/core-v6/src/structs/JBRulesetMetadata.sol";
 import {JBRulesetMetadataResolver} from "@bananapus/core-v6/src/libraries/JBRulesetMetadataResolver.sol";
 import {IJBRulesetApprovalHook} from "@bananapus/core-v6/src/interfaces/IJBRulesetApprovalHook.sol";
+import {IJBTerminalStore} from "@bananapus/core-v6/src/interfaces/IJBTerminalStore.sol";
 import {HookMiner} from "@uniswap/v4-periphery/src/utils/HookMiner.sol";
 
 // ============================================
@@ -181,7 +182,7 @@ contract MockStoreReentrancy {
         uint256,
         uint256,
         IJBTerminal[] calldata,
-        JBAccountingContext[] calldata,
+        address[] calldata,
         uint256,
         uint256
     )
@@ -192,13 +193,16 @@ contract MockStoreReentrancy {
         return fixedSurplus;
     }
 
+    function currentTotalReclaimableSurplusOf(uint256, uint256, uint256, uint256) external view returns (uint256) {
+        return fixedSurplus;
+    }
+
     function previewCashOutFrom(
         address,
         address,
         uint256,
         uint256,
-        JBAccountingContext calldata,
-        JBAccountingContext[] calldata,
+        address,
         bool,
         bytes calldata
     )
@@ -311,6 +315,28 @@ contract ReentrantSellTerminal {
 
     function accountingContextsOf(uint256) external pure returns (JBAccountingContext[] memory contexts) {
         return contexts;
+    }
+
+    function previewCashOutFrom(
+        address holder,
+        uint256 projectId,
+        uint256 cashOutCount,
+        address tokenToReclaim,
+        address payable,
+        bytes calldata metadata
+    )
+        external
+        view
+        returns (
+            JBRuleset memory ruleset,
+            uint256 reclaimAmount,
+            uint256 cashOutTaxRate,
+            JBCashOutHookSpecification[] memory hookSpecifications
+        )
+    {
+        return MOCK_STORE.previewCashOutFrom(
+            address(this), holder, projectId, cashOutCount, tokenToReclaim, false, metadata
+        );
     }
 
     receive() external payable {}
@@ -627,6 +653,28 @@ contract WellBehavedSellTerminal {
 
     function accountingContextsOf(uint256) external pure returns (JBAccountingContext[] memory contexts) {
         return contexts;
+    }
+
+    function previewCashOutFrom(
+        address holder,
+        uint256 projectId,
+        uint256 cashOutCount,
+        address tokenToReclaim,
+        address payable,
+        bytes calldata metadata
+    )
+        external
+        view
+        returns (
+            JBRuleset memory ruleset,
+            uint256 reclaimAmount,
+            uint256 cashOutTaxRate,
+            JBCashOutHookSpecification[] memory hookSpecifications
+        )
+    {
+        return MOCK_STORE.previewCashOutFrom(
+            address(this), holder, projectId, cashOutCount, tokenToReclaim, false, metadata
+        );
     }
 
     receive() external payable {}
