@@ -325,7 +325,6 @@ contract MockJBTerminalStore {
     mapping(uint256 => mapping(uint256 => uint256)) public surplusPerToken;
     mapping(uint256 => mapping(uint256 => uint256)) public previewReclaimPerToken;
     mapping(uint256 => bool) public usePreviewOverride;
-    mapping(uint256 => bool) public previewRequiresBalanceAccountingContexts;
 
     function setSurplus(uint256 projectId, address token, uint256 surplusAmount) external {
         // Store surplus per token (1e18 = 1 token)
@@ -340,10 +339,6 @@ contract MockJBTerminalStore {
         uint256 currency = uint32(uint160(token));
         previewReclaimPerToken[projectId][currency] = reclaimAmount;
         usePreviewOverride[projectId] = true;
-    }
-
-    function setPreviewRequiresBalanceAccountingContexts(uint256 projectId, bool required) external {
-        previewRequiresBalanceAccountingContexts[projectId] = required;
     }
 
     function currentReclaimableSurplusOf(
@@ -369,7 +364,22 @@ contract MockJBTerminalStore {
         uint256 projectId,
         uint256 cashOutCount,
         IJBTerminal[] calldata, /* terminals */
-        JBAccountingContext[] calldata, /* accountingContexts */
+        address[] calldata, /* tokens */
+        uint256, /* decimals */
+        uint256 currency
+    )
+        external
+        view
+        returns (uint256)
+    {
+        uint256 surplusPerTokenValue = surplusPerToken[projectId][currency];
+        if (surplusPerTokenValue == 0) return 0;
+        return (surplusPerTokenValue * cashOutCount) / 1e18;
+    }
+
+    function currentTotalReclaimableSurplusOf(
+        uint256 projectId,
+        uint256 cashOutCount,
         uint256, /* decimals */
         uint256 currency
     )
@@ -387,8 +397,7 @@ contract MockJBTerminalStore {
         address,
         uint256 projectId,
         uint256 cashOutCount,
-        JBAccountingContext calldata accountingContext,
-        JBAccountingContext[] calldata balanceAccountingContexts,
+        address tokenToReclaim,
         bool,
         bytes calldata
     )
@@ -396,16 +405,14 @@ contract MockJBTerminalStore {
         view
         returns (JBRuleset memory, uint256, uint256, JBCashOutHookSpecification[] memory)
     {
+        // forge-lint: disable-next-line(unsafe-typecast)
+        uint256 currency = uint32(uint160(tokenToReclaim));
         uint256 reclaimAmount;
         if (usePreviewOverride[projectId]) {
-            if (previewRequiresBalanceAccountingContexts[projectId] && balanceAccountingContexts.length == 0) {
-                reclaimAmount = 0;
-            } else {
-                uint256 reclaimPerToken = previewReclaimPerToken[projectId][accountingContext.currency];
-                reclaimAmount = (reclaimPerToken * cashOutCount) / 1e18;
-            }
+            uint256 reclaimPerToken = previewReclaimPerToken[projectId][currency];
+            reclaimAmount = (reclaimPerToken * cashOutCount) / 1e18;
         } else {
-            uint256 surplusPerTokenValue = surplusPerToken[projectId][accountingContext.currency];
+            uint256 surplusPerTokenValue = surplusPerToken[projectId][currency];
             reclaimAmount = surplusPerTokenValue == 0 ? 0 : (surplusPerTokenValue * cashOutCount) / 1e18;
         }
 
@@ -2059,28 +2066,18 @@ contract JuiceboxHookTest is Test {
         assertEq(expectedOutput, expectedNet, "Should use previewed cash-out reclaim instead of static surplus");
     }
 
-    /// Given a local-surplus cash-out preview that depends on the terminal's registered accounting contexts
+    /// Given a preview reclaim override set for a project
     /// When sell-side estimation runs through previewCashOutFrom
-    /// Then it should pass terminal.accountingContextsOf(projectId) instead of an empty array
-    function testCalculateExpectedOutputFromSelling_PassesTerminalAccountingContextsIntoPreview() public {
+    /// Then it should use the preview reclaim value
+    function testCalculateExpectedOutputFromSelling_UsesPreviewReclaim() public {
         mockJBController.setUseDataHookForCashOut(123, true);
         mockJBTerminalStore.setPreviewReclaim(123, address(token1), 0.4 ether);
-        mockJBTerminalStore.setPreviewRequiresBalanceAccountingContexts(123, true);
-
-        JBAccountingContext[] memory contexts = new JBAccountingContext[](1);
-        contexts[0] = JBAccountingContext({
-            token: address(token1),
-            decimals: 18,
-            // forge-lint: disable-next-line(unsafe-typecast)
-            currency: uint32(uint160(address(token1)))
-        });
-        mockJBMultiTerminal.setAccountingContexts(123, contexts);
 
         IJBTerminal terminal = IJBTerminal(address(mockJBDirectory.primaryTerminalOf(123, address(token1))));
         uint256 expectedOutput = hook.calculateExpectedOutputFromSelling(123, 1 ether, address(token1), terminal);
 
         uint256 expectedNet = 0.4 ether - (0.4 ether * 25 / 1000);
-        assertEq(expectedOutput, expectedNet, "Should preview with the terminal's balance accounting contexts");
+        assertEq(expectedOutput, expectedNet, "Should use previewed cash-out reclaim");
     }
 
     /// Given a terminal whose store's currentReclaimableSurplusOf reverts
@@ -2331,13 +2328,17 @@ contract RevertingMockStore {
         uint256,
         uint256,
         IJBTerminal[] calldata,
-        JBAccountingContext[] calldata,
+        address[] calldata,
         uint256,
         uint256
     )
         external
         pure
     {
+        revert("store: forced revert");
+    }
+
+    function currentTotalReclaimableSurplusOf(uint256, uint256, uint256, uint256) external pure {
         revert("store: forced revert");
     }
 }

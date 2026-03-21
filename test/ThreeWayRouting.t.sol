@@ -138,7 +138,22 @@ contract MockJBTerminalStore {
         uint256 projectId,
         uint256 cashOutCount,
         IJBTerminal[] calldata, /* terminals */
-        JBAccountingContext[] calldata, /* accountingContexts */
+        address[] calldata, /* tokens */
+        uint256, /* decimals */
+        uint256 currency
+    )
+        external
+        view
+        returns (uint256)
+    {
+        uint256 surplusPerTokenValue = surplusPerToken[projectId][currency];
+        if (surplusPerTokenValue == 0) return 0;
+        return (surplusPerTokenValue * cashOutCount) / 1e18;
+    }
+
+    function currentTotalReclaimableSurplusOf(
+        uint256 projectId,
+        uint256 cashOutCount,
         uint256, /* decimals */
         uint256 currency
     )

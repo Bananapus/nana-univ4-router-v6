@@ -129,7 +129,7 @@ contract MockJBTerminalStoreInv {
         uint256,
         uint256,
         IJBTerminal[] calldata,
-        JBAccountingContext[] calldata,
+        address[] calldata,
         uint256,
         uint256
     )
@@ -137,6 +137,10 @@ contract MockJBTerminalStoreInv {
         pure
         returns (uint256)
     {
+        return 0;
+    }
+
+    function currentTotalReclaimableSurplusOf(uint256, uint256, uint256, uint256) external pure returns (uint256) {
         return 0;
     }
 }

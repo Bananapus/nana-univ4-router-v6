@@ -215,7 +215,20 @@ contract ConcaveBondingCurveStore {
         uint256,
         uint256 cashOutCount,
         IJBTerminal[] calldata,
-        JBAccountingContext[] calldata,
+        address[] calldata,
+        uint256,
+        uint256
+    )
+        external
+        view
+        returns (uint256)
+    {
+        return _computeReclaim(surplus, cashOutCount, totalSupply);
+    }
+
+    function currentTotalReclaimableSurplusOf(
+        uint256,
+        uint256 cashOutCount,
         uint256,
         uint256
     )

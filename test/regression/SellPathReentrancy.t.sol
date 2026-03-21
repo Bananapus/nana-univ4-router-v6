@@ -181,7 +181,7 @@ contract MockStoreReentrancy {
         uint256,
         uint256,
         IJBTerminal[] calldata,
-        JBAccountingContext[] calldata,
+        address[] calldata,
         uint256,
         uint256
     )
@@ -192,13 +192,16 @@ contract MockStoreReentrancy {
         return fixedSurplus;
     }
 
+    function currentTotalReclaimableSurplusOf(uint256, uint256, uint256, uint256) external view returns (uint256) {
+        return fixedSurplus;
+    }
+
     function previewCashOutFrom(
         address,
         address,
         uint256,
         uint256,
-        JBAccountingContext calldata,
-        JBAccountingContext[] calldata,
+        address,
         bool,
         bytes calldata
     )

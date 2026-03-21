@@ -1990,6 +1990,7 @@ contract JBUniswapV4HookForkTest is Test {
         vm.prank(multisig);
         IJBToken hookedToken =
             jbController.deployERC20For({projectId: hookedProjectId, name: "HOOKED", symbol: "HKD", salt: 0});
+        // forge-lint: disable-next-line(mixed-case-variable)
         address HOOKED = address(hookedToken);
 
         address user = makeAddr("cashOutPreviewUser");
@@ -2010,11 +2011,9 @@ contract JBUniswapV4HookForkTest is Test {
         uint256 sellAmount = IERC20(HOOKED).balanceOf(user) / 10;
         assertTrue(sellAmount > 0, "Sell amount should be non-zero");
 
-        uint256 staticReclaim = jbTerminalStore.currentReclaimableSurplusOf({
+        uint256 staticReclaim = jbTerminalStore.currentTotalReclaimableSurplusOf({
             projectId: hookedProjectId,
             cashOutCount: sellAmount,
-            terminals: new IJBTerminal[](0),
-            accountingContexts: new JBAccountingContext[](0),
             decimals: 18,
             currency: uint32(uint160(JBConstants.NATIVE_TOKEN))
         });

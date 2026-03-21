@@ -32,7 +32,7 @@ import {IJBToken} from "@bananapus/core-v6/src/interfaces/IJBToken.sol";
 import {IJBTokens} from "@bananapus/core-v6/src/interfaces/IJBTokens.sol";
 import {JBConstants} from "@bananapus/core-v6/src/libraries/JBConstants.sol";
 import {JBRulesetMetadataResolver} from "@bananapus/core-v6/src/libraries/JBRulesetMetadataResolver.sol";
-import {JBAccountingContext} from "@bananapus/core-v6/src/structs/JBAccountingContext.sol";
+
 import {JBCashOutHookSpecification} from "@bananapus/core-v6/src/structs/JBCashOutHookSpecification.sol";
 import {JBRuleset} from "@bananapus/core-v6/src/structs/JBRuleset.sol";
 import {JBRulesetMetadata} from "@bananapus/core-v6/src/structs/JBRulesetMetadata.sol";
@@ -212,24 +212,18 @@ contract JBUniswapV4Hook is BaseHook {
             // forge-lint: disable-next-line(unsafe-typecast)
             uint32 outputCurrency = uint32(uint160(outputToken));
 
-            JBAccountingContext memory accountingContext =
-                JBAccountingContext({token: outputToken, decimals: outputTokenDecimals, currency: outputCurrency});
-
             // First preference: use the store's cash-out preview path, which simulates any configured cash-out data
             // hook and therefore better matches the real `cashOutTokensOf` route.
             uint256 grossReclaim;
             bool previewSucceeded;
-            try terminal.accountingContextsOf(projectId) returns (
-                JBAccountingContext[] memory balanceAccountingContexts
-            ) {
+            {
                 // slither-disable-next-line unused-return
                 try store.previewCashOutFrom({
                     terminal: address(terminal),
                     holder: address(this),
                     projectId: projectId,
                     cashOutCount: tokenAmountIn,
-                    accountingContext: accountingContext,
-                    balanceAccountingContexts: balanceAccountingContexts,
+                    tokenToReclaim: outputToken,
                     beneficiaryIsFeeless: false,
                     metadata: bytes("")
                 }) returns (
@@ -238,15 +232,13 @@ contract JBUniswapV4Hook is BaseHook {
                     grossReclaim = reclaimAmount;
                     previewSucceeded = true;
                 } catch {}
-            } catch {}
+            }
 
             // Fallback: use the static surplus estimate if previewing is unavailable.
             if (!previewSucceeded) {
-                try store.currentReclaimableSurplusOf({
+                try store.currentTotalReclaimableSurplusOf({
                     projectId: projectId,
                     cashOutCount: tokenAmountIn,
-                    terminals: new IJBTerminal[](0),
-                    accountingContexts: new JBAccountingContext[](0),
                     decimals: outputTokenDecimals,
                     currency: outputCurrency
                 }) returns (
