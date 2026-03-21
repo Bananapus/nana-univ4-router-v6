@@ -456,19 +456,15 @@ contract JBUniswapV4Hook is BaseHook {
             revert JBUniswapV4Hook_SecondsAgoCannotBeZero();
         }
 
-        uint32 currentTime = uint32(block.timestamp);
+        // Batch both observations into a single call to avoid redundant binary searches.
+        uint32[] memory secondsAgos = new uint32[](2);
+        secondsAgos[0] = 0;
+        secondsAgos[1] = secondsAgo;
 
-        // Get tick cumulative for current time
         // slither-disable-next-line unused-return
-        (int56 tickCumulativeCurrent,) = observations[poolId].observeSingle({
-            time: currentTime, secondsAgo: 0, tick: tick, index: index, liquidity: liquidity, cardinality: cardinality
-        });
-
-        // Get tick cumulative for secondsAgo
-        // slither-disable-next-line unused-return
-        (int56 tickCumulativePast,) = observations[poolId].observeSingle({
-            time: currentTime,
-            secondsAgo: secondsAgo,
+        (int56[] memory tickCumulatives,) = observations[poolId].observe({
+            time: uint32(block.timestamp),
+            secondsAgos: secondsAgos,
             tick: tick,
             index: index,
             liquidity: liquidity,
@@ -476,7 +472,7 @@ contract JBUniswapV4Hook is BaseHook {
         });
 
         // Calculate arithmetic mean tick
-        int56 tickCumulativeDelta = tickCumulativeCurrent - tickCumulativePast;
+        int56 tickCumulativeDelta = tickCumulatives[0] - tickCumulatives[1];
         // forge-lint: disable-next-line(unsafe-typecast)
         arithmeticMeanTick = int24(tickCumulativeDelta / int56(uint56(secondsAgo)));
         // Round toward negative infinity for negative ticks (Solidity truncates toward zero).
