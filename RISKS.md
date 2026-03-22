@@ -103,7 +103,7 @@ Forward-looking risk analysis of `JBUniswapV4Hook` (~963 lines) and `Oracle` lib
 ## 5. Composition with JBBuybackHook
 
 - **Same-pool composition**: `JBUniswapV4Hook` is designed to serve as both the V4 pool hook and the `ORACLE_HOOK` for `JBBuybackHook`. The buyback hook queries `observe()` for TWAP data and executes swaps on the same pool.
-- **Reentrancy path**: When the buyback hook swaps → `_beforeSwap` fires → routing logic calls `terminal.pay()` → this re-enters the buyback hook via the data hook → buyback hook tries to swap again. The `_routing` transient storage flag in `_beforeSwap` detects this recursion and reverts.
+- **Reentrancy path**: When the buyback hook swaps → `_beforeSwap` fires → routing logic calls `terminal.pay()` → this re-enters the buyback hook via the data hook → buyback hook tries to swap again. The `_routing` reentrancy flag in `_beforeSwap` detects this recursion and reverts.
 - **Fallback behavior**: The reentrancy revert is caught by the buyback hook's try/catch, which falls back to minting via the controller. No funds are lost. The user receives tokens at the mint rate.
 - **Static weight incompatibility**: This hook compares V4 pool output against the ruleset's static issuance weight. If the project's data hook overrides weight at payment time (e.g., a buyback hook adjusting based on TWAP), the static estimate may be stale. Deployers **must ensure** that any weight override does not make the static estimate dangerously inaccurate — otherwise routing decisions will consistently diverge, and users may receive suboptimal rates. This is an integration requirement, not a graceful fallback.
 - **hookData from buyback hook**: The buyback hook passes `abi.encode(uint256(0))` as hookData. The `0` value for `amountOutMin` delegates slippage protection to the hook's own TWAP-based routing — the hook will route through JB if it offers a better rate, or let V4 execute if the pool price is better.
@@ -131,7 +131,7 @@ overrides do not make the estimate dangerously stale. Sell-side routing is stron
 `previewCashOutFrom`, but it still depends on the underlying store preview faithfully matching the terminal's real
 cash-out path.
 
-This is documented inline at `src/JBUniswapV4Hook.sol` lines 46-52 and 234-236 as `COMPOSITION WARNING`.
+This is documented inline at `src/JBUniswapV4Hook.sol` lines 47-55 as `COMPOSITION WARNING`, with a related `WARNING` note at line 232.
 
 ## 7. Integration Risks
 
