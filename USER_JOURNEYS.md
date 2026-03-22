@@ -1,11 +1,25 @@
 # User Journeys -- univ4-router-v6
 
-Concrete end-to-end flows through the V4 routing hook. Each journey traces the exact function calls, state changes, and external interactions.
+Concrete end-to-end flows through the V4 routing hook. Each journey traces the exact function calls, state changes, events, and external interactions.
+
+---
 
 ## Journey 1: Swap Through Hooked Pool -- V4 Route Wins
 
+**Entry point:** `PoolManager.swap(PoolKey key, SwapParams params, bytes hookData)` (triggers `_beforeSwap` / `_afterSwap` hooks on `JBUniswapV4Hook`)
+
+**Who can call:** Anyone, via a router contract (e.g., Universal Router) that calls `poolManager.swap()`. The hook functions themselves are `internal override` -- only the PoolManager can invoke them through the BaseHook callback mechanism.
+
 **Actor:** User swapping tokens through a Uniswap V4 pool that uses JBUniswapV4Hook.
 **Goal:** Swap token A for token B where the V4 pool gives a better rate than Juicebox.
+
+### Parameters
+
+- **`key`** -- `PoolKey` identifying the V4 pool (currency0, currency1, fee, tickSpacing, hooks)
+- **`params.zeroForOne`** -- `bool`, swap direction (true = token0 -> token1)
+- **`params.amountSpecified`** -- `int256`, must be negative (exact-input). `amountIn = uint256(-params.amountSpecified)`
+- **`params.sqrtPriceLimitX96`** -- `uint160`, V4 price limit for the AMM swap
+- **`hookData`** -- `bytes`, must be exactly 32 bytes encoding `abi.encode(uint256 amountOutMin)`
 
 ### Precondition
 
@@ -20,8 +34,9 @@ A V4 pool exists with `hooks = JBUniswapV4Hook`. One of the pool's tokens is a J
 
 2. **PoolManager calls `_beforeSwap(sender, key, params, hookData)`**
 
-   - Decodes `amountOutMin` from hookData
-   - Rejects exact-output swaps (`params.amountSpecified > 0` reverts)
+   - Checks `_routing == false` (reverts `JBUniswapV4Hook_ReentrantRouting` if true)
+   - Decodes `amountOutMin` from hookData (reverts `JBUniswapV4Hook_AmountOutMinRequired` if `hookData.length != 32`)
+   - Rejects exact-output swaps (`params.amountSpecified > 0` reverts `JBUniswapV4Hook_ExactOutputSwapsNotSupported`)
    - Computes `amountIn = uint256(-params.amountSpecified)`
    - Identifies which token is a JB project token via `TOKENS.projectIdOf()`
    - Determines if buying or selling JB tokens
@@ -34,7 +49,7 @@ A V4 pool exists with `hooks = JBUniswapV4Hook`. One of the pool's tokens is a J
      - Applies price conversion if payment currency differs from base currency
      - Deducts reserved percent
    - Selling: `calculateExpectedOutputFromSelling(projectId, amountIn, tokenOut, terminal)`
-     - Reads reclaimable surplus from terminal store
+     - Uses `previewCashOutFrom` simulation when available; falls back to returning 0 on failure
      - Deducts protocol fee (2.5%)
 
 4. **V4 route estimation via `estimateUniswapOutput()`**
@@ -50,7 +65,6 @@ A V4 pool exists with `hooks = JBUniswapV4Hook`. One of the pool's tokens is a J
 5. **Comparison: V4 wins**
 
    - `juiceboxBetterThanV4 = false` (V4 gives more output)
-   - Emits `BestRouteSelected(poolId, 0, uniswapV4ExpectedTokens, caller)`
    - Returns `(BaseHook.beforeSwap.selector, ZERO_DELTA, 0)`
 
 6. **V4 PoolManager executes the swap normally (AMM mechanics)**
@@ -60,12 +74,29 @@ A V4 pool exists with `hooks = JBUniswapV4Hook`. One of the pool's tokens is a J
    - Decodes `amountOutMin` from hookData
    - Extracts output amount from `delta` based on swap direction
    - Checks: `rawOutput != 0` (this is a real V4 swap, not JB-routed)
-   - Verifies `outputAmount >= amountOutMin`, reverts with `InsufficientOutput` if not
+   - Verifies `outputAmount >= amountOutMin`, reverts with `JBUniswapV4Hook_InsufficientOutput` if not
    - Calls `_recordObservation(poolId)` to update the oracle
 
-### Result
+### State changes
 
-User receives tokens from the V4 AMM swap. Slippage protection is enforced in `_afterSwap`. A new oracle observation is recorded.
+1. `observations[poolId][newIndex]` -- new `Oracle.Observation` written with current `blockTimestamp`, `tickCumulative`, `secondsPerLiquidityCumulativeX128`, `initialized = true`
+2. `states[poolId].index` -- updated to `newIndex`
+3. `states[poolId].cardinality` -- may increase if `cardinalityNext > cardinality` and index wraps
+4. `states[poolId].cardinalityNext` -- may double (up to `MAX_TWAP_CARDINALITY = 1024`) if at capacity
+
+### Events
+
+1. `BestRouteSelected(poolId, 0, uniswapV4ExpectedTokens, msg.sender)` -- route type 0 = V4 selected
+2. `RouteSelected(poolId, false, uniswapV4ExpectedTokens, msg.sender)` -- V4 route confirmed
+
+### Edge cases
+
+- `JBUniswapV4Hook_AmountOutMinRequired()` -- hookData is not exactly 32 bytes
+- `JBUniswapV4Hook_ExactOutputSwapsNotSupported()` -- `params.amountSpecified > 0`
+- `JBUniswapV4Hook_InsufficientOutput()` -- V4 swap output < `amountOutMin`
+- `JBUniswapV4Hook_ReentrantRouting()` -- `_routing` flag is already true
+- `amountOutMin = 0` -- swap proceeds without slippage protection
+- TWAP not available (cardinality < 2 or oldest observation too recent) -- falls back to spot price from `poolManager.getSlot0()`
 
 ### What to verify
 
@@ -78,8 +109,19 @@ User receives tokens from the V4 AMM swap. Slippage protection is enforced in `_
 
 ## Journey 2: Swap Through Hooked Pool -- JB Route Wins (Mint)
 
+**Entry point:** `PoolManager.swap(PoolKey key, SwapParams params, bytes hookData)` (triggers `_beforeSwap` / `_afterSwap` hooks on `JBUniswapV4Hook`)
+
+**Who can call:** Anyone, via a router contract that calls `poolManager.swap()`. The hook functions are `internal override` -- only the PoolManager invokes them.
+
 **Actor:** User swapping a payment token (ETH, USDC) for a JB project token.
 **Goal:** Get more JB project tokens by routing through JB minting instead of the V4 pool.
+
+### Parameters
+
+- **`key`** -- `PoolKey` identifying the V4 pool
+- **`params.zeroForOne`** -- `bool`, swap direction
+- **`params.amountSpecified`** -- `int256`, must be negative (exact-input)
+- **`hookData`** -- `bytes`, exactly 32 bytes: `abi.encode(uint256 amountOutMin)`
 
 ### Precondition
 
@@ -92,17 +134,18 @@ The JB project has a favorable minting rate (high weight, low reserved percent) 
 2. **Comparison: JB wins (buying)**
 
    - `juiceboxBetterThanV4 = true` (JB gives more tokens)
-   - Emits `BestRouteSelected(poolId, 1, juiceboxExpectedOutput, caller)`
 
 3. **`_routeThroughJuicebox(projectId, inputCurrency, outputCurrency, amountIn, isBuying=true, terminal, amountOutMin)`**
 
-   a. **Take input from PoolManager**: `poolManager.take(inputCurrency, address(this), amountIn)`
+   a. **Set reentrancy guard**: `_routing = true`
+
+   b. **Take input from PoolManager**: `poolManager.take(inputCurrency, address(this), amountIn)`
       - PoolManager transfers input tokens to the hook
       - Creates a flash-accounting debt
 
-   b. **Approve terminal**: `IERC20(tokenIn).forceApprove(terminal, amountIn)` (skipped for native ETH)
+   c. **Approve terminal**: `IERC20(tokenIn).forceApprove(terminal, amountIn)` (skipped for native ETH)
 
-   c. **Pay into JB project**:
+   d. **Pay into JB project**:
       ```
       terminal.pay{value: payValue}(
           projectId, token, amountIn,
@@ -114,9 +157,11 @@ The JB project has a favorable minting rate (high weight, low reserved percent) 
       - Terminal records the payment, JB controller mints project tokens to `address(this)`
       - Returns `outputReceived` (number of tokens minted)
 
-   d. **Settle output to PoolManager**: `CurrencySettler.settle(outputCurrency, poolManager, address(this), outputReceived, false)`
+   e. **Settle output to PoolManager**: `CurrencySettler.settle(outputCurrency, poolManager, address(this), outputReceived, false)`
       - Transfers project tokens from hook to PoolManager
       - Resolves the flash-accounting credit
+
+   f. **Clear reentrancy guard**: `_routing = false`
 
 4. **Return `BeforeSwapDelta(+amountIn, -outputReceived)`**
 
@@ -130,9 +175,29 @@ The JB project has a favorable minting rate (high weight, low reserved percent) 
    - Slippage check is skipped (was already enforced by `terminal.pay(minReturnedTokens)`)
    - Oracle observation is still recorded
 
-### Result
+### State changes
 
-User receives JB project tokens minted by paying into the project. The V4 pool is bypassed entirely. The oracle still records the current pool state.
+1. `_routing` -- set to `true` before JB interaction, reset to `false` after
+2. `observations[poolId][newIndex]` -- new oracle observation written in `_afterSwap`
+3. `states[poolId].index` -- updated to new observation index
+4. `states[poolId].cardinality` -- may increase if at capacity
+5. `states[poolId].cardinalityNext` -- may double (up to 1024) if at capacity
+6. PoolManager flash-accounting balances -- debt created by `take()`, resolved by `settle()`
+7. JB project token balance of hook -- temporarily holds minted tokens, then settled to PoolManager
+
+### Events
+
+1. `BestRouteSelected(poolId, 1, juiceboxExpectedOutput, msg.sender)` -- route type 1 = JB selected
+2. `RouteSelected(poolId, true, juiceboxExpectedOutput, msg.sender)` -- JB route confirmed
+3. JB terminal events (emitted by the terminal, not by this hook): `Pay(...)`, token mint events
+
+### Edge cases
+
+- `JBUniswapV4Hook_ReentrantRouting()` -- if a JB pay hook triggers another swap through this pool, the `_routing` guard blocks it
+- Terminal has no liquidity or reverts -- entire swap reverts (PoolManager balance check fails)
+- `amountOutMin` enforced by `terminal.pay(minReturnedTokens)` -- reverts inside the terminal if output is insufficient
+- Native ETH: `inputCurrency.isAddressZero()` skips `forceApprove`, sends ETH via `{value: payValue}`
+- Token normalization: Uniswap `address(0)` mapped to `JB_NATIVE_TOKEN (0x...EEEe)` for terminal calls
 
 ### What to verify
 
@@ -147,8 +212,19 @@ User receives JB project tokens minted by paying into the project. The V4 pool i
 
 ## Journey 3: Swap Through Hooked Pool -- JB Route Wins (Cashout)
 
+**Entry point:** `PoolManager.swap(PoolKey key, SwapParams params, bytes hookData)` (triggers `_beforeSwap` / `_afterSwap` hooks on `JBUniswapV4Hook`)
+
+**Who can call:** Anyone, via a router contract that calls `poolManager.swap()`. The hook functions are `internal override` -- only the PoolManager invokes them.
+
 **Actor:** User swapping JB project tokens for a payment token (ETH, USDC).
 **Goal:** Get more payment tokens by routing through JB cashout instead of the V4 pool.
+
+### Parameters
+
+- **`key`** -- `PoolKey` identifying the V4 pool
+- **`params.zeroForOne`** -- `bool`, swap direction (JB token is on the input side)
+- **`params.amountSpecified`** -- `int256`, must be negative (exact-input)
+- **`hookData`** -- `bytes`, exactly 32 bytes: `abi.encode(uint256 amountOutMin)`
 
 ### Precondition
 
@@ -158,7 +234,7 @@ The JB project has favorable cashout conditions (low tax rate, high surplus) tha
 
 1. **Same as Journey 1, Steps 1-4** (but `isSellingJBToken = true`)
 
-   - `calculateExpectedOutputFromSelling()` queries `currentReclaimableSurplusOf()` and deducts protocol fee
+   - `calculateExpectedOutputFromSelling()` uses `previewCashOutFrom()` and deducts protocol fee
 
 2. **Comparison: JB wins (selling)**
 
@@ -166,13 +242,15 @@ The JB project has favorable cashout conditions (low tax rate, high surplus) tha
 
 3. **`_routeThroughJuicebox(projectId, inputCurrency, outputCurrency, amountIn, isBuying=false, terminal, amountOutMin)`**
 
-   a. **Take JB tokens from PoolManager**: `poolManager.take(inputCurrency, address(this), amountIn)`
+   a. **Set reentrancy guard**: `_routing = true`
 
-   b. **No approval needed** -- the hook is the token holder and will call `cashOutTokensOf` as the holder
+   b. **Take JB tokens from PoolManager**: `poolManager.take(inputCurrency, address(this), amountIn)`
 
-   c. **Cash out JB tokens**:
+   c. **No approval needed** -- the hook is the token holder and will call `cashOutTokensOf` as the holder
+
+   d. **Cash out JB tokens**:
       ```
-      terminal.cashOutTokensOf(
+      IJBMultiTerminal(terminal).cashOutTokensOf(
           holder = address(this),
           projectId, cashOutCount = amountIn,
           tokenToReclaim = normalizedTokenOut,
@@ -184,15 +262,37 @@ The JB project has favorable cashout conditions (low tax rate, high surplus) tha
       - Terminal burns JB tokens, calculates reclaim via bonding curve, transfers output tokens to hook
       - Returns `outputReceived` (payment tokens received)
 
-   d. **Settle output to PoolManager**: `CurrencySettler.settle(outputCurrency, poolManager, address(this), outputReceived, false)`
+   e. **Settle output to PoolManager**: `CurrencySettler.settle(outputCurrency, poolManager, address(this), outputReceived, false)`
+
+   f. **Clear reentrancy guard**: `_routing = false`
 
 4. **Return `BeforeSwapDelta(+amountIn, -outputReceived)`**
 
 5. **`_afterSwap` records oracle observation (slippage already enforced)**
 
-### Result
+### State changes
 
-User receives payment tokens from JB cashout. JB tokens are burned. The V4 pool is bypassed.
+1. `_routing` -- set to `true` before JB interaction, reset to `false` after
+2. `observations[poolId][newIndex]` -- new oracle observation written in `_afterSwap`
+3. `states[poolId].index` -- updated to new observation index
+4. `states[poolId].cardinality` -- may increase if at capacity
+5. `states[poolId].cardinalityNext` -- may double (up to 1024) if at capacity
+6. PoolManager flash-accounting balances -- debt created by `take()`, resolved by `settle()`
+7. JB project token supply -- decreased (tokens burned by terminal during cashout)
+
+### Events
+
+1. `BestRouteSelected(poolId, 1, juiceboxExpectedOutput, msg.sender)` -- route type 1 = JB selected
+2. `RouteSelected(poolId, true, juiceboxExpectedOutput, msg.sender)` -- JB route confirmed
+3. JB terminal events (emitted by the terminal, not by this hook): `CashOutTokens(...)`, token burn events
+
+### Edge cases
+
+- `JBUniswapV4Hook_ReentrantRouting()` -- if a JB cashout hook triggers another swap through this pool, the `_routing` guard blocks it
+- `cashOutTaxRate == 0` -- bonding curve is linear; hook repeatedly prefers JB cashout over V4. Each token redeems proportional surplus. Accepted behavior (see RISKS.md).
+- Terminal reverts (insufficient surplus, `minTokensReclaimed` not met) -- entire swap reverts
+- Token normalization: `tokenOut = address(0)` mapped to `JB_NATIVE_TOKEN` for terminal calls
+- For native ETH output: terminal sends ETH to hook, hook settles via `CurrencySettler`
 
 ### What to verify
 
@@ -206,8 +306,17 @@ User receives payment tokens from JB cashout. JB tokens are burned. The V4 pool 
 
 ## Journey 4: Pool Initialization with Oracle
 
+**Entry point:** `PoolManager.initialize(PoolKey key, uint160 sqrtPriceX96)` (triggers `_afterInitialize` hook on `JBUniswapV4Hook`)
+
+**Who can call:** Anyone. Pool initialization is permissionless in V4. The `_afterInitialize` hook is `internal override` -- only the PoolManager invokes it.
+
 **Actor:** Anyone initializing a V4 pool with this hook (typically the LP split hook deployer or a direct call to PoolManager/PositionManager).
 **Goal:** Create a new pool and initialize its TWAP oracle.
+
+### Parameters
+
+- **`key`** -- `PoolKey` with `key.hooks = address(JBUniswapV4Hook)`
+- **`sqrtPriceX96`** -- `uint160`, initial price of the pool
 
 ### Steps
 
@@ -230,24 +339,43 @@ User receives payment tokens from JB cashout. JB tokens are burned. The V4 pool 
    - After 30 minutes of observations, TWAP becomes available.
    - Until then, `_getTWAPSqrtPrice` returns 0 and `estimateUniswapOutput` falls back to spot price.
 
-### Result
+### State changes
 
-Pool is created with a single oracle observation. TWAP is not yet available -- all routing decisions use spot price during the warmup period.
+1. `observations[poolId][0]` -- initialized with `{blockTimestamp: block.timestamp, tickCumulative: 0, secondsPerLiquidityCumulativeX128: 0, initialized: true}`
+2. `states[poolId].index` -- set to `0`
+3. `states[poolId].cardinality` -- set to `1`
+4. `states[poolId].cardinalityNext` -- set to `1`
+
+### Events
+
+None emitted by `JBUniswapV4Hook`. The PoolManager emits its own `Initialize` event.
+
+### Edge cases
+
+- If the pool was already initialized, `_afterInitialize` is not called again (V4 only calls `afterInitialize` once).
+- `Oracle_CardinalityCannotBeZero()` -- cannot occur during initialization (initial cardinality is always 1).
 
 ### What to verify
 
 - The initial observation is correctly written with zeroed cumulatives.
 - The warmup period is exactly `TWAP_PERIOD` (1800 seconds) from the first observation.
 - During warmup, the spot price fallback works correctly for routing decisions.
-- If the pool was already initialized (e.g., by another call), `_afterInitialize` is not called again (V4 only calls `afterInitialize` once).
 - Cardinality growth happens correctly after the first observation: second observation triggers growth from 1 to 2.
 
 ---
 
 ## Journey 5: Slippage Protection via hookData
 
+**Entry point:** Part of every swap through `_beforeSwap` / `_afterSwap` (not a standalone journey)
+
+**Who can call:** Anyone initiating a swap through a hooked pool (indirectly, via the PoolManager).
+
 **Actor:** User submitting a swap with a minimum output requirement.
 **Goal:** Ensure the swap reverts if the output falls below the specified minimum.
+
+### Parameters
+
+- **`hookData`** -- `bytes`, exactly 32 bytes: `abi.encode(uint256 amountOutMin)`
 
 ### Encoding
 
@@ -277,14 +405,19 @@ When V4 routing is selected:
    - `!zeroForOne`: output is `BalanceDeltaLibrary.amount0(delta)`
 4. Checks `rawOutput != 0` (confirms this is a real V4 swap)
 5. Converts to absolute value: `outputAmount = rawOutput < 0 ? uint256(-rawOutput) : uint256(rawOutput)`
-6. Reverts with `InsufficientOutput` if `outputAmount < amountOutMin`
+6. Reverts with `JBUniswapV4Hook_InsufficientOutput()` if `outputAmount < amountOutMin`
 
-### Edge Cases
+### Events
+
+No additional events beyond those in Journey 1/2/3. The `RouteSelected` and `BestRouteSelected` events are emitted during routing decisions, not during slippage checks.
+
+### Edge cases
 
 - `amountOutMin = 0`: No slippage protection. JB terminal still executes, V4 slippage check passes trivially.
-- `hookData.length != 32`: `_beforeSwap` reverts with `AmountOutMinRequired`. Swaps through this pool require hookData.
+- `hookData.length != 32`: `_beforeSwap` reverts with `JBUniswapV4Hook_AmountOutMinRequired()`. Swaps through this pool require hookData.
 - `hookData.length >= 32` in `_afterSwap`: Only first 32 bytes are decoded. Extra bytes are ignored.
-- Neither token is a JB token: `_beforeSwap` returns `ZERO_DELTA` immediately (no hookData check for non-JB tokens). Wait -- actually `hookData.length == 32` is checked before token identification. All swaps through this hook require exactly 32 bytes of hookData regardless of whether JB tokens are involved.
+- All swaps through this hook require exactly 32 bytes of hookData -- the length check happens before any token identification or routing logic.
+- For JB routes, slippage is enforced by the terminal (via `minReturnedTokens` / `minTokensReclaimed`). The `_afterSwap` check correctly skips because `rawOutput == 0`.
 
 ### What to verify
 
@@ -297,8 +430,18 @@ When V4 routing is selected:
 
 ## Journey 6: No JB Token Involved -- Pure V4 Swap
 
+**Entry point:** `PoolManager.swap(PoolKey key, SwapParams params, bytes hookData)` (triggers `_beforeSwap` / `_afterSwap` hooks on `JBUniswapV4Hook`)
+
+**Who can call:** Anyone, via a router contract that calls `poolManager.swap()`. The hook functions are `internal override` -- only the PoolManager invokes them.
+
 **Actor:** User swapping two non-JB tokens through a pool that happens to use this hook.
 **Goal:** Swap normally through V4 while the oracle records observations.
+
+### Parameters
+
+- **`key`** -- `PoolKey` identifying the V4 pool
+- **`params`** -- `SwapParams` (standard V4 swap parameters)
+- **`hookData`** -- `bytes`, exactly 32 bytes: `abi.encode(uint256 amountOutMin)` (required even for non-JB swaps)
 
 ### Steps
 
@@ -306,25 +449,152 @@ When V4 routing is selected:
 
 2. **`_beforeSwap` executes**
 
+   - Checks `_routing == false`
    - Decodes `amountOutMin`
    - Looks up `TOKENS.projectIdOf()` for both tokens -- returns 0 for both
    - `isSellingJBToken = false`, `isBuyingJBToken = false`
-   - Enters the `else` branch: emits `RouteSelected(poolId, false, 0, caller)`
-   - Returns `ZERO_DELTA` -- V4 handles the swap normally
+   - Enters the `else` branch: returns `ZERO_DELTA` -- V4 handles the swap normally
 
 3. **V4 AMM executes the swap**
 
 4. **`_afterSwap` executes**
 
-   - If `amountOutMin > 0`: validates actual output against minimum
+   - If `amountOutMin > 0`: validates actual output against minimum (reverts `JBUniswapV4Hook_InsufficientOutput()` if insufficient)
    - Records oracle observation
 
-### Result
+### State changes
 
-A normal V4 swap. The hook is transparent except for oracle recording and optional slippage enforcement.
+1. `observations[poolId][newIndex]` -- new oracle observation written
+2. `states[poolId].index` -- updated to new observation index
+3. `states[poolId].cardinality` -- may increase if at capacity
+4. `states[poolId].cardinalityNext` -- may double (up to 1024) if at capacity
+
+### Events
+
+1. `RouteSelected(poolId, false, 0, msg.sender)` -- no JB token involved, V4 route used
+
+### Edge cases
+
+- `TOKENS.projectIdOf()` may revert for non-JB tokens. If `tokenIn` or `tokenOut` is a plain ERC-20 that does not implement `IJBToken`, calling `TOKENS.projectIdOf(IJBToken(tokenIn))` may revert, breaking all swaps through the pool. Verify that `JBTokens.projectIdOf()` handles unknown tokens gracefully (returns 0 without reverting).
+- `JBUniswapV4Hook_AmountOutMinRequired()` -- hookData must still be exactly 32 bytes, even for non-JB pools
+- `JBUniswapV4Hook_InsufficientOutput()` -- if `amountOutMin > 0` and V4 output is below minimum
 
 ### What to verify
 
 - `TOKENS.projectIdOf()` does not revert for non-JB tokens. If the token address does not implement `IJBToken`, the call could revert. The code does NOT wrap this in try-catch.
 - This is a potential issue: if `tokenIn` or `tokenOut` is a plain ERC-20 that does not implement `IJBToken`, calling `TOKENS.projectIdOf(IJBToken(tokenIn))` may revert, breaking all swaps through the pool. Verify that `JBTokens.projectIdOf()` handles unknown tokens gracefully (returns 0 without reverting).
 - Oracle observations are recorded even for non-JB swaps (correct behavior).
+
+---
+
+## Journey 7: Oracle Observation Recording (Liquidity Events)
+
+**Entry point:** `_afterAddLiquidity(...)` or `_afterRemoveLiquidity(...)` hooks on `JBUniswapV4Hook`
+
+**Who can call:** Only the PoolManager, via BaseHook callback mechanism. Triggered when any user adds or removes liquidity through PositionManager or direct PoolManager calls.
+
+**Actor:** Liquidity provider adding or removing liquidity from a hooked pool.
+**Goal:** Keep the TWAP oracle up to date with fresh observations from liquidity events (not just swaps).
+
+### Parameters
+
+- **`key`** -- `PoolKey` identifying the V4 pool (passed by PoolManager)
+
+### Steps
+
+1. **User adds/removes liquidity via PositionManager or PoolManager**
+
+2. **PoolManager calls `_afterAddLiquidity(...)` or `_afterRemoveLiquidity(...)`**
+
+   - Calls `_recordObservation(key.toId())`
+   - Reads current tick and liquidity from `poolManager.getSlot0()` and `poolManager.getLiquidity()`
+   - Auto-grows cardinality when at capacity: doubles `cardinalityNext` up to `MAX_TWAP_CARDINALITY (1024)`
+   - Writes new observation via `Oracle.write()`
+   - Updates `states[poolId]` with new index, cardinality, and cardinalityNext
+
+### State changes
+
+1. `observations[poolId][newIndex]` -- new `Oracle.Observation` written with current tick/liquidity cumulatives
+2. `states[poolId].index` -- updated to `newIndex`
+3. `states[poolId].cardinality` -- may increase when `cardinalityNext > cardinality` and index wraps
+4. `states[poolId].cardinalityNext` -- may double (up to 1024) when at capacity (`index == cardinality - 1`)
+5. If growing: `observations[poolId][current..next-1].blockTimestamp` -- pre-initialized to `1` (prevents fresh SSTOREs during swaps)
+
+### Events
+
+None emitted by `JBUniswapV4Hook`. Observation writes are silent.
+
+### Edge cases
+
+- Same-block writes are no-ops: `Oracle.write()` returns early if `last.blockTimestamp == blockTimestamp`
+- Cardinality growth is bounded: doubles each time but capped at `MAX_TWAP_CARDINALITY = 1024`
+- `Oracle_CardinalityCannotBeZero()` -- cannot occur after initialization (grow requires `current > 0`)
+
+### What to verify
+
+- Oracle observations are recorded for both add and remove liquidity events.
+- Auto-growth logic correctly doubles cardinality and does not exceed `MAX_TWAP_CARDINALITY`.
+- Pre-initialization of observation slots (blockTimestamp = 1) avoids cold SSTORE costs during swaps.
+
+---
+
+## Journey 8: External TWAP Queries
+
+**Entry point:** `observe(PoolKey key, uint32[] secondsAgos)` or `observeTWAP(PoolId poolId, uint32 secondsAgo, int24 tick, uint16 index, uint128 liquidity, uint16 cardinality)`
+
+**Who can call:** Anyone. Both functions are `external view` -- no access restrictions.
+
+**Actor:** External contract (e.g., JBBuybackHook) or off-chain system querying TWAP data.
+**Goal:** Read time-weighted average price data from the oracle without modifying state.
+
+### Parameters (`observe`)
+
+- **`key`** -- `PoolKey` identifying the V4 pool
+- **`secondsAgos`** -- `uint32[]`, array of time periods (in seconds) to look back
+
+### Parameters (`observeTWAP`)
+
+- **`poolId`** -- `PoolId`, the pool to query
+- **`secondsAgo`** -- `uint32`, how far back to calculate TWAP (must be > 0)
+- **`tick`** -- `int24`, current tick
+- **`index`** -- `uint16`, current observation index
+- **`liquidity`** -- `uint128`, current liquidity
+- **`cardinality`** -- `uint16`, current cardinality
+
+### Steps
+
+1. **Caller invokes `observe()` or `observeTWAP()`**
+
+2. **For `observe()`:**
+   - Computes `poolId` from key
+   - Reads current tick and liquidity from PoolManager
+   - Delegates to `Oracle.observe()` which calls `observeSingle()` for each `secondsAgo` value
+   - Returns `tickCumulatives[]` and `secondsPerLiquidityCumulativeX128s[]`
+
+3. **For `observeTWAP()`:**
+   - Validates `secondsAgo != 0` (reverts `JBUniswapV4Hook_SecondsAgoCannotBeZero()`)
+   - Observes two points: now (`secondsAgos[0] = 0`) and `secondsAgo` in the past
+   - Computes arithmetic mean tick from tick cumulative delta
+   - Rounds toward negative infinity for negative ticks
+
+### State changes
+
+None -- both functions are `view`.
+
+### Events
+
+None -- view functions do not emit events.
+
+### Edge cases
+
+- `JBUniswapV4Hook_SecondsAgoCannotBeZero()` -- `observeTWAP` requires `secondsAgo > 0`
+- `Oracle_CardinalityCannotBeZero()` -- pool not initialized (cardinality is 0)
+- `Oracle_TargetPredatesOldestObservation(oldestTimestamp, targetTimestamp)` -- requested time is older than the oldest stored observation
+- Tick rounding: negative ticks are rounded toward negative infinity (Solidity truncates toward zero, so an extra decrement is applied)
+
+### What to verify
+
+- `observe()` returns correct cumulative values for arbitrary `secondsAgos` arrays.
+- `observeTWAP()` arithmetic mean tick calculation matches the standard TWAP formula.
+- Binary search in `Oracle.binarySearch()` correctly handles wrapped observation arrays.
+- `int56` tickCumulative overflow: covers ~1.4 years at max tick (887272) before wrapping.
