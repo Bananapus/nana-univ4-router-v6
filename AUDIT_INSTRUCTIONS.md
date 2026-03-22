@@ -348,4 +348,68 @@ The test suite includes:
 - Stress tests for extreme amounts and edge cases
 - Regression tests for previously found issues
 
+## Previous Audit Findings
+
+Nemesis Security conducted an audit. No individual finding IDs are referenced inline in this repository, but all known risks, trust assumptions, and previously identified issues are documented in [RISKS.md](./RISKS.md). Key areas that emerged from prior review:
+
+- **Spot price fallback during TWAP warmup** (Section 2.1) -- manipulable routing window for the first 30 minutes after pool creation.
+- **tickCumulative int56 overflow** (Section 2.4) -- silent overflow after ~1.4 years at max tick. Widened from int48 (which overflowed after ~44 hours) as a direct result of prior findings.
+- **Conservative sell-side estimation** (Section 3.4) -- fee always deducted even for feeless addresses; total surplus used regardless of project config.
+- **Static weight composition divergence** (Section 6.1) -- routing estimate uses static ruleset weight, diverges when a data hook overrides weight at execution time.
+- **Zero-tax sell-path bypass** (Section 4.4) -- V4 pool sell-side liquidity permanently bypassed for zero-tax projects. Accepted behavior.
+- **hookData length inconsistency** (Section 3.2) -- `_beforeSwap` requires exactly 32 bytes, `_afterSwap` accepts >= 32.
+
+See [RISKS.md](./RISKS.md) for the complete set of documented risks and trust assumptions.
+
+## Anti-Patterns to Hunt
+
+| Pattern | Where to Look | Why It's Dangerous |
+|---------|--------------|-------------------|
+| Spot price fallback during TWAP warmup | `estimateUniswapOutput` | When TWAP returns 0, falls back to manipulable spot price. Users rely on `amountOutMin` for protection during this window. |
+| `_routing` reentrancy flag | `_beforeSwap` | Simple boolean flag to prevent recursive routing. Verify it's reset on all exit paths (including reverts). |
+| `hookData.length == 32` vs `>= 32` | `_beforeSwap` vs `_afterSwap` | Inconsistent length check. `_beforeSwap` requires exactly 32 bytes, `_afterSwap` allows 32+. Can this be exploited? |
+| `forceApprove` before terminal call | `_routeThroughJuicebox` (buy path) | Approval set before `terminal.pay()`. If pay reverts, approval persists. If pay succeeds but returns fewer tokens than approved, dangling approval exists. |
+| Both-tokens-are-JB case | `_beforeSwap` | Only buy-side evaluated when both tokens are JB tokens. Sell-side comparison is skipped. Can an attacker exploit this asymmetry? |
+| `calculateExpectedOutputFromSelling` surplus assumption | `calculateExpectedOutputFromSelling` | Uses total surplus even when `useTotalSurplusForCashOuts = false`. This overestimates JB output, potentially routing through JB when V4 would be better. |
+| int56 tickCumulative overflow | `Oracle.write` | `tickCumulative += int56(tick) * int56(timeDelta)`. At max tick (887,272), overflows after ~1.4 years. |
+
+## Error Reference
+
+| Error | Trigger |
+|-------|---------|
+| `JBUniswapV4Hook_AmountOutMinRequired()` | `hookData` is not exactly 32 bytes in `_beforeSwap`. Callers must encode `uint256 amountOutMin`. |
+| `JBUniswapV4Hook_ExactOutputSwapsNotSupported()` | `params.amountSpecified > 0` in `_beforeSwap`. Only exact-input swaps are supported. |
+| `JBUniswapV4Hook_InsufficientOutput()` | V4 route swap output is below `amountOutMin` in `_afterSwap`. |
+| `JBUniswapV4Hook_ReentrantRouting()` | `_routing` flag is already set when `_beforeSwap` is entered. Prevents recursive routing through JB terminal. |
+| `JBUniswapV4Hook_SecondsAgoCannotBeZero()` | `secondsAgo == 0` in `observeTWAP()`. TWAP requires a non-zero lookback period. |
+| `Oracle_CardinalityCannotBeZero()` | `Oracle.grow()` or `Oracle.observeSingle()` called with `cardinality == 0`. Pool not initialized. |
+| `Oracle_TargetPredatesOldestObservation(uint32, uint32)` | `Oracle.binarySearch()` target timestamp is older than the oldest observation in the ring buffer. |
+
+## Compiler and Version Info
+
+- **Solidity**: 0.8.26
+- **EVM target**: Cancun
+- **Optimizer**: via-IR, 200 runs
+- **Fuzz runs**: 4,096 (invariant: 1,024 runs, depth 100)
+- **Dependencies**: Uniswap V4 core + periphery, OpenZeppelin, nana-core-v6
+- **Build**: `forge build` (Foundry)
+
+## How to Report Findings
+
+For each finding:
+
+1. **Title** -- one line, starts with severity (CRITICAL/HIGH/MEDIUM/LOW)
+2. **Affected contract(s)** -- exact file path and line numbers
+3. **Description** -- what is wrong, in plain language
+4. **Trigger sequence** -- step-by-step, minimal steps to reproduce
+5. **Impact** -- what an attacker gains, what a user loses (with numbers if possible)
+6. **Proof** -- code trace showing the exact execution path, or a Foundry test
+7. **Fix** -- minimal code change that resolves the issue
+
+**Severity guide:**
+- **CRITICAL**: Flash-accounting violation, oracle manipulation enabling fund theft, or permanent routing DoS.
+- **HIGH**: Conditional fund loss, systematic routing to worse path, or broken invariant.
+- **MEDIUM**: Value leakage, suboptimal routing under specific conditions, griefing.
+- **LOW**: Informational, edge-case-only with no material impact.
+
 Go break it.
