@@ -26,6 +26,7 @@ Forward-looking risk analysis of `JBUniswapV4Hook` (~963 lines) and `Oracle` lib
 - Oracle starts at cardinality 1, auto-grows by doubling at capacity boundaries until `MAX_TWAP_CARDINALITY = 1024`.
 - Largest single growth (512 -> 1024) costs ~512 cold SSTOREs. This cost is borne by the swap/liquidity caller that triggers the growth. An attacker could grief callers by timing transactions to coincide with growth boundaries.
 - At cardinality 1024 with 12-second blocks, the oracle stores ~205 minutes of history. At 2-second blocks, it stores just over 34 minutes -- enough to support the 30-minute TWAP window after warmup.
+- **Gas cost of cardinality growth as DoS surface.** The largest single growth step (512 → 1024) costs ~512 cold SSTOREs (~10M gas). The caller who triggers this growth boundary bears the entire cost. An attacker could monitor cardinality levels and time their transactions to avoid triggering growth, while legitimate users bear the cost unpredictably. This is not exploitable for profit but can cause user-facing gas spikes. Mitigation: projects can pre-grow cardinality by calling `increaseCardinalityNext` during low-activity periods (not currently exposed as a public function — growth is automatic).
 
 ### 2.3 TWAP_PERIOD selection tradeoffs
 
@@ -166,3 +167,13 @@ This is documented inline at `src/JBUniswapV4Hook.sol` lines 46-52 and 234-236 a
 - **Flash-accounting conservation** -- For every `poolManager.take()`, a corresponding `_settleOutput()` must execute within the same `unlock()` call, or PoolManager reverts. The hook never holds tokens across transactions.
 - **Cardinality cap** -- `cardinalityNext` never exceeds `MAX_TWAP_CARDINALITY` (1024). Growth logic doubles until the cap. Verified in `test_OracleCardinality_CapsAtConfiguredMaximum`.
 - **Routing never blocks V4 swaps** -- All JB protocol calls in the routing path (`currentRulesetOf`, `currentReclaimableSurplusOf`, `pricePerUnitOf`, `primaryTerminalOf`) are try-catch wrapped. A revert in any JB contract results in V4 fallback, not a failed swap.
+
+## 9. Accepted Behaviors
+
+### 9.1 JB routing bypasses V4 pool price discovery (by design)
+
+When the hook routes a swap through Juicebox (minting or cashing out), the V4 pool's AMM state is not touched. The hook returns a `BeforeSwapDelta` that cancels the pool-level swap. This means the V4 pool price diverges from the "true" rate offered by JB. Third-party arbitrageurs can correct this divergence independently. The hook does not attempt to align the two prices because doing so would add gas cost and complexity to every routed swap, and the arbitrage opportunity is self-correcting.
+
+### 9.2 Spot price fallback during oracle warmup (accepted risk window)
+
+During the first 30 minutes after pool initialization, routing decisions use the instantaneous spot price (`getSlot0`) instead of the TWAP. This is a known vulnerability window where sandwich attacks on the routing decision are possible. The alternative — blocking all swaps during warmup — would prevent legitimate trading. The `amountOutMin` parameter in hookData provides a hard floor that limits extraction during this window. Projects deploying new pools should seed initial liquidity and execute a few swaps to bootstrap observations before announcing the pool publicly.
