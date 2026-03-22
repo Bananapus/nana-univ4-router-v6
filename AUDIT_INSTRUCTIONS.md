@@ -6,7 +6,7 @@ You are auditing a Uniswap V4 hook that provides intelligent price comparison an
 
 **In scope -- all Solidity in `src/`:**
 ```
-src/JBUniswapV4Hook.sol     # Hook + router (~960 lines)
+src/JBUniswapV4Hook.sol     # Hook + router (~1,010 lines)
 src/libraries/Oracle.sol    # TWAP oracle ring buffer (~394 lines)
 ```
 
@@ -37,7 +37,7 @@ A ring buffer implementation for TWAP price tracking, adapted from Uniswap V3's 
 
 Key properties:
 - Array size: `65_535` observations per pool
-- Auto-growth: cardinality doubles at capacity (1 -> 2 -> 4 -> ... -> 256 cap)
+- Auto-growth: cardinality doubles at capacity (1 -> 2 -> 4 -> ... -> 1024 cap)
 - At most one observation per block (same-block writes are no-ops)
 - Binary search for historical lookups
 - Handles uint32 timestamp overflow (safe for 0 or 1 overflows)
@@ -164,7 +164,7 @@ Read current tick and liquidity from poolManager.getSlot0/getLiquidity
   v
 Check if cardinality growth needed:
   (cardinality == cardinalityNext AND index == cardinality - 1)
-  -> Double cardinality (cap at 256)
+  -> Double cardinality (cap at 1024)
   -> Oracle.grow() pre-allocates storage slots
   |
   v
@@ -202,7 +202,7 @@ The oracle is critical to routing security. Understand these properties:
 
 **Ring buffer**: Fixed-size array per pool (`observations[poolId][65_535]`). Observations overwrite the oldest when the buffer is full. The `states[poolId]` struct tracks `index`, `cardinality`, and `cardinalityNext`.
 
-**Auto-growth**: When the buffer fills (`index == cardinality - 1` and `cardinality == cardinalityNext`), `_recordObservation` doubles `cardinalityNext` up to 256. `Oracle.grow()` pre-allocates storage slots. Actual cardinality increases when new writes reach the expanded region.
+**Auto-growth**: When the buffer fills (`index == cardinality - 1` and `cardinality == cardinalityNext`), `_recordObservation` doubles `cardinalityNext` up to 1024. `Oracle.grow()` pre-allocates storage slots. Actual cardinality increases when new writes reach the expanded region.
 
 **Warmup period**: A new pool starts with cardinality 1. The first swap adds a second observation. TWAP becomes available only after the oldest observation is at least `TWAP_PERIOD` (1800) seconds old AND cardinality >= 2.
 
@@ -313,7 +313,7 @@ This hook serves as both the V4 pool hook and the `ORACLE_HOOK` for `JBBuybackHo
 
 1. **Flash-accounting balance**: After every swap (whether V4 or JB routed), PoolManager's balance check succeeds. No tokens are created or destroyed.
 2. **TWAP monotonicity**: `tickCumulative` is monotonically non-decreasing for non-negative ticks and correctly accumulates for all tick values.
-3. **Oracle cardinality**: `cardinality <= cardinalityNext <= 256` always holds. `index < cardinality` always holds.
+3. **Oracle cardinality**: `cardinality <= cardinalityNext <= 1024` always holds. `index < cardinality` always holds.
 4. **Observation ordering**: The ring buffer maintains chronological order within the active window.
 5. **Route selection**: If JB gives strictly more output than V4, JB route is selected. If V4 gives equal or more, V4 route is selected.
 6. **Slippage enforcement**: No swap completes with output below `amountOutMin` (for both V4 and JB routes).
