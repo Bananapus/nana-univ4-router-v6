@@ -28,10 +28,10 @@ Uniswap V4 hook that automatically routes swaps involving Juicebox project token
 | Function | What it does |
 |----------|-------------|
 | `calculateExpectedTokensWithCurrency(projectId, paymentToken, paymentAmount)` | Estimates project tokens from paying `paymentAmount` of `paymentToken`. Accounts for ruleset weight, currency conversion via `JBPrices`, and reserved rate deduction. |
-| `calculateExpectedOutputFromSelling(projectId, tokenAmountIn, outputToken, terminal)` | Estimates terminal tokens from cashing out `tokenAmountIn` project tokens. Uses the 6-arg `store.currentReclaimableSurplusOf()` with empty terminals/accountingContexts (total surplus). Deducts protocol fee read dynamically via `IJBFeeTerminal(terminal).FEE()`. All external calls wrapped in try-catch -- returns 0 on any failure (swap falls back to V4). |
+| `calculateExpectedOutputFromSelling(projectId, tokenAmountIn, outputToken, terminal)` | Estimates terminal tokens from cashing out `tokenAmountIn` project tokens. Calls `IJBCashOutTerminal(terminal).previewCashOutFrom()` which simulates the full cash-out path including any configured cash-out data hook. Deducts protocol fee read dynamically via `IJBFeeTerminal(terminal).FEE()`. The `previewCashOutFrom()` call is wrapped in try-catch -- returns 0 on any failure (swap falls back to V4). |
 | `estimateUniswapOutput(poolId, key, amountIn, zeroForOne)` | Estimates V4 swap output using TWAP sqrtPrice (30-min window). Falls back to spot price if TWAP unavailable. Deducts pool fee. |
 | `observeTWAP(poolId, secondsAgo, tick, index, liquidity, cardinality)` | Returns arithmetic mean tick over `secondsAgo` for a V4 pool's oracle. |
-| `observe(poolId, secondsAgos)` | IGeomeanOracle-compatible TWAP query. Returns tick cumulatives and seconds-per-liquidity for the requested time points. |
+| `observe(key, secondsAgos)` | IGeomeanOracle-compatible TWAP query. Takes `PoolKey calldata key` (not a PoolId). Returns tick cumulatives and seconds-per-liquidity for the requested time points. |
 
 ### Internal Routing
 
@@ -50,7 +50,7 @@ Uniswap V4 hook that automatically routes swaps involving Juicebox project token
 
 | Function | What it does |
 |----------|-------------|
-| `Oracle.initialize(self, time, tick)` | Initializes ring buffer with first observation. Returns `cardinality=1, cardinalityNext=1`. |
+| `Oracle.initialize(self, time)` | Initializes ring buffer with first observation. Takes only the storage array and a `uint32 time` — no tick parameter. Returns `cardinality=1, cardinalityNext=1`. |
 | `Oracle.write(self, index, blockTimestamp, tick, liquidity, cardinality, cardinalityNext)` | Appends observation. Skips if already written in current block. Auto-bumps cardinality when wrapping. |
 | `Oracle.observe(self, time, secondsAgos, tick, index, liquidity, cardinality)` | Returns tick cumulatives and seconds-per-liquidity for multiple time points. Interpolates between observations. |
 | `Oracle.observeSingle(self, time, secondsAgo, tick, index, liquidity, cardinality)` | Returns single observation at specific time point. |
@@ -77,7 +77,8 @@ Uniswap V4 hook that automatically routes swaps involving Juicebox project token
 
 | Event | When |
 |-------|------|
-| `BestRouteSelected(PoolId indexed poolId, uint8 routeType, uint256 expectedTokens, address caller)` | Emitted in `_beforeSwap` when a JB token swap is routed. `routeType`: 0=V4, 1=JB. |
+| `RouteSelected(PoolId indexed poolId, bool useJuicebox, uint256 expectedTokens, address caller)` | Emitted in `_beforeSwap` when a routing decision is made. `useJuicebox`: true if routed through Juicebox, false if V4. |
+| `BestRouteSelected(PoolId indexed poolId, uint8 routeType, uint256 expectedTokens, address caller)` | Emitted in `_beforeSwap` when the best route is selected among V4 and Juicebox. `routeType`: 0=V4, 1=JB. |
 
 ## Errors
 
@@ -87,7 +88,7 @@ Uniswap V4 hook that automatically routes swaps involving Juicebox project token
 | `JBUniswapV4Hook_AmountOutMinRequired` | `hookData` is empty or not exactly 32 bytes |
 | `JBUniswapV4Hook_InsufficientOutput` | V4 swap output < `amountOutMin` (slippage check in `_afterSwap`) |
 | `JBUniswapV4Hook_SecondsAgoCannotBeZero` | Oracle queried with `secondsAgo == 0` |
-| `JBUniswapV4Hook_ObservationCardinalityZero` | Oracle queried before initialization |
+| `JBUniswapV4Hook_ReentrantRouting` | Recursive routing detected — fires when `_routing` is already true at `_beforeSwap` entry |
 
 ## Constants
 
@@ -110,9 +111,9 @@ Uniswap V4 hook that automatically routes swaps involving Juicebox project token
 6. **Slippage validation differs by route.** V4 swaps validate `amountOutMin` in `_afterSwap`. JB routes validate during execution in `_beforeSwap` (via the pay/cashOut call itself or explicit checks).
 7. **The hook has `receive() external payable {}`** to accept ETH during terminal cash outs.
 8. **Deployment requires HookMiner.** The hook address must have specific bits set to match the permission flags. Use `HookMiner.find()` to discover a valid salt.
-9. **Selling estimation uses total surplus.** `calculateExpectedOutputFromSelling` passes empty terminals/accountingContexts to `currentReclaimableSurplusOf`, causing the store to aggregate surplus across all terminals. This may overestimate reclaim for projects that don't use `useTotalSurplusForCashOuts`.
+9. **Selling estimation uses `previewCashOutFrom`.** `calculateExpectedOutputFromSelling` calls `IJBCashOutTerminal(terminal).previewCashOutFrom()` which simulates the full cash-out path, including any configured cash-out data hook. This gives a more accurate estimate than raw surplus math, but the preview may differ from actual execution if on-chain state changes between the estimate and the swap.
 10. **Selling estimation deducts fee conservatively.** The protocol fee is always deducted (`IJBFeeTerminal(terminal).FEE()`). If the hook is feeless, the estimate is slightly low, routing to V4 instead.
-11. **All external calls in selling estimation are try-caught.** Both `terminal.STORE()` and `store.currentReclaimableSurplusOf()` are wrapped in try-catch. If either reverts (misconfigured project, missing ruleset, etc.), the function returns 0 and the swap falls back to V4.
+11. **The `previewCashOutFrom()` call is try-caught.** The `IJBCashOutTerminal(terminal).previewCashOutFrom()` call is wrapped in try-catch. If it reverts (misconfigured project, missing ruleset, etc.), the function returns 0 and the swap falls back to V4.
 12. **If `DIRECTORY.primaryTerminalOf()` returns address(0)** for a project token, the Juicebox route is skipped silently. This happens when a project hasn't set up a terminal for the swap's input/output token.
 13. **`via_ir = true` is required** in foundry.toml due to stack depth from V4 core dependencies. Without it, compilation may fail with "stack too deep" errors.
 14. **The hook is fully immutable.** No admin functions, no upgrade path. All parameters are constants or immutable constructor arguments. Changing behavior requires deploying a new hook and migrating pools.
