@@ -17,23 +17,37 @@ The contract is fully immutable after deployment -- no admin functions, no upgra
 
 ### How It Works
 
-```
-User initiates swap in V4 pool
-  |
-beforeSwap() fires
-  |
-  +-- Is a Juicebox project token involved?
-  |     NO --> proceed with normal V4 swap
-  |     YES --> compare both routes:
-  |
-  +-- V4 estimate (TWAP-based, 30-min window, falls back to spot)
-  +-- JB estimate (weight * price - reserved rate, or cashOut surplus - fee)
-  |
-  +-- Pick highest output
-  |     JB  --> take from PoolManager, pay/cashOut via terminal, settle back
-  |     V4  --> return ZERO_DELTA, let V4 AMM execute normally
-  |
-afterSwap() records oracle observation, validates slippage for V4 swaps
+```mermaid
+sequenceDiagram
+    participant User
+    participant V4Pool as Uniswap V4 Pool
+    participant Hook as JBUniswapV4Hook
+    participant Oracle as TWAP Oracle
+    participant JB as Juicebox Terminal
+
+    User->>V4Pool: Initiate swap
+    V4Pool->>Hook: beforeSwap()
+    Hook->>Hook: Is a JB project token involved?
+    alt No project token
+        Hook-->>V4Pool: Proceed with normal V4 swap
+    else Project token found
+        Hook->>Oracle: Get V4 TWAP estimate (30-min window)
+        Oracle-->>Hook: V4 estimated output
+        Hook->>JB: Get JB estimate (pay weight or cashOut preview)
+        JB-->>Hook: JB estimated output
+        Hook->>Hook: Compare V4 vs JB output
+        alt JB wins
+            Hook->>V4Pool: Take input from PoolManager
+            Hook->>JB: Execute pay() or cashOutTokensOf()
+            JB-->>Hook: Output tokens
+            Hook->>V4Pool: Settle output back
+        else V4 wins
+            Hook-->>V4Pool: Return ZERO_DELTA (let AMM execute)
+        end
+    end
+    V4Pool->>Hook: afterSwap()
+    Hook->>Oracle: Record observation
+    Hook->>Hook: Validate slippage for V4 swaps
 ```
 
 ### Composition with JBBuybackHook
@@ -57,13 +71,10 @@ The oracle is a ring buffer of up to 65,535 observations per pool. Cardinality a
 4. Return user-receivable token count
 
 **Selling project tokens** (cashing out):
-1. Query `terminal.STORE().currentReclaimableSurplusOf()` with empty terminals/accountingContexts so the store uses total surplus across all terminals
-2. Deduct protocol fee (read dynamically from terminal via `IJBFeeTerminal.FEE()`)
-3. Prefer `terminal.STORE().previewCashOutFrom(...)` so the estimate can include cash-out data-hook effects when the underlying store supports that preview surface
-4. Fall back to a static terminal-store surplus estimate if previewing is unavailable
-5. Deduct protocol fee (read dynamically from terminal via `IJBFeeTerminal.FEE()`)
-6. Return net output
-7. All external calls are wrapped in try-catch -- if any call reverts, the estimate returns 0 and the swap falls back to V4
+1. Call `terminal.previewCashOutFrom(...)` to simulate the cash-out, including any configured cash-out data-hook effects
+2. Deduct protocol fee from the gross reclaim (read dynamically from terminal via `IJBFeeTerminal.FEE()`)
+3. Return net output
+4. All external calls are wrapped in try-catch -- if any call reverts, the estimate returns 0 and the swap falls back to V4
 
 ## Architecture
 
@@ -71,6 +82,19 @@ The oracle is a ring buffer of up to 65,535 observations per pool. Cardinality a
 |----------|-------------|
 | `JBUniswapV4Hook` | Uniswap V4 `BaseHook` that compares prices across V4 and Juicebox for every swap involving a project token, then routes to the best option. Maintains its own TWAP oracle with IGeomeanOracle-compatible `observe()`. |
 | `Oracle` (library) | Ring-buffer observation array (up to 65,535 slots) storing tick cumulatives and seconds-per-liquidity. Supports `observe`, `observeSingle`, `write`, `grow`, and binary search over the circular buffer. |
+
+### Constructor
+
+The contract is fully immutable after deployment. All dependencies are injected at construction time:
+
+```solidity
+constructor(
+    IPoolManager poolManager,       // Uniswap V4 singleton PoolManager
+    IJBTokens tokens,               // Juicebox token registry (project token lookup)
+    IJBDirectory directory,         // Juicebox directory (terminal routing)
+    IJBPrices prices                // Juicebox price feeds (currency conversion)
+)
+```
 
 ## Hook Permissions
 
@@ -137,17 +161,6 @@ test/
   SlippageTolerance.t.sol              # amountOutMin enforcement
 script/
   Deploy.s.sol                         # Deployment (HookMiner for address, per-chain PoolManager)
-```
-
-## Constructor
-
-```solidity
-constructor(
-    IPoolManager poolManager,       // Uniswap V4 singleton PoolManager
-    IJBTokens tokens,               // Juicebox token registry (project token lookup)
-    IJBDirectory directory,         // Juicebox directory (terminal routing)
-    IJBPrices prices                // Juicebox price feeds (currency conversion)
-)
 ```
 
 ## Supported Networks
