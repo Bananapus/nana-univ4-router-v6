@@ -81,7 +81,7 @@ A V4 pool exists with `hooks = JBUniswapV4Hook`. One of the pool's tokens is a J
 
 1. `observations[poolId][newIndex]` -- new `Oracle.Observation` written with current `blockTimestamp`, `tickCumulative`, `secondsPerLiquidityCumulativeX128`, `initialized = true`
 2. `states[poolId].index` -- updated to `newIndex`
-3. `states[poolId].cardinality` -- may increase if `cardinalityNext > cardinality` and index wraps
+3. `states[poolId].cardinality` -- may increase if `cardinalityNext > cardinality` and index is at the last slot
 4. `states[poolId].cardinalityNext` -- may double (up to `MAX_TWAP_CARDINALITY = 1024`) if at capacity
 
 ### Events
@@ -516,7 +516,7 @@ No additional events beyond those in Journey 1/2/3. The `RouteSelected` and `Bes
 
 1. `observations[poolId][newIndex]` -- new `Oracle.Observation` written with current tick/liquidity cumulatives
 2. `states[poolId].index` -- updated to `newIndex`
-3. `states[poolId].cardinality` -- may increase when `cardinalityNext > cardinality` and index wraps
+3. `states[poolId].cardinality` -- may increase when `cardinalityNext > cardinality` and index is at the last slot
 4. `states[poolId].cardinalityNext` -- may double (up to 1024) when at capacity (`index == cardinality - 1`)
 5. If growing: `observations[poolId][current..next-1].blockTimestamp` -- pre-initialized to `1` (prevents fresh SSTOREs during swaps)
 
@@ -544,7 +544,7 @@ None emitted by `JBUniswapV4Hook`. Observation writes are silent.
 
 **Who can call:** Anyone. Both functions are `external view` -- no access restrictions.
 
-**Actor:** External contract (e.g., JBBuybackHook) or off-chain system querying TWAP data.
+**Actor:** External contract (e.g., JBBuybackHookRegistry) or off-chain system querying TWAP data.
 **Goal:** Read time-weighted average price data from the oracle without modifying state.
 
 ### Parameters (`observe`)
