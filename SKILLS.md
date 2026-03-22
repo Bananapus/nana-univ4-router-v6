@@ -27,8 +27,8 @@ Uniswap V4 hook that automatically routes swaps involving Juicebox project token
 
 | Function | What it does |
 |----------|-------------|
-| `calculateExpectedTokensWithCurrency(projectId, paymentToken, paymentAmount)` | Estimates project tokens from paying `paymentAmount` of `paymentToken`. Accounts for ruleset weight, currency conversion via `JBPrices`, and reserved rate deduction. |
-| `calculateExpectedOutputFromSelling(projectId, tokenAmountIn, outputToken, terminal)` | Estimates terminal tokens from cashing out `tokenAmountIn` project tokens. Calls `IJBCashOutTerminal(terminal).previewCashOutFrom()` which simulates the full cash-out path including any configured cash-out data hook. Deducts protocol fee read dynamically via `IJBFeeTerminal(terminal).FEE()`. The `previewCashOutFrom()` call is wrapped in try-catch -- returns 0 on any failure (swap falls back to V4). |
+| `calculateExpectedTokensWithCurrency(uint256 projectId, address paymentToken, uint256 paymentAmount) -> uint256 expectedTokens` | Estimates project tokens from paying `paymentAmount` of `paymentToken`. Normalizes to 18 decimals, converts currency via `PRICES.pricePerUnitOf()`, applies ruleset weight, deducts reserved rate. Returns 0 on any try-catch failure (missing ruleset, price feed). |
+| `calculateExpectedOutputFromSelling(uint256 projectId, uint256 tokenAmountIn, address outputToken, IJBTerminal terminal) -> uint256 expectedOutput` | Estimates terminal tokens from cashing out `tokenAmountIn` project tokens. Calls `IJBCashOutTerminal(terminal).previewCashOutFrom()` which simulates the full cash-out path including any configured cash-out data hook. Deducts protocol fee read dynamically via `IJBFeeTerminal(terminal).FEE()`. Returns 0 on any try-catch failure (swap falls back to V4). |
 | `estimateUniswapOutput(poolId, key, amountIn, zeroForOne)` | Estimates V4 swap output using TWAP sqrtPrice (30-min window). Falls back to spot price if TWAP unavailable. Deducts pool fee. |
 | `observeTWAP(poolId, secondsAgo, tick, index, liquidity, cardinality)` | Returns arithmetic mean tick over `secondsAgo` for a V4 pool's oracle. |
 | `observe(key, secondsAgos)` | IGeomeanOracle-compatible TWAP query. Takes `PoolKey calldata key` (not a PoolId). Returns tick cumulatives and seconds-per-liquidity for the requested time points. |
@@ -77,8 +77,8 @@ Uniswap V4 hook that automatically routes swaps involving Juicebox project token
 
 | Event | When |
 |-------|------|
-| `RouteSelected(PoolId indexed poolId, bool useJuicebox, uint256 expectedTokens, address caller)` | Emitted in `_beforeSwap` when a routing decision is made. `useJuicebox`: true if routed through Juicebox, false if V4. |
-| `BestRouteSelected(PoolId indexed poolId, uint8 routeType, uint256 expectedTokens, address caller)` | Emitted in `_beforeSwap` when the best route is selected among V4 and Juicebox. `routeType`: 0=V4, 1=JB. |
+| `BestRouteSelected(PoolId indexed poolId, uint8 routeType, uint256 expectedTokens, address caller)` | Emitted once per swap in `_beforeSwap` after comparing V4 and JB outputs. `routeType`: 0=V4, 1=JB. Always fires when at least one JB token is involved. Fires before the route is executed. |
+| `RouteSelected(PoolId indexed poolId, bool useJuicebox, uint256 expectedTokens, address caller)` | Emitted once per swap in `_beforeSwap` after the routing decision is finalized. For non-JB swaps, fires immediately with `useJuicebox=false, expectedTokens=0`. For JB swaps, fires after `BestRouteSelected` with the chosen route. |
 
 ## Errors
 
@@ -101,6 +101,21 @@ Uniswap V4 hook that automatically routes swaps involving Juicebox project token
 | Max cardinality | 1024 | Oracle auto-grow cap |
 | Max observation slots | 65,535 | Ring buffer size per pool |
 
+## Required Hook Flags
+
+The hook's `getHookPermissions()` returns the following V4 permission bits. All other flags are `false`.
+
+| Flag | Value | Purpose |
+|------|-------|---------|
+| `afterInitialize` | `true` | Bootstrap oracle ring buffer with first observation on pool creation |
+| `beforeSwap` | `true` | Core routing: compare V4 vs Juicebox and override swap when JB is better |
+| `beforeSwapReturnDelta` | `true` | Enable `_beforeSwap` to return a non-zero `BeforeSwapDelta` (takes input, settles output) |
+| `afterSwap` | `true` | Record oracle observation; validate `amountOutMin` slippage for V4 swaps |
+| `afterAddLiquidity` | `true` | Record oracle observation on liquidity additions |
+| `afterRemoveLiquidity` | `true` | Record oracle observation on liquidity removals |
+
+Deployment requires `HookMiner.find()` to discover a CREATE2 salt that produces an address with these flag bits set.
+
 ## Gotchas
 
 1. **Exact-output swaps are not supported.** `_beforeSwap` reverts with `JBUniswapV4Hook_ExactOutputSwapsNotSupported` if `params.amountSpecified > 0`. Only exact-input (negative `amountSpecified`) is handled.
@@ -119,6 +134,23 @@ Uniswap V4 hook that automatically routes swaps involving Juicebox project token
 14. **The hook is fully immutable.** No admin functions, no upgrade path. All parameters are constants or immutable constructor arguments. Changing behavior requires deploying a new hook and migrating pools.
 15. **Non-JB token swaps pass through unchanged.** If neither token in the pair is a registered JB project token (via `TOKENS.projectIdOf()`), the hook returns `ZERO_DELTA` and the V4 AMM executes normally. No routing overhead.
 16. **Composition with JBBuybackHook.** This hook is designed to serve as both the pool hook and the oracle (`ORACLE_HOOK`) for `JBBuybackHook` on the same pool. When the buyback hook swaps, `_beforeSwap` fires and may route through JB, re-entering the buyback hook. The `_routing` reentrancy guard prevents infinite recursion — the inner swap reverts, and the buyback hook's try/catch falls back to minting.
+
+## Composition with JBBuybackHook
+
+This hook is designed to serve as both the V4 pool hook **and** the TWAP oracle (`ORACLE_HOOK`) for a `JBBuybackHook` operating on the same pool. The interaction flow:
+
+1. A payment arrives at the project's terminal. The buyback hook (configured as a data hook) queries this hook's `observe()` to get a TWAP quote.
+2. The buyback hook determines that swapping on the V4 pool yields more tokens than minting, so it initiates a swap on the pool.
+3. The swap enters `_beforeSwap` on this hook. The hook compares V4 pool output vs. Juicebox minting output. If Juicebox is better, it calls `_routeThroughJuicebox`, which sets `_routing = true` and calls `terminal.pay()`.
+4. The `terminal.pay()` call re-enters the buyback hook (since it is the project's data hook). The buyback hook attempts another swap on the same pool.
+5. The inner swap enters `_beforeSwap` again, but `_routing` is already `true`, so it reverts with `JBUniswapV4Hook_ReentrantRouting`.
+6. The buyback hook's `try-catch` catches the revert and falls back to minting tokens directly at the ruleset weight.
+
+The `_routing` flag is a custom `bool` (not OpenZeppelin `ReentrancyGuard`) to avoid conflicts with the PoolManager's unlock callback pattern. It is set before `_routeThroughJuicebox` and cleared after, scoped to a single transaction.
+
+## Permissions
+
+This hook has no admin functions and requires no permissions. All parameters are constants or immutable constructor arguments. There is no owner, no access control, and no upgrade path. Changing behavior requires deploying a new hook and migrating pools to it.
 
 ## Example Integration
 
