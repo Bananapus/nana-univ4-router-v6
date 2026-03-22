@@ -31,12 +31,10 @@ Swap arrives → JBUniswapV4Hook._beforeSwap()
 
 ### Selling Estimation (calculateExpectedOutputFromSelling)
 ```
-terminal.STORE() → store  [try-catch: returns 0 on failure]
-  → store.currentReclaimableSurplusOf(
-      empty terminals[],        // uses total surplus across all terminals
-      empty accountingContexts[] // store fetches from directory
-    )                           [try-catch: returns 0 on failure]
-  → Deduct protocol fee (IJBFeeTerminal.FEE() / MAX_FEE)
+terminal.previewCashOutFrom(holder, projectId, tokenAmountIn, outputToken, beneficiary, metadata)
+  [try-catch: returns 0 on failure]
+  → grossReclaim from the terminal's cash-out preview (incorporates data-hook effects)
+  → Deduct protocol fee: grossReclaim - grossReclaim * FEE / MAX_FEE
   → Return net reclaim amount
 ```
 
