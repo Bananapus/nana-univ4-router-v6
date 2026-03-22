@@ -54,6 +54,14 @@ Set at deploy time in the constructor. Cannot be changed after deployment.
 | `TWAP_SLIPPAGE_DENOMINATOR` | `uint256` (constant: 10,000) | Hardcoded | Basis-point denominator for slippage calculations |
 | Hook address flags | Encoded in contract address | CREATE2 deployment | `afterInitialize`, `beforeSwap`, `afterSwap`, `beforeSwapReturnDelta`, `afterAddLiquidity`, `afterRemoveLiquidity` |
 
+## Oracle Security
+
+The hook uses a geometric mean TWAP oracle (30-minute window) to estimate V4 pool prices for routing decisions. This introduces specific trust assumptions:
+
+- **TWAP manipulation.** A well-capitalized attacker could shift the TWAP by executing large swaps over the observation window. The 30-minute window makes this expensive but not impossible. The hook mitigates this by comparing against the JB issuance price (an independent price source). A manipulated TWAP that exceeds the JB price simply causes the hook to route through JB instead of V4.
+- **Observation buffer growth.** The oracle ring buffer starts small and grows automatically (up to `MAX_TWAP_CARDINALITY = 1024`). During the initial growth period, the TWAP has fewer data points and is more susceptible to manipulation. This risk decreases as more observations accumulate.
+- **hookData trust.** The swap caller provides `amountOutMin` as exactly 32 bytes of hookData. This is the only user-supplied parameter that influences hook behavior. If hookData is empty or not exactly 32 bytes, `amountOutMin` defaults to 0 (no slippage protection). Frontends should always encode a meaningful minimum to protect users.
+
 ## Admin Boundaries
 
 What **nobody** can do after deployment:
@@ -76,3 +84,4 @@ The complete absence of admin functions means:
 2. **No parameter tuning.** TWAP windows and other parameters cannot be adjusted in response to market conditions.
 3. **No upgrade path.** Bug fixes require deploying a new hook contract and migrating pools.
 4. **Maximum trust minimization.** Users can verify the deployed bytecode and know that behavior will never change. No admin key risk.
+5. **Single user trust parameter.** The `amountOutMin` in hookData is the only defense against sandwich attacks on V4-routed swaps. If a frontend fails to set it, users receive zero slippage protection on the V4 leg. The JB leg is not affected (JB issuance prices are not market-manipulable).
