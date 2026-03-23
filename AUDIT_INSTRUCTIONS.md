@@ -344,7 +344,7 @@ forge test --match-path test/audit/ExploitPoC.t.sol -vvv
 The test suite includes:
 - Unit tests for routing decisions, oracle mechanics, and slippage protection
 - Three-way routing tests (V4 vs JB buy vs JB sell)
-- Oracle deep tests (14 tests: init, write, cardinality growth, TWAP, warmup)
+- Oracle deep tests (15 tests: init, write, cardinality growth, TWAP, warmup)
 - Stress tests for extreme amounts and edge cases
 - Regression tests for previously found issues
 
