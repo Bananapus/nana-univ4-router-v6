@@ -126,7 +126,7 @@ forge install
 | `forge build` | Compile contracts (requires solc ^0.8.24, Cancun EVM) |
 | `forge test` | Run all tests |
 | `forge test --match-contract JuiceboxHookTest` | Run unit tests only |
-| `forge test --match-contract ThreeWayRoutingTest` | Run routing comparison tests |
+| `forge test --match-contract TwoWayRoutingTest` | Run routing comparison tests |
 | `forge test --match-contract JBUniswapV4HookForkTest` | Run fork tests (needs `MAINNET_RPC_URL`) |
 | `forge test -vvv` | Run tests with full trace |
 | `forge test --gas-report` | Gas profiling |
@@ -159,8 +159,17 @@ test/
   StressAndOrderOfMagnitude.t.sol      # Large swaps, deep liquidity
   OracleDeepTest.t.sol                 # Ring buffer, cardinality, interpolation
   SlippageTolerance.t.sol              # amountOutMin enforcement
+  Invariant.t.sol                      # Invariant / fuzz tests
+  TestObserve.t.sol                    # observe() integration tests
+  TestStructuralArbitrage.t.sol        # Structural arbitrage tests
+  TestAuditGaps.sol                    # Audit-gap coverage
+  mock/                                # Mock contracts (ERC20, WETH)
+  regression/                          # Regression tests (reentrancy, slippage, fees, oracle)
+  utils/                               # Test helpers (Deployers, JuiceboxSwapRouter, EasyPosm)
 script/
   Deploy.s.sol                         # Deployment (HookMiner for address, per-chain PoolManager)
+  helpers/
+    Univ4RouterDeploymentLib.sol       # Deployment helper library
 ```
 
 ## Supported Networks
