@@ -59,7 +59,9 @@ A V4 pool exists with `hooks = JBUniswapV4Hook`. One of the pool's tokens is a J
      - Checks oldest observation is old enough for 30-minute TWAP
      - Calls `observeTWAP()` to get arithmetic mean tick over TWAP_PERIOD
      - Converts to `sqrtPriceX96TWAP`
-   - Calculates expected output from TWAP price
+     - Returns 0 if TWAP is unavailable (insufficient cardinality or history)
+   - If `_getTWAPSqrtPrice` returned 0, `estimateUniswapOutput` falls back to the spot price from `poolManager.getSlot0()` (susceptible to manipulation during oracle warmup)
+   - Calculates expected output from the TWAP or spot price
    - Deducts V4 pool fee from estimate
 
 5. **Comparison: V4 wins**
@@ -72,9 +74,11 @@ A V4 pool exists with `hooks = JBUniswapV4Hook`. One of the pool's tokens is a J
 7. **PoolManager calls `_afterSwap(sender, key, params, delta, hookData)`**
 
    - Decodes `amountOutMin` from hookData
-   - Extracts output amount from `delta` based on swap direction
-   - Checks: `rawOutput != 0` (this is a real V4 swap, not JB-routed)
-   - Verifies `outputAmount >= amountOutMin`, reverts with `JBUniswapV4Hook_InsufficientOutput` if not
+   - If `amountOutMin > 0`:
+     - Extracts output amount from `delta` based on swap direction
+     - Checks: `rawOutput != 0` (this is a real V4 swap, not JB-routed)
+     - Verifies `outputAmount >= amountOutMin`, reverts with `JBUniswapV4Hook_InsufficientOutput` if not
+   - If `amountOutMin == 0`: slippage check is skipped entirely
    - Calls `_recordObservation(poolId)` to update the oracle
 
 ### State changes
@@ -82,7 +86,7 @@ A V4 pool exists with `hooks = JBUniswapV4Hook`. One of the pool's tokens is a J
 1. `observations[poolId][newIndex]` -- new `Oracle.Observation` written with current `blockTimestamp`, `tickCumulative`, `secondsPerLiquidityCumulativeX128`, `initialized = true`
 2. `states[poolId].index` -- updated to `newIndex`
 3. `states[poolId].cardinality` -- may increase if `cardinalityNext > cardinality` and index is at the last slot
-4. `states[poolId].cardinalityNext` -- may double (up to `MAX_TWAP_CARDINALITY = 1024`) if at capacity
+4. `states[poolId].cardinalityNext` -- may double (up to `MAX_TWAP_CARDINALITY = 1024`) when at capacity (`cardinality == cardinalityNext && index == cardinality - 1`)
 
 ### Events
 
@@ -96,7 +100,7 @@ A V4 pool exists with `hooks = JBUniswapV4Hook`. One of the pool's tokens is a J
 - `JBUniswapV4Hook_InsufficientOutput()` -- V4 swap output < `amountOutMin`
 - `JBUniswapV4Hook_ReentrantRouting()` -- `_routing` flag is already true
 - `amountOutMin = 0` -- swap proceeds without slippage protection
-- TWAP not available (cardinality < 2 or oldest observation too recent) -- falls back to spot price from `poolManager.getSlot0()`
+- TWAP not available (cardinality < 2 or oldest observation too recent) -- `_getTWAPSqrtPrice` returns 0, and `estimateUniswapOutput` falls back to spot price from `poolManager.getSlot0()` (susceptible to manipulation during oracle warmup)
 
 ### What to verify
 
@@ -180,8 +184,8 @@ The JB project has a favorable minting rate (high weight, low reserved percent) 
 1. `_routing` -- set to `true` before JB interaction, reset to `false` after
 2. `observations[poolId][newIndex]` -- new oracle observation written in `_afterSwap`
 3. `states[poolId].index` -- updated to new observation index
-4. `states[poolId].cardinality` -- may increase if at capacity
-5. `states[poolId].cardinalityNext` -- may double (up to 1024) if at capacity
+4. `states[poolId].cardinality` -- may increase when `cardinalityNext > cardinality` and index wraps
+5. `states[poolId].cardinalityNext` -- may double (up to 1024) when at capacity (`cardinality == cardinalityNext && index == cardinality - 1`)
 6. PoolManager flash-accounting balances -- debt created by `take()`, resolved by `settle()`
 7. JB project token balance of hook -- temporarily holds minted tokens, then settled to PoolManager
 
@@ -275,8 +279,8 @@ The JB project has favorable cashout conditions (low tax rate, high surplus) tha
 1. `_routing` -- set to `true` before JB interaction, reset to `false` after
 2. `observations[poolId][newIndex]` -- new oracle observation written in `_afterSwap`
 3. `states[poolId].index` -- updated to new observation index
-4. `states[poolId].cardinality` -- may increase if at capacity
-5. `states[poolId].cardinalityNext` -- may double (up to 1024) if at capacity
+4. `states[poolId].cardinality` -- may increase when `cardinalityNext > cardinality` and index wraps
+5. `states[poolId].cardinalityNext` -- may double (up to 1024) when at capacity (`cardinality == cardinalityNext && index == cardinality - 1`)
 6. PoolManager flash-accounting balances -- debt created by `take()`, resolved by `settle()`
 7. JB project token supply -- decreased (tokens burned by terminal during cashout)
 
@@ -399,13 +403,14 @@ When JB routing is selected:
 When V4 routing is selected:
 
 1. `_beforeSwap` returns `ZERO_DELTA` -- V4 executes the swap normally
-2. `_afterSwap` decodes `amountOutMin` from hookData
-3. Extracts actual output from `delta`:
+2. `_afterSwap` decodes `amountOutMin` from hookData (only if `hookData.length >= 32`)
+3. Checks `amountOutMin > 0` -- if zero, the entire slippage check is skipped (no-op)
+4. Extracts actual output from `delta`:
    - `zeroForOne`: output is `BalanceDeltaLibrary.amount1(delta)`
    - `!zeroForOne`: output is `BalanceDeltaLibrary.amount0(delta)`
-4. Checks `rawOutput != 0` (confirms this is a real V4 swap)
-5. Converts to absolute value: `outputAmount = rawOutput < 0 ? uint256(-rawOutput) : uint256(rawOutput)`
-6. Reverts with `JBUniswapV4Hook_InsufficientOutput()` if `outputAmount < amountOutMin`
+5. Checks `rawOutput != 0` (confirms this is a real V4 swap, not JB-routed)
+6. Converts to absolute value: `outputAmount = rawOutput < 0 ? uint256(-rawOutput) : uint256(rawOutput)`
+7. Reverts with `JBUniswapV4Hook_InsufficientOutput()` if `outputAmount < amountOutMin`
 
 ### Events
 
@@ -415,7 +420,7 @@ No additional events beyond those in Journey 1/2/3. The `RouteSelected` and `Bes
 
 - `amountOutMin = 0`: No slippage protection. JB terminal still executes, V4 slippage check passes trivially.
 - `hookData.length != 32`: `_beforeSwap` reverts with `JBUniswapV4Hook_AmountOutMinRequired()`. Swaps through this pool require hookData.
-- `hookData.length >= 32` in `_afterSwap`: Only first 32 bytes are decoded. Extra bytes are ignored.
+- `hookData.length >= 32` in `_afterSwap`: The code uses `>= 32` as a defensive check, but this path for extra bytes is unreachable because `_beforeSwap` already enforces `hookData.length == 32` (reverting otherwise). In practice, `hookData` is always exactly 32 bytes when `_afterSwap` runs.
 - All swaps through this hook require exactly 32 bytes of hookData -- the length check happens before any token identification or routing logic.
 - For JB routes, slippage is enforced by the terminal (via `minReturnedTokens` / `minTokensReclaimed`). The `_afterSwap` check correctly skips because `rawOutput == 0`.
 
@@ -423,8 +428,9 @@ No additional events beyond those in Journey 1/2/3. The `RouteSelected` and `Bes
 
 - The hookData length check happens before any routing logic. All swaps through hooked pools require `amountOutMin`.
 - V4's sign convention is correctly handled in `_afterSwap`: output amounts should be negative (credits to user). The code handles both signs.
-- For JB routes, slippage is enforced twice (terminal + potentially afterSwap). Verify the afterSwap check correctly skips for JB routes (rawOutput == 0).
+- For JB routes, slippage is enforced by the terminal. The `_afterSwap` check skips for JB routes because `rawOutput == 0` (no AMM delta).
 - An attacker cannot bypass slippage by providing hookData longer than 32 bytes to `_beforeSwap` (it requires `== 32`).
+- When `amountOutMin == 0`, the entire `_afterSwap` slippage check is skipped (the `amountOutMin > 0` gate short-circuits), so swaps proceed without hook-level slippage protection.
 
 ---
 
@@ -466,8 +472,8 @@ No additional events beyond those in Journey 1/2/3. The `RouteSelected` and `Bes
 
 1. `observations[poolId][newIndex]` -- new oracle observation written
 2. `states[poolId].index` -- updated to new observation index
-3. `states[poolId].cardinality` -- may increase if at capacity
-4. `states[poolId].cardinalityNext` -- may double (up to 1024) if at capacity
+3. `states[poolId].cardinality` -- may increase when `cardinalityNext > cardinality` and index wraps
+4. `states[poolId].cardinalityNext` -- may double (up to 1024) when at capacity (`cardinality == cardinalityNext && index == cardinality - 1`)
 
 ### Events
 
@@ -517,7 +523,7 @@ No additional events beyond those in Journey 1/2/3. The `RouteSelected` and `Bes
 1. `observations[poolId][newIndex]` -- new `Oracle.Observation` written with current tick/liquidity cumulatives
 2. `states[poolId].index` -- updated to `newIndex`
 3. `states[poolId].cardinality` -- may increase when `cardinalityNext > cardinality` and index is at the last slot
-4. `states[poolId].cardinalityNext` -- may double (up to 1024) when at capacity (`index == cardinality - 1`)
+4. `states[poolId].cardinalityNext` -- may double (up to 1024) when at capacity (`cardinality == cardinalityNext && index == cardinality - 1`)
 5. If growing: `observations[poolId][current..next-1].blockTimestamp` -- pre-initialized to `1` (prevents fresh SSTOREs during swaps)
 
 ### Events
