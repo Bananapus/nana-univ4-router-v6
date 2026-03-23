@@ -263,7 +263,7 @@ Verify that `amountOutMin` (decoded from hookData) provides sufficient protectio
 The hook compares JB expected output vs V4 expected output. Verify:
 - `calculateExpectedTokensWithCurrency()`: correctly handles currency conversion via `PRICES.pricePerUnitOf()`, reserved percent deduction, and payment token decimal normalization
 - `calculateExpectedOutputFromSelling()`: uses total surplus (all terminals) which may overestimate for projects with `useTotalSurplusForCashOuts = false`. The fee deduction uses `terminal.FEE()` even for feeless addresses (conservative by design).
-- `estimateUniswapOutput()`: TWAP-to-price conversion handles overflow correctly (two paths: `sqrtPriceX96 <= uint128.max` and overflow path via `FullMath.mulDiv`). V4 pool fee is deducted from estimate.
+- `estimateUniswapOutput()`: TWAP-to-price conversion handles overflow correctly (two paths: `sqrtPriceX96 <= uint128.max` and overflow path via `FullMath.mulDiv`). V4 pool fee is deducted from estimate. Dynamic fee pools (`key.fee == DYNAMIC_FEE_FLAG`) read the actual LP fee from `slot0` via `LPFeeLibrary.isDynamicFee()` detection.
 - Both-JB-tokens case: only buy-side is evaluated. Can an attacker exploit the missing sell-side comparison?
 
 ### 5. BeforeSwapDelta Sign Convention

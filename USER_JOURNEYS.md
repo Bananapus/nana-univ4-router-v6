@@ -62,7 +62,7 @@ A V4 pool exists with `hooks = JBUniswapV4Hook`. One of the pool's tokens is a J
      - Returns 0 if TWAP is unavailable (insufficient cardinality or history)
    - If `_getTWAPSqrtPrice` returned 0, `estimateUniswapOutput` falls back to the spot price from `poolManager.getSlot0()` (susceptible to manipulation during oracle warmup)
    - Calculates expected output from the TWAP or spot price
-   - Deducts V4 pool fee from estimate
+   - Deducts V4 pool fee from estimate (for dynamic fee pools, reads actual LP fee from `slot0` instead of using the sentinel value)
 
 5. **Comparison: V4 wins**
 

@@ -164,7 +164,7 @@ test/
   TestStructuralArbitrage.t.sol        # Structural arbitrage tests
   TestAuditGaps.sol                    # Audit-gap coverage
   mock/                                # Mock contracts (ERC20, WETH)
-  regression/                          # Regression tests (reentrancy, slippage, fees, oracle)
+  regression/                          # Regression tests (reentrancy, slippage, fees, oracle, dynamic pool fees)
   utils/                               # Test helpers (Deployers, JuiceboxSwapRouter, EasyPosm)
 script/
   Deploy.s.sol                         # Deployment (HookMiner for address, per-chain PoolManager)

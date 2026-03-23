@@ -51,10 +51,10 @@ Forward-looking risk analysis of `JBUniswapV4Hook` (~963 lines) and `Oracle` lib
 
 ### 3.3 estimateUniswapOutput accuracy
 
-- Uses TWAP sqrtPrice (not spot) to estimate output. Applies pool fee deduction (`key.fee / 1_000_000`). Does not account for actual price impact from the swap itself.
+- Uses TWAP sqrtPrice (not spot) to estimate output. Deducts the pool fee: for static fee pools uses `key.fee` directly; for dynamic fee pools (where `key.fee == DYNAMIC_FEE_FLAG`) reads the actual LP fee from `slot0` via `poolManager.getSlot0()`. Does not account for actual price impact from the swap itself.
 - For large swaps relative to pool liquidity, the estimate overestimates output because it assumes constant price (no slippage curve). This biases routing toward V4 for large swaps.
 - When sqrtPriceX96 exceeds `type(uint128).max`, the function branches to use `FullMath.mulDiv` with `ratioX128` to avoid overflow. Verified across the full tick range in `testFuzz_FullMathSafety_PriceSquared`.
-- The estimate is a view function -- no actual swap is simulated. The V4 pool's real output may differ due to tick crossings, concentrated liquidity gaps, and dynamic fees.
+- The estimate is a view function -- no actual swap is simulated. The V4 pool's real output may differ due to tick crossings, concentrated liquidity gaps, and fee changes (for dynamic fee pools, the LP fee read from `slot0` may change between estimation and execution).
 
 ### 3.4 Conservative sell estimate
 
@@ -110,7 +110,7 @@ overrides do not make the estimate dangerously stale. Sell-side routing is stron
 `previewCashOutFrom`, but it still depends on the underlying store preview faithfully matching the terminal's real
 cash-out path.
 
-This is documented inline at `src/JBUniswapV4Hook.sol` lines 47-55 as `COMPOSITION WARNING`, with a related `WARNING` note at line 232.
+This is documented inline in `src/JBUniswapV4Hook.sol` as `COMPOSITION WARNING` (near the contract header) and a related `WARNING` note in `_beforeSwap`.
 
 ## 7. Integration Risks
 
