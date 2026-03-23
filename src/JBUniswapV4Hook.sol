@@ -382,6 +382,7 @@ contract JBUniswapV4Hook is BaseHook {
         } else if (LPFeeLibrary.isDynamicFee(key.fee)) {
             // For dynamic fee pools, key.fee is set to DYNAMIC_FEE_FLAG (0x800000), a sentinel value
             // that is not a valid fee. Read the current LP fee from the pool's slot0 instead.
+            // slither-disable-next-line unused-return
             (,,, uint24 lpFee) = poolManager.getSlot0(PoolIdLibrary.toId(key));
             estimatedOut = estimatedOut - FullMath.mulDiv({a: estimatedOut, b: lpFee, denominator: 1_000_000});
         }
