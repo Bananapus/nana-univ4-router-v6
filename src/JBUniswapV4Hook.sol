@@ -8,6 +8,7 @@ import {CurrencySettler} from "@openzeppelin/uniswap-hooks/src/utils/CurrencySet
 import {IPoolManager} from "@uniswap/v4-core/src/interfaces/IPoolManager.sol";
 import {FullMath} from "@uniswap/v4-core/src/libraries/FullMath.sol";
 import {Hooks} from "@uniswap/v4-core/src/libraries/Hooks.sol";
+import {LPFeeLibrary} from "@uniswap/v4-core/src/libraries/LPFeeLibrary.sol";
 import {StateLibrary} from "@uniswap/v4-core/src/libraries/StateLibrary.sol";
 import {TickMath} from "@uniswap/v4-core/src/libraries/TickMath.sol";
 import {BalanceDelta, BalanceDeltaLibrary} from "@uniswap/v4-core/src/types/BalanceDelta.sol";
@@ -188,6 +189,9 @@ contract JBUniswapV4Hook is BaseHook {
     /// cash-out data-hook effects when the underlying store supports that surface. Falls back to a static surplus
     /// estimate if previewing is unavailable or reverts.
     /// The estimate also conservatively deducts fees even for feeless addresses, which may underestimate output.
+    /// @dev NOTE: The `FEE()` call casts the terminal to `IJBFeeTerminal`. If the terminal is a non-standard
+    /// implementation that does not implement `IJBFeeTerminal`, this call will propagate a revert. The standard
+    /// `JBMultiTerminal` is NOT affected since it implements `IJBFeeTerminal`.
     /// @param projectId The Juicebox project ID
     /// @param tokenAmountIn The amount of JB tokens being sold
     /// @param outputToken The token to receive (e.g., ETH, USDC)
@@ -373,8 +377,13 @@ contract JBUniswapV4Hook is BaseHook {
 
         // Apply fee from pool key
         // fee is in hundredths of a bip, so 3000 = 0.3%
-        if (key.fee > 0) {
+        if (key.fee > 0 && !LPFeeLibrary.isDynamicFee(key.fee)) {
             estimatedOut = estimatedOut - FullMath.mulDiv({a: estimatedOut, b: key.fee, denominator: 1_000_000});
+        } else if (LPFeeLibrary.isDynamicFee(key.fee)) {
+            // For dynamic fee pools, key.fee is set to DYNAMIC_FEE_FLAG (0x800000), a sentinel value
+            // that is not a valid fee. Read the current LP fee from the pool's slot0 instead.
+            (,,, uint24 lpFee) = poolManager.getSlot0(PoolIdLibrary.toId(key));
+            estimatedOut = estimatedOut - FullMath.mulDiv({a: estimatedOut, b: lpFee, denominator: 1_000_000});
         }
 
         return estimatedOut;
