@@ -125,9 +125,7 @@ contract DynamicPoolFeeTest is Test {
         tokenB.approve(address(modifyLiquidityRouter), 100 ether);
 
         modifyLiquidityRouter.modifyLiquidity(
-            key,
-            ModifyLiquidityParams({tickLower: -60, tickUpper: 60, liquidityDelta: 10 ether, salt: bytes32(0)}),
-            ""
+            key, ModifyLiquidityParams({tickLower: -60, tickUpper: 60, liquidityDelta: 10 ether, salt: bytes32(0)}), ""
         );
     }
 
