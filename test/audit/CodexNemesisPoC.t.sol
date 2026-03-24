@@ -140,7 +140,7 @@ contract CodexNemesisPoCTest is Test {
 
         modifyLiquidityRouter.modifyLiquidity(
             key,
-            ModifyLiquidityParams({tickLower: -120_000, tickUpper: 120_000, liquidityDelta: 1_000 ether, salt: 0}),
+            ModifyLiquidityParams({tickLower: -120_000, tickUpper: 120_000, liquidityDelta: 1000 ether, salt: 0}),
             bytes("")
         );
     }
