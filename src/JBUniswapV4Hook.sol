@@ -689,6 +689,7 @@ contract JBUniswapV4Hook is BaseHook {
             // Prefer previewPayFor (accounts for data hooks like buyback hooks) over static weight estimation.
             // Guard: terminal must exist for preview. Fall back to static estimation if not.
             if (address(jbTerminal) != address(0)) {
+                // slither-disable-next-line unused-return
                 try jbTerminal.previewPayFor({
                     projectId: buyProjectId,
                     token: _normalizeToken(tokenIn),
