@@ -1,11 +1,11 @@
 // SPDX-License-Identifier: MIT
-pragma solidity ^0.8.26;
+pragma solidity 0.8.28;
 
 import {Test} from "forge-std/Test.sol";
 import {console} from "forge-std/console.sol";
 
-import {PoolManager} from "@uniswap/v4-core/src/PoolManager.sol";
 import {IPoolManager} from "@uniswap/v4-core/src/interfaces/IPoolManager.sol";
+import {V4PoolManagerDeployer} from "hookmate/artifacts/V4PoolManager.sol";
 import {IHooks} from "@uniswap/v4-core/src/interfaces/IHooks.sol";
 import {StateLibrary} from "@uniswap/v4-core/src/libraries/StateLibrary.sol";
 import {SwapParams, ModifyLiquidityParams} from "@uniswap/v4-core/src/types/PoolOperation.sol";
@@ -426,7 +426,7 @@ contract InvariantTest is Test {
     // forge-lint: disable-next-line(mixed-case-variable)
     MockJBTerminalStoreInv mockJBTerminalStore;
 
-    PoolManager manager;
+    IPoolManager manager;
     PoolSwapTest swapRouter;
     PoolModifyLiquidityTest modifyLiquidityRouter;
 
@@ -445,9 +445,9 @@ contract InvariantTest is Test {
         vm.warp(10_000);
 
         // Deploy V4 infrastructure
-        manager = new PoolManager(address(this));
-        swapRouter = new PoolSwapTest(IPoolManager(address(manager)));
-        modifyLiquidityRouter = new PoolModifyLiquidityTest(IPoolManager(address(manager)));
+        manager = IPoolManager(address(V4PoolManagerDeployer.deploy(address(this))));
+        swapRouter = new PoolSwapTest(manager);
+        modifyLiquidityRouter = new PoolModifyLiquidityTest(manager);
 
         // Deploy JB mocks
         mockJBTokens = new MockJBTokensInv();
@@ -469,7 +469,7 @@ contract InvariantTest is Test {
         );
 
         bytes memory constructorArgs = abi.encode(
-            IPoolManager(address(manager)),
+            manager,
             IJBTokens(address(mockJBTokens)),
             IJBDirectory(address(mockJBDirectory)),
             IJBPrices(address(mockJBPrices))
@@ -478,7 +478,7 @@ contract InvariantTest is Test {
         (, bytes32 salt) = HookMiner.find(address(this), flags, type(JBUniswapV4Hook).creationCode, constructorArgs);
 
         hook = new JBUniswapV4Hook{salt: salt}(
-            IPoolManager(address(manager)),
+            manager,
             IJBTokens(address(mockJBTokens)),
             IJBDirectory(address(mockJBDirectory)),
             IJBPrices(address(mockJBPrices))
@@ -522,7 +522,7 @@ contract InvariantTest is Test {
         );
 
         // Deploy handler
-        handler = new InvariantHandler(hook, swapRouter, key, token0, token1, IPoolManager(address(manager)));
+        handler = new InvariantHandler(hook, swapRouter, key, token0, token1, manager);
 
         // Approve handler to use tokens
         token0.approve(address(handler), type(uint256).max);
@@ -696,7 +696,7 @@ contract InvariantTest is Test {
         int24 preTwapTick = int24(preDelta / int56(uint56(twapPeriod)));
 
         // Record pre-manipulation spot price
-        (uint160 preSpotSqrtPrice,,,) = IPoolManager(address(manager)).getSlot0(id);
+        (uint160 preSpotSqrtPrice,,,) = manager.getSlot0(id);
         uint160 preTwapSqrtPrice = TickMath.getSqrtPriceAtTick(preTwapTick);
 
         assertTrue(preTwapSqrtPrice > 0, "TWAP should be active after warmup");
@@ -713,7 +713,7 @@ contract InvariantTest is Test {
         );
 
         // Record post-manipulation spot and TWAP
-        (uint160 postSpotSqrtPrice,,,) = IPoolManager(address(manager)).getSlot0(id);
+        (uint160 postSpotSqrtPrice,,,) = manager.getSlot0(id);
 
         (int56[] memory postCumulatives,) = hook.observe(key, secondsAgos);
         int56 postDelta = postCumulatives[1] - postCumulatives[0];

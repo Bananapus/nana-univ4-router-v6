@@ -1,9 +1,9 @@
 // SPDX-License-Identifier: MIT
-pragma solidity ^0.8.26;
+pragma solidity 0.8.28;
 
 import {Test} from "forge-std/Test.sol";
-import {PoolManager} from "@uniswap/v4-core/src/PoolManager.sol";
 import {IPoolManager} from "@uniswap/v4-core/src/interfaces/IPoolManager.sol";
+import {V4PoolManagerDeployer} from "hookmate/artifacts/V4PoolManager.sol";
 import {IHooks} from "@uniswap/v4-core/src/interfaces/IHooks.sol";
 import {StateLibrary} from "@uniswap/v4-core/src/libraries/StateLibrary.sol";
 import {SwapParams, ModifyLiquidityParams} from "@uniswap/v4-core/src/types/PoolOperation.sol";
@@ -349,7 +349,7 @@ contract TestObserve is Test {
     MockJBPrices_Observe mockJBPrices;
     // forge-lint: disable-next-line(mixed-case-variable)
     MockJBTerminalStore_Observe mockJBTerminalStore;
-    PoolManager manager;
+    IPoolManager manager;
     PoolSwapTest swapRouter;
     JuiceboxSwapRouter jbSwapRouter;
     PoolModifyLiquidityTest modifyLiquidityRouter;
@@ -367,10 +367,10 @@ contract TestObserve is Test {
         vm.warp(10_000);
 
         // Deploy core contracts
-        manager = new PoolManager(address(this));
-        swapRouter = new PoolSwapTest(IPoolManager(address(manager)));
-        jbSwapRouter = new JuiceboxSwapRouter(IPoolManager(address(manager)));
-        modifyLiquidityRouter = new PoolModifyLiquidityTest(IPoolManager(address(manager)));
+        manager = IPoolManager(address(V4PoolManagerDeployer.deploy(address(this))));
+        swapRouter = new PoolSwapTest(manager);
+        jbSwapRouter = new JuiceboxSwapRouter(manager);
+        modifyLiquidityRouter = new PoolModifyLiquidityTest(manager);
 
         // Deploy mock Juicebox contracts
         mockJBTokens = new MockJBTokens_Observe();
@@ -392,7 +392,7 @@ contract TestObserve is Test {
         );
 
         bytes memory constructorArgs = abi.encode(
-            IPoolManager(address(manager)),
+            manager,
             IJBTokens(address(mockJBTokens)),
             IJBDirectory(address(mockJBDirectory)),
             IJBPrices(address(mockJBPrices))
@@ -401,7 +401,7 @@ contract TestObserve is Test {
         (, bytes32 salt) = HookMiner.find(address(this), flags, type(JBUniswapV4Hook).creationCode, constructorArgs);
 
         hook = new JBUniswapV4Hook{salt: salt}(
-            IPoolManager(address(manager)),
+            manager,
             IJBTokens(address(mockJBTokens)),
             IJBDirectory(address(mockJBDirectory)),
             IJBPrices(address(mockJBPrices))
@@ -619,7 +619,7 @@ contract TestObserve is Test {
         // observe(0) at t=10200 should transform it:
         //   tickCumulative = lastTickCumulative + tick * (10200 - 10100)
         //   where tick is the current pool tick
-        IPoolManager pm = IPoolManager(address(manager));
+        IPoolManager pm = manager;
         (, int24 currentTick,,) = pm.getSlot0(id);
         uint128 currentLiquidity = pm.getLiquidity(id);
 

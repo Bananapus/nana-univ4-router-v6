@@ -1,10 +1,10 @@
 // SPDX-License-Identifier: MIT
-pragma solidity ^0.8.26;
+pragma solidity 0.8.28;
 
 import {Test} from "forge-std/Test.sol";
 
-import {PoolManager} from "@uniswap/v4-core/src/PoolManager.sol";
 import {IPoolManager} from "@uniswap/v4-core/src/interfaces/IPoolManager.sol";
+import {V4PoolManagerDeployer} from "hookmate/artifacts/V4PoolManager.sol";
 import {IHooks} from "@uniswap/v4-core/src/interfaces/IHooks.sol";
 import {Hooks} from "@uniswap/v4-core/src/libraries/Hooks.sol";
 import {TickMath} from "@uniswap/v4-core/src/libraries/TickMath.sol";
@@ -42,14 +42,20 @@ contract CodexNemesisPoCTest is Test {
     uint160 internal constant SQRT_PRICE_1_1 = 79_228_162_514_264_337_593_543_950_336;
 
     JBUniswapV4Hook internal hook;
+    // forge-lint: disable-next-line(mixed-case-variable)
     MockJBTokens_AuditGaps internal mockJBTokens;
+    // forge-lint: disable-next-line(mixed-case-variable)
     MockJBDirectory_AuditGaps internal mockJBDirectory;
+    // forge-lint: disable-next-line(mixed-case-variable)
     MockJBMultiTerminal_AuditGaps internal mockJBMultiTerminal;
+    // forge-lint: disable-next-line(mixed-case-variable)
     MockJBController_AuditGaps internal mockJBController;
+    // forge-lint: disable-next-line(mixed-case-variable)
     MockJBPrices_AuditGaps internal mockJBPrices;
+    // forge-lint: disable-next-line(mixed-case-variable)
     MockJBTerminalStore_AuditGaps internal mockJBTerminalStore;
 
-    PoolManager internal manager;
+    IPoolManager internal manager;
     PoolModifyLiquidityTest internal modifyLiquidityRouter;
     JuiceboxSwapRouter internal jbSwapRouter;
 
@@ -60,9 +66,9 @@ contract CodexNemesisPoCTest is Test {
     bool internal zeroForOne;
 
     function setUp() public {
-        manager = new PoolManager(address(this));
-        modifyLiquidityRouter = new PoolModifyLiquidityTest(IPoolManager(address(manager)));
-        jbSwapRouter = new JuiceboxSwapRouter(IPoolManager(address(manager)));
+        manager = IPoolManager(address(V4PoolManagerDeployer.deploy(address(this))));
+        modifyLiquidityRouter = new PoolModifyLiquidityTest(manager);
+        jbSwapRouter = new JuiceboxSwapRouter(manager);
 
         mockJBTokens = new MockJBTokens_AuditGaps();
         mockJBDirectory = new MockJBDirectory_AuditGaps();
@@ -82,7 +88,7 @@ contract CodexNemesisPoCTest is Test {
         );
 
         bytes memory constructorArgs = abi.encode(
-            IPoolManager(address(manager)),
+            manager,
             IJBTokens(address(mockJBTokens)),
             IJBDirectory(address(mockJBDirectory)),
             IJBPrices(address(mockJBPrices))
@@ -90,7 +96,7 @@ contract CodexNemesisPoCTest is Test {
         (, bytes32 salt) = HookMiner.find(address(this), flags, type(JBUniswapV4Hook).creationCode, constructorArgs);
 
         hook = new JBUniswapV4Hook{salt: salt}(
-            IPoolManager(address(manager)),
+            manager,
             IJBTokens(address(mockJBTokens)),
             IJBDirectory(address(mockJBDirectory)),
             IJBPrices(address(mockJBPrices))
@@ -158,6 +164,7 @@ contract CodexNemesisPoCTest is Test {
 
         SwapParams memory params = SwapParams({
             zeroForOne: zeroForOne,
+            // forge-lint: disable-next-line(unsafe-typecast)
             amountSpecified: -int256(amountIn),
             sqrtPriceLimitX96: zeroForOne ? TickMath.MIN_SQRT_PRICE + 1 : TickMath.MAX_SQRT_PRICE - 1
         });
