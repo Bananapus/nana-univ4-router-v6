@@ -38,7 +38,7 @@ Forward-looking risk analysis of `JBUniswapV4Hook` (~963 lines) and `Oracle` lib
 
 ### 3.1 Three-way routing logic
 
-- `_beforeSwap` evaluates two routes: V4 pool (via TWAP-based `estimateUniswapOutput`) and Juicebox (via `calculateExpectedTokensWithCurrency` for buying or `calculateExpectedOutputFromSelling` for selling). Picks the one with higher estimated output.
+- `_beforeSwap` evaluates two routes: V4 pool (via TWAP-based `estimateUniswapOutput`) and Juicebox (via `previewPayFor` for buying, falling back to `calculateExpectedTokensWithCurrency` if the preview reverts or no terminal exists; or `calculateExpectedOutputFromSelling` for selling). Picks the one with higher estimated output.
 - If neither token is a JB project token (`TOKENS.projectIdOf` returns 0 for both), routing skips JB comparison entirely and passes through to V4 (`ZERO_DELTA`).
 - When both tokens are JB project tokens, only the buy-side (minting into the output project) is compared. Sell-side evaluation is omitted to save gas. This may miss sell-side opportunities.
 
@@ -93,9 +93,9 @@ Forward-looking risk analysis of `JBUniswapV4Hook` (~963 lines) and `Oracle` lib
 
 When `JBUniswapV4Hook` is composed with `JBBuybackHook` (or any data hook) on the same project, the routing estimate can diverge from actual execution:
 
-1. **`calculateExpectedTokensWithCurrency`** reads the ruleset's **static weight** (`ruleset.weight`) to estimate how many tokens a Juicebox payment would mint. This estimate drives the V4-vs-JB routing decision in `_beforeSwap`.
-2. If the project's data hook **overrides weight at payment time** (e.g., `JBBuybackHook` adjusts weight based on its own TWAP comparison), the actual tokens minted will differ from the static estimate.
-3. **Consequences**:
+1. **`_beforeSwap` buy-side estimation** now prefers `previewPayFor` on the project's primary terminal, which can incorporate data-hook effects (e.g., `JBBuybackHook` weight overrides) into the estimate. If `previewPayFor` reverts or the terminal does not exist, the hook falls back to `calculateExpectedTokensWithCurrency`, which reads the ruleset's **static weight** (`ruleset.weight`). This two-tier approach reduces the divergence between estimation and execution for data-hooked projects.
+2. If `previewPayFor` is available, the estimate closely tracks actual `terminal.pay()` behavior. If only the static fallback is used and the project's data hook **overrides weight at payment time**, the actual tokens minted will differ from the static estimate.
+3. **Consequences when only the static fallback is active**:
    - The hook may route through JB when V4 would have been better (static weight overestimates issuance, but the data hook reduces it at execution time).
    - The hook may route through V4 when JB would have been better (static weight underestimates issuance because the data hook increases it).
    - In the worst case, the JB route is selected but `terminal.pay()` returns fewer tokens than estimated, and the user receives a suboptimal rate. The `amountOutMin` parameter in hookData provides a safety floor against excessive slippage.

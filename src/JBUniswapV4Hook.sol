@@ -35,6 +35,7 @@ import {JBConstants} from "@bananapus/core-v6/src/libraries/JBConstants.sol";
 import {JBRulesetMetadataResolver} from "@bananapus/core-v6/src/libraries/JBRulesetMetadataResolver.sol";
 
 import {JBCashOutHookSpecification} from "@bananapus/core-v6/src/structs/JBCashOutHookSpecification.sol";
+import {JBPayHookSpecification} from "@bananapus/core-v6/src/structs/JBPayHookSpecification.sol";
 import {JBRuleset} from "@bananapus/core-v6/src/structs/JBRuleset.sol";
 import {JBRulesetMetadata} from "@bananapus/core-v6/src/structs/JBRulesetMetadata.sol";
 
@@ -570,6 +571,9 @@ contract JBUniswapV4Hook is BaseHook {
         // Validate slippage protection for V4 swaps
         // Note: For Juicebox routes, slippage is already validated in _beforeSwap
         // For V4 swaps (where we returned ZERO_DELTA), this validates the actual swap output
+        // In _afterSwap, use >= 32 (not == 32 as in _beforeSwap) because external V4 swaps may include
+        // additional hookData beyond the amountOutMin prefix. _beforeSwap requires exactly 32 bytes for
+        // Juicebox-routed swaps; _afterSwap is more permissive to support arbitrary external swap metadata.
         if (hookData.length >= 32) {
             uint256 amountOutMin = abi.decode(hookData, (uint256));
             if (amountOutMin > 0) {
@@ -681,10 +685,33 @@ contract JBUniswapV4Hook is BaseHook {
         IJBTerminal jbTerminal = _getPrimaryTerminal({projectId: projectId, token: terminalToken});
 
         if (isBuyingJBToken) {
-            // Buying JB tokens: compare Juicebox vs Uniswap for getting JB tokens
-            juiceboxExpectedOutput = calculateExpectedTokensWithCurrency({
-                projectId: buyProjectId, paymentToken: tokenIn, paymentAmount: amountIn
-            });
+            // Buying JB tokens: compare Juicebox vs Uniswap for getting JB tokens.
+            // Prefer previewPayFor (accounts for data hooks like buyback hooks) over static weight estimation.
+            // Guard: terminal must exist for preview. Fall back to static estimation if not.
+            if (address(jbTerminal) != address(0)) {
+                // slither-disable-next-line unused-return
+                try jbTerminal.previewPayFor({
+                    projectId: buyProjectId,
+                    token: _normalizeToken(tokenIn),
+                    amount: amountIn,
+                    beneficiary: address(this),
+                    metadata: bytes("")
+                }) returns (
+                    JBRuleset memory, uint256 beneficiaryTokenCount, uint256, JBPayHookSpecification[] memory
+                ) {
+                    juiceboxExpectedOutput = beneficiaryTokenCount;
+                } catch {
+                    // Fall back to static weight estimation if preview reverts.
+                    juiceboxExpectedOutput = calculateExpectedTokensWithCurrency({
+                        projectId: buyProjectId, paymentToken: tokenIn, paymentAmount: amountIn
+                    });
+                }
+            } else {
+                // No terminal available — use static weight estimation.
+                juiceboxExpectedOutput = calculateExpectedTokensWithCurrency({
+                    projectId: buyProjectId, paymentToken: tokenIn, paymentAmount: amountIn
+                });
+            }
         } else if (isSellingJBToken) {
             // Selling JB tokens: compare Juicebox vs Uniswap for getting output tokens
             // NOTE: When cashOutTaxRate == 0, the bonding curve is linear — each token redeems for its
@@ -998,9 +1025,10 @@ contract JBUniswapV4Hook is BaseHook {
                 });
         }
 
-        // Settle output back to PoolManager
+        // Settle output back to PoolManager.
         _settleOutput({outputCurrency: outputCurrency, amount: outputReceived});
 
+        // Reset the routing flag after the swap completes.
         _routing = false;
 
         return outputReceived;

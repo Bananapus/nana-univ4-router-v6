@@ -21,7 +21,7 @@ Swap arrives → JBUniswapV4Hook._beforeSwap()
   → Is a JB project token involved?
     NO → return ZERO_DELTA (normal V4 swap)
     YES →
-      → Buying: calculateExpectedTokensWithCurrency (weight × price - reserved rate)
+      → Buying: previewPayFor (data-hook-aware), fallback to calculateExpectedTokensWithCurrency (weight × price - reserved rate)
       → Selling: calculateExpectedOutputFromSelling (total surplus bonding curve - fee)
       → V4: estimateUniswapOutput (TWAP-based, 30-min window)
       → Pick highest output:
