@@ -1,11 +1,11 @@
 // SPDX-License-Identifier: MIT
-pragma solidity ^0.8.26;
+pragma solidity 0.8.28;
 
 import {Test} from "forge-std/Test.sol";
 import {console} from "forge-std/console.sol";
 
-import {PoolManager} from "@uniswap/v4-core/src/PoolManager.sol";
 import {IPoolManager} from "@uniswap/v4-core/src/interfaces/IPoolManager.sol";
+import {V4PoolManagerDeployer} from "hookmate/artifacts/V4PoolManager.sol";
 import {IHooks} from "@uniswap/v4-core/src/interfaces/IHooks.sol";
 import {StateLibrary} from "@uniswap/v4-core/src/libraries/StateLibrary.sol";
 import {SwapParams, ModifyLiquidityParams} from "@uniswap/v4-core/src/types/PoolOperation.sol";
@@ -402,7 +402,7 @@ contract TestStructuralArbitrage is Test {
     MockJBPricesSA mockJbPrices;
     ConcaveBondingCurveStore terminalStore;
 
-    PoolManager manager;
+    IPoolManager manager;
     PoolSwapTest swapRouter;
     JuiceboxSwapRouter jbSwapRouter;
     PoolModifyLiquidityTest modifyLiquidityRouter;
@@ -432,10 +432,10 @@ contract TestStructuralArbitrage is Test {
         vm.warp(10_000);
 
         // Deploy V4 infrastructure
-        manager = new PoolManager(address(this));
-        swapRouter = new PoolSwapTest(IPoolManager(address(manager)));
-        jbSwapRouter = new JuiceboxSwapRouter(IPoolManager(address(manager)));
-        modifyLiquidityRouter = new PoolModifyLiquidityTest(IPoolManager(address(manager)));
+        manager = IPoolManager(address(V4PoolManagerDeployer.deploy(address(this))));
+        swapRouter = new PoolSwapTest(manager);
+        jbSwapRouter = new JuiceboxSwapRouter(manager);
+        modifyLiquidityRouter = new PoolModifyLiquidityTest(manager);
 
         // Deploy JB mocks
         mockJbTokens = new MockJBTokensSA();
@@ -460,7 +460,7 @@ contract TestStructuralArbitrage is Test {
         );
 
         bytes memory constructorArgs = abi.encode(
-            IPoolManager(address(manager)),
+            manager,
             IJBTokens(address(mockJbTokens)),
             IJBDirectory(address(mockJbDirectory)),
             IJBPrices(address(mockJbPrices))
@@ -469,7 +469,7 @@ contract TestStructuralArbitrage is Test {
         (, bytes32 salt) = HookMiner.find(address(this), flags, type(JBUniswapV4Hook).creationCode, constructorArgs);
 
         hook = new JBUniswapV4Hook{salt: salt}(
-            IPoolManager(address(manager)),
+            manager,
             IJBTokens(address(mockJbTokens)),
             IJBDirectory(address(mockJbDirectory)),
             IJBPrices(address(mockJbPrices))

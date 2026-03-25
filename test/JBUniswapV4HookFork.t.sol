@@ -1,11 +1,11 @@
 // SPDX-License-Identifier: MIT
-pragma solidity ^0.8.26;
+pragma solidity 0.8.28;
 
 import {Test, Vm} from "forge-std/Test.sol";
 import {console} from "forge-std/console.sol";
 
-import {PoolManager} from "@uniswap/v4-core/src/PoolManager.sol";
 import {IPoolManager} from "@uniswap/v4-core/src/interfaces/IPoolManager.sol";
+import {V4PoolManagerDeployer} from "hookmate/artifacts/V4PoolManager.sol";
 import {IHooks} from "@uniswap/v4-core/src/interfaces/IHooks.sol";
 import {StateLibrary} from "@uniswap/v4-core/src/libraries/StateLibrary.sol";
 import {SwapParams, ModifyLiquidityParams} from "@uniswap/v4-core/src/types/PoolOperation.sol";
@@ -142,7 +142,7 @@ contract JBUniswapV4HookForkTest is Test {
     address NANA;
 
     JBUniswapV4Hook hook;
-    PoolManager manager;
+    IPoolManager manager;
     PoolSwapTest swapRouter;
     JuiceboxSwapRouter jbSwapRouter;
     PoolModifyLiquidityTest modifyLiquidityRouter;
@@ -182,10 +182,10 @@ contract JBUniswapV4HookForkTest is Test {
         NANA = address(nanaToken);
 
         // Deploy Uniswap v4 core contracts
-        manager = new PoolManager(address(this));
-        swapRouter = new PoolSwapTest(IPoolManager(address(manager)));
-        jbSwapRouter = new JuiceboxSwapRouter(IPoolManager(address(manager)));
-        modifyLiquidityRouter = new PoolModifyLiquidityTest(IPoolManager(address(manager)));
+        manager = IPoolManager(address(V4PoolManagerDeployer.deploy(address(this))));
+        swapRouter = new PoolSwapTest(manager);
+        jbSwapRouter = new JuiceboxSwapRouter(manager);
+        modifyLiquidityRouter = new PoolModifyLiquidityTest(manager);
 
         // Deploy the hook with freshly deployed JB contracts
         uint160 flags = uint160(
@@ -195,19 +195,13 @@ contract JBUniswapV4HookForkTest is Test {
         );
 
         bytes memory constructorArgs = abi.encode(
-            IPoolManager(address(manager)),
-            IJBTokens(address(jbTokens)),
-            IJBDirectory(address(jbDirectory)),
-            IJBPrices(address(jbPrices))
+            manager, IJBTokens(address(jbTokens)), IJBDirectory(address(jbDirectory)), IJBPrices(address(jbPrices))
         );
 
         (, bytes32 salt) = HookMiner.find(address(this), flags, type(JBUniswapV4Hook).creationCode, constructorArgs);
 
         hook = new JBUniswapV4Hook{salt: salt}(
-            IPoolManager(address(manager)),
-            IJBTokens(address(jbTokens)),
-            IJBDirectory(address(jbDirectory)),
-            IJBPrices(address(jbPrices))
+            manager, IJBTokens(address(jbTokens)), IJBDirectory(address(jbDirectory)), IJBPrices(address(jbPrices))
         );
 
         // Set up a simple pool with NANA/WETH (currencies must be ordered: currency0 < currency1)

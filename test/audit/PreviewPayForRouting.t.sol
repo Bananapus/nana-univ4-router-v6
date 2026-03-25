@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
-pragma solidity ^0.8.26;
+pragma solidity 0.8.28;
 
 // ─── Forge test framework
 // ────────────────────────────────────────────
@@ -7,8 +7,8 @@ import {Test} from "forge-std/Test.sol";
 
 // ─── Uniswap V4 core
 // ────────────────────────────────────────────────
-import {PoolManager} from "@uniswap/v4-core/src/PoolManager.sol";
 import {IPoolManager} from "@uniswap/v4-core/src/interfaces/IPoolManager.sol";
+import {V4PoolManagerDeployer} from "hookmate/artifacts/V4PoolManager.sol";
 import {IHooks} from "@uniswap/v4-core/src/interfaces/IHooks.sol";
 import {Hooks} from "@uniswap/v4-core/src/libraries/Hooks.sol";
 import {TickMath} from "@uniswap/v4-core/src/libraries/TickMath.sol";
@@ -273,7 +273,7 @@ contract PreviewPayForRoutingTest is Test {
     MockJBController_Preview internal mockController;
     MockJBPrices_Preview internal mockPrices;
 
-    PoolManager internal manager;
+    IPoolManager internal manager;
     PoolModifyLiquidityTest internal modifyLiqRouter;
     JuiceboxSwapRouter internal jbSwapRouter;
 
@@ -285,9 +285,9 @@ contract PreviewPayForRoutingTest is Test {
 
     function setUp() public {
         // Deploy V4 core.
-        manager = new PoolManager(address(this));
-        modifyLiqRouter = new PoolModifyLiquidityTest(IPoolManager(address(manager)));
-        jbSwapRouter = new JuiceboxSwapRouter(IPoolManager(address(manager)));
+        manager = IPoolManager(address(V4PoolManagerDeployer.deploy(address(this))));
+        modifyLiqRouter = new PoolModifyLiquidityTest(manager);
+        jbSwapRouter = new JuiceboxSwapRouter(manager);
 
         // Deploy mock JB contracts.
         mockTokens = new MockJBTokens_Preview();
@@ -307,7 +307,7 @@ contract PreviewPayForRoutingTest is Test {
                 | Hooks.AFTER_REMOVE_LIQUIDITY_FLAG
         );
         bytes memory ctorArgs = abi.encode(
-            IPoolManager(address(manager)),
+            manager,
             IJBTokens(address(mockTokens)),
             IJBDirectory(address(mockDirectory)),
             IJBPrices(address(mockPrices))
@@ -316,7 +316,7 @@ contract PreviewPayForRoutingTest is Test {
 
         // Deploy hook at the mined address.
         hook = new JBUniswapV4Hook{salt: salt}(
-            IPoolManager(address(manager)),
+            manager,
             IJBTokens(address(mockTokens)),
             IJBDirectory(address(mockDirectory)),
             IJBPrices(address(mockPrices))
@@ -428,7 +428,7 @@ contract PreviewPayForFallbackTest is Test {
     MockJBController_Preview internal mockController;
     MockJBPrices_Preview internal mockPrices;
 
-    PoolManager internal manager;
+    IPoolManager internal manager;
     PoolModifyLiquidityTest internal modifyLiqRouter;
     JuiceboxSwapRouter internal jbSwapRouter;
 
@@ -440,9 +440,9 @@ contract PreviewPayForFallbackTest is Test {
 
     function setUp() public {
         // Deploy V4 core.
-        manager = new PoolManager(address(this));
-        modifyLiqRouter = new PoolModifyLiquidityTest(IPoolManager(address(manager)));
-        jbSwapRouter = new JuiceboxSwapRouter(IPoolManager(address(manager)));
+        manager = IPoolManager(address(V4PoolManagerDeployer.deploy(address(this))));
+        modifyLiqRouter = new PoolModifyLiquidityTest(manager);
+        jbSwapRouter = new JuiceboxSwapRouter(manager);
 
         // Deploy mock JB contracts.
         mockTokens = new MockJBTokens_Preview();
@@ -462,7 +462,7 @@ contract PreviewPayForFallbackTest is Test {
                 | Hooks.AFTER_REMOVE_LIQUIDITY_FLAG
         );
         bytes memory ctorArgs = abi.encode(
-            IPoolManager(address(manager)),
+            manager,
             IJBTokens(address(mockTokens)),
             IJBDirectory(address(mockDirectory)),
             IJBPrices(address(mockPrices))
@@ -470,7 +470,7 @@ contract PreviewPayForFallbackTest is Test {
         (, bytes32 salt) = HookMiner.find(address(this), flags, type(JBUniswapV4Hook).creationCode, ctorArgs);
 
         hook = new JBUniswapV4Hook{salt: salt}(
-            IPoolManager(address(manager)),
+            manager,
             IJBTokens(address(mockTokens)),
             IJBDirectory(address(mockDirectory)),
             IJBPrices(address(mockPrices))
@@ -585,7 +585,7 @@ contract NoTerminalFallbackTest is Test {
     MockJBController_Preview internal mockController;
     MockJBPrices_Preview internal mockPrices;
 
-    PoolManager internal manager;
+    IPoolManager internal manager;
     PoolModifyLiquidityTest internal modifyLiqRouter;
     JuiceboxSwapRouter internal jbSwapRouter;
 
@@ -597,9 +597,9 @@ contract NoTerminalFallbackTest is Test {
 
     function setUp() public {
         // Deploy V4 core.
-        manager = new PoolManager(address(this));
-        modifyLiqRouter = new PoolModifyLiquidityTest(IPoolManager(address(manager)));
-        jbSwapRouter = new JuiceboxSwapRouter(IPoolManager(address(manager)));
+        manager = IPoolManager(address(V4PoolManagerDeployer.deploy(address(this))));
+        modifyLiqRouter = new PoolModifyLiquidityTest(manager);
+        jbSwapRouter = new JuiceboxSwapRouter(manager);
 
         // Deploy mock JB contracts.
         mockTokens = new MockJBTokens_Preview();
@@ -617,7 +617,7 @@ contract NoTerminalFallbackTest is Test {
                 | Hooks.AFTER_REMOVE_LIQUIDITY_FLAG
         );
         bytes memory ctorArgs = abi.encode(
-            IPoolManager(address(manager)),
+            manager,
             IJBTokens(address(mockTokens)),
             IJBDirectory(address(mockDirectory)),
             IJBPrices(address(mockPrices))
@@ -625,7 +625,7 @@ contract NoTerminalFallbackTest is Test {
         (, bytes32 salt) = HookMiner.find(address(this), flags, type(JBUniswapV4Hook).creationCode, ctorArgs);
 
         hook = new JBUniswapV4Hook{salt: salt}(
-            IPoolManager(address(manager)),
+            manager,
             IJBTokens(address(mockTokens)),
             IJBDirectory(address(mockDirectory)),
             IJBPrices(address(mockPrices))

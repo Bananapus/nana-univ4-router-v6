@@ -1,11 +1,11 @@
 // SPDX-License-Identifier: MIT
-pragma solidity ^0.8.26;
+pragma solidity 0.8.28;
 
 import {Test} from "forge-std/Test.sol";
 import {console} from "forge-std/console.sol";
 
-import {PoolManager} from "@uniswap/v4-core/src/PoolManager.sol";
 import {IPoolManager} from "@uniswap/v4-core/src/interfaces/IPoolManager.sol";
+import {V4PoolManagerDeployer} from "hookmate/artifacts/V4PoolManager.sol";
 import {IHooks} from "@uniswap/v4-core/src/interfaces/IHooks.sol";
 import {StateLibrary} from "@uniswap/v4-core/src/libraries/StateLibrary.sol";
 import {SwapParams, ModifyLiquidityParams} from "@uniswap/v4-core/src/types/PoolOperation.sol";
@@ -361,7 +361,7 @@ contract TestAuditGaps_TWAPManipulationCost is Test {
     MockJBPrices_AuditGaps mockJBPrices;
     // forge-lint: disable-next-line(mixed-case-variable)
     MockJBTerminalStore_AuditGaps mockJBTerminalStore;
-    PoolManager manager;
+    IPoolManager manager;
     PoolSwapTest swapRouter;
     JuiceboxSwapRouter jbSwapRouter;
     PoolModifyLiquidityTest modifyLiquidityRouter;
@@ -378,10 +378,10 @@ contract TestAuditGaps_TWAPManipulationCost is Test {
         // Start at a reasonable timestamp
         vm.warp(100_000);
 
-        manager = new PoolManager(address(this));
-        swapRouter = new PoolSwapTest(IPoolManager(address(manager)));
-        jbSwapRouter = new JuiceboxSwapRouter(IPoolManager(address(manager)));
-        modifyLiquidityRouter = new PoolModifyLiquidityTest(IPoolManager(address(manager)));
+        manager = IPoolManager(address(V4PoolManagerDeployer.deploy(address(this))));
+        swapRouter = new PoolSwapTest(manager);
+        jbSwapRouter = new JuiceboxSwapRouter(manager);
+        modifyLiquidityRouter = new PoolModifyLiquidityTest(manager);
 
         mockJBTokens = new MockJBTokens_AuditGaps();
         mockJBDirectory = new MockJBDirectory_AuditGaps();
@@ -401,7 +401,7 @@ contract TestAuditGaps_TWAPManipulationCost is Test {
         );
 
         bytes memory constructorArgs = abi.encode(
-            IPoolManager(address(manager)),
+            manager,
             IJBTokens(address(mockJBTokens)),
             IJBDirectory(address(mockJBDirectory)),
             IJBPrices(address(mockJBPrices))
@@ -410,7 +410,7 @@ contract TestAuditGaps_TWAPManipulationCost is Test {
         (, bytes32 salt) = HookMiner.find(address(this), flags, type(JBUniswapV4Hook).creationCode, constructorArgs);
 
         hook = new JBUniswapV4Hook{salt: salt}(
-            IPoolManager(address(manager)),
+            manager,
             IJBTokens(address(mockJBTokens)),
             IJBDirectory(address(mockJBDirectory)),
             IJBPrices(address(mockJBPrices))
@@ -545,7 +545,7 @@ contract TestAuditGaps_TWAPManipulationCost is Test {
         assertLt(deviationBps, 2000, "Single-block manipulation should cause <20% TWAP deviation");
 
         // Additional insight: log the spot price for comparison
-        (uint160 spotSqrtPrice,,,) = IPoolManager(address(manager)).getSlot0(id);
+        (uint160 spotSqrtPrice,,,) = manager.getSlot0(id);
         uint256 spotEstimate;
         if (spotSqrtPrice <= type(uint128).max) {
             uint256 ratioX192 = uint256(spotSqrtPrice) * spotSqrtPrice;
@@ -746,7 +746,7 @@ contract TestAuditGaps_SpotFallbackSandwichWindow is Test {
     MockJBPrices_AuditGaps mockJBPrices;
     // forge-lint: disable-next-line(mixed-case-variable)
     MockJBTerminalStore_AuditGaps mockJBTerminalStore;
-    PoolManager manager;
+    IPoolManager manager;
     PoolSwapTest swapRouter;
     JuiceboxSwapRouter jbSwapRouter;
     PoolModifyLiquidityTest modifyLiquidityRouter;
@@ -763,10 +763,10 @@ contract TestAuditGaps_SpotFallbackSandwichWindow is Test {
         // Start at a reasonable timestamp
         vm.warp(100_000);
 
-        manager = new PoolManager(address(this));
-        swapRouter = new PoolSwapTest(IPoolManager(address(manager)));
-        jbSwapRouter = new JuiceboxSwapRouter(IPoolManager(address(manager)));
-        modifyLiquidityRouter = new PoolModifyLiquidityTest(IPoolManager(address(manager)));
+        manager = IPoolManager(address(V4PoolManagerDeployer.deploy(address(this))));
+        swapRouter = new PoolSwapTest(manager);
+        jbSwapRouter = new JuiceboxSwapRouter(manager);
+        modifyLiquidityRouter = new PoolModifyLiquidityTest(manager);
 
         mockJBTokens = new MockJBTokens_AuditGaps();
         mockJBDirectory = new MockJBDirectory_AuditGaps();
@@ -786,7 +786,7 @@ contract TestAuditGaps_SpotFallbackSandwichWindow is Test {
         );
 
         bytes memory constructorArgs = abi.encode(
-            IPoolManager(address(manager)),
+            manager,
             IJBTokens(address(mockJBTokens)),
             IJBDirectory(address(mockJBDirectory)),
             IJBPrices(address(mockJBPrices))
@@ -795,7 +795,7 @@ contract TestAuditGaps_SpotFallbackSandwichWindow is Test {
         (, bytes32 salt) = HookMiner.find(address(this), flags, type(JBUniswapV4Hook).creationCode, constructorArgs);
 
         hook = new JBUniswapV4Hook{salt: salt}(
-            IPoolManager(address(manager)),
+            manager,
             IJBTokens(address(mockJBTokens)),
             IJBDirectory(address(mockJBDirectory)),
             IJBPrices(address(mockJBPrices))

@@ -1,15 +1,15 @@
 // SPDX-License-Identifier: MIT
-pragma solidity ^0.8.26;
+pragma solidity 0.8.28;
 
 import {Test} from "forge-std/Test.sol";
 
-import {PoolManager} from "@uniswap/v4-core/src/PoolManager.sol";
 import {IPoolManager} from "@uniswap/v4-core/src/interfaces/IPoolManager.sol";
+import {V4PoolManagerDeployer} from "hookmate/artifacts/V4PoolManager.sol";
 import {IHooks} from "@uniswap/v4-core/src/interfaces/IHooks.sol";
 import {PoolKey} from "@uniswap/v4-core/src/types/PoolKey.sol";
 import {PoolId, PoolIdLibrary} from "@uniswap/v4-core/src/types/PoolId.sol";
 import {Currency} from "@uniswap/v4-core/src/types/Currency.sol";
-import {TickMath} from "@uniswap/v4-core/src/libraries/TickMath.sol";
+
 import {Hooks} from "@uniswap/v4-core/src/libraries/Hooks.sol";
 import {FullMath} from "@uniswap/v4-core/src/libraries/FullMath.sol";
 import {LPFeeLibrary} from "@uniswap/v4-core/src/libraries/LPFeeLibrary.sol";
@@ -40,6 +40,7 @@ contract StubJBDirectory {
 }
 
 contract StubJBPrices {
+    // forge-lint: disable-next-line(mixed-case-function)
     function DEFAULT_PROJECT_ID() external pure returns (uint256) {
         return 0;
     }
@@ -57,7 +58,7 @@ contract DynamicPoolFeeTest is Test {
     using PoolIdLibrary for PoolKey;
     using StateLibrary for IPoolManager;
 
-    PoolManager manager;
+    IPoolManager manager;
     PoolModifyLiquidityTest modifyLiquidityRouter;
     JBUniswapV4Hook hook;
 
@@ -67,8 +68,8 @@ contract DynamicPoolFeeTest is Test {
     uint160 constant SQRT_PRICE_1_1 = 79_228_162_514_264_337_593_543_950_336;
 
     function setUp() public {
-        manager = new PoolManager(address(this));
-        modifyLiquidityRouter = new PoolModifyLiquidityTest(IPoolManager(address(manager)));
+        manager = IPoolManager(address(V4PoolManagerDeployer.deploy(address(this))));
+        modifyLiquidityRouter = new PoolModifyLiquidityTest(manager);
 
         StubJBTokens stubTokens = new StubJBTokens();
         StubJBDirectory stubDirectory = new StubJBDirectory();
@@ -82,7 +83,7 @@ contract DynamicPoolFeeTest is Test {
         );
 
         bytes memory constructorArgs = abi.encode(
-            IPoolManager(address(manager)),
+            manager,
             IJBTokens(address(stubTokens)),
             IJBDirectory(address(stubDirectory)),
             IJBPrices(address(stubPrices))
@@ -91,7 +92,7 @@ contract DynamicPoolFeeTest is Test {
         (, bytes32 salt) = HookMiner.find(address(this), flags, type(JBUniswapV4Hook).creationCode, constructorArgs);
 
         hook = new JBUniswapV4Hook{salt: salt}(
-            IPoolManager(address(manager)),
+            manager,
             IJBTokens(address(stubTokens)),
             IJBDirectory(address(stubDirectory)),
             IJBPrices(address(stubPrices))

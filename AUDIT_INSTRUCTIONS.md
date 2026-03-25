@@ -387,7 +387,7 @@ See [RISKS.md](./RISKS.md) for the complete set of documented risks and trust as
 
 ## Compiler and Version Info
 
-- **Solidity**: ^0.8.26
+- **Solidity**: 0.8.28
 - **EVM target**: Cancun
 - **Optimizer**: via-IR, 200 runs
 - **Fuzz runs**: 4,096 (invariant: 1,024 runs, depth 100)
