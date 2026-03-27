@@ -36,7 +36,7 @@ contract RevertingDecimalsERC20 is MockERC20 {
     }
 }
 
-contract CodexNemesisPoCTest is Test {
+contract JBUniswapV4HookDecimalsTest is Test {
     using PoolIdLibrary for PoolKey;
 
     uint160 internal constant SQRT_PRICE_1_1 = 79_228_162_514_264_337_593_543_950_336;
@@ -175,7 +175,7 @@ contract CodexNemesisPoCTest is Test {
     }
 }
 
-contract CodexProtocolFeePoCTest is Test {
+contract JBUniswapV4HookProtocolFeeTest is Test {
     using PoolIdLibrary for PoolKey;
 
     uint160 internal constant SQRT_PRICE_1_1 = 79_228_162_514_264_337_593_543_950_336;
