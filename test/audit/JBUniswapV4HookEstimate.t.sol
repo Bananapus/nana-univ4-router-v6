@@ -181,11 +181,17 @@ contract JBUniswapV4HookProtocolFeeTest is Test {
     uint160 internal constant SQRT_PRICE_1_1 = 79_228_162_514_264_337_593_543_950_336;
 
     JBUniswapV4Hook internal hook;
+    // forge-lint: disable-next-line(mixed-case-variable)
     MockJBTokens_AuditGaps internal mockJBTokens;
+    // forge-lint: disable-next-line(mixed-case-variable)
     MockJBDirectory_AuditGaps internal mockJBDirectory;
+    // forge-lint: disable-next-line(mixed-case-variable)
     MockJBMultiTerminal_AuditGaps internal mockJBMultiTerminal;
+    // forge-lint: disable-next-line(mixed-case-variable)
     MockJBController_AuditGaps internal mockJBController;
+    // forge-lint: disable-next-line(mixed-case-variable)
     MockJBPrices_AuditGaps internal mockJBPrices;
+    // forge-lint: disable-next-line(mixed-case-variable)
     MockJBTerminalStore_AuditGaps internal mockJBTerminalStore;
 
     IPoolManager internal manager;
