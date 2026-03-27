@@ -9,6 +9,7 @@ import {IPoolManager} from "@uniswap/v4-core/src/interfaces/IPoolManager.sol";
 import {FullMath} from "@uniswap/v4-core/src/libraries/FullMath.sol";
 import {Hooks} from "@uniswap/v4-core/src/libraries/Hooks.sol";
 import {LPFeeLibrary} from "@uniswap/v4-core/src/libraries/LPFeeLibrary.sol";
+import {ProtocolFeeLibrary} from "@uniswap/v4-core/src/libraries/ProtocolFeeLibrary.sol";
 import {StateLibrary} from "@uniswap/v4-core/src/libraries/StateLibrary.sol";
 import {TickMath} from "@uniswap/v4-core/src/libraries/TickMath.sol";
 import {BalanceDelta, BalanceDeltaLibrary} from "@uniswap/v4-core/src/types/BalanceDelta.sol";
@@ -57,6 +58,8 @@ import {Oracle} from "./libraries/Oracle.sol";
 /// in mind when choosing this hook for best-execution routing.
 contract JBUniswapV4Hook is BaseHook {
     using PoolIdLibrary for PoolKey;
+    using ProtocolFeeLibrary for uint16;
+    using ProtocolFeeLibrary for uint24;
     using StateLibrary for IPoolManager;
     using SafeERC20 for IERC20;
     using Oracle for Oracle.Observation[65_535];
@@ -376,16 +379,31 @@ contract JBUniswapV4Hook is BaseHook {
             }
         }
 
-        // Apply fee from pool key
-        // fee is in hundredths of a bip, so 3000 = 0.3%
-        if (key.fee > 0 && !LPFeeLibrary.isDynamicFee(key.fee)) {
-            estimatedOut = estimatedOut - FullMath.mulDiv({a: estimatedOut, b: key.fee, denominator: 1_000_000});
-        } else if (LPFeeLibrary.isDynamicFee(key.fee)) {
-            // For dynamic fee pools, key.fee is set to DYNAMIC_FEE_FLAG (0x800000), a sentinel value
-            // that is not a valid fee. Read the current LP fee from the pool's slot0 instead.
+        // Apply combined swap fee (protocol fee + LP fee).
+        // The protocol fee is directional and taken FIRST from the input amount,
+        // then the LP fee is taken from the remainder. We use Uniswap V4's
+        // ProtocolFeeLibrary.calculateSwapFee to compose them correctly.
+        // Fee values are in hundredths of a bip (pips), so 3000 = 0.3%.
+        {
+            // Read protocol fee from slot0 (directional: lower 12 bits = zeroForOne, upper 12 bits = oneForZero)
             // slither-disable-next-line unused-return
-            (,,, uint24 lpFee) = poolManager.getSlot0(PoolIdLibrary.toId(key));
-            estimatedOut = estimatedOut - FullMath.mulDiv({a: estimatedOut, b: lpFee, denominator: 1_000_000});
+            (,, uint24 protocolFee, uint24 slot0LpFee) = poolManager.getSlot0(PoolIdLibrary.toId(key));
+
+            // Determine the LP fee: use key.fee for static pools, slot0LpFee for dynamic pools
+            uint24 lpFee;
+            if (LPFeeLibrary.isDynamicFee(key.fee)) {
+                lpFee = slot0LpFee;
+            } else {
+                lpFee = key.fee;
+            }
+
+            // Extract the directional protocol fee and compose with LP fee
+            uint16 directionalProtocolFee = zeroForOne ? protocolFee.getZeroForOneFee() : protocolFee.getOneForZeroFee();
+            uint24 swapFee = directionalProtocolFee == 0 ? lpFee : directionalProtocolFee.calculateSwapFee(lpFee);
+
+            if (swapFee > 0) {
+                estimatedOut = estimatedOut - FullMath.mulDiv({a: estimatedOut, b: swapFee, denominator: 1_000_000});
+            }
         }
 
         return estimatedOut;
