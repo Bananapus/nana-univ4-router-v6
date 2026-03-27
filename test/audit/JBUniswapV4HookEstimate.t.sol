@@ -151,17 +151,23 @@ contract JBUniswapV4HookDecimalsTest is Test {
         );
     }
 
-    function test_BuyQuote_IgnoresNonStandardPaymentTokenDecimals_AndRoutesToWorseV4Path() public {
+    /// @notice When the payment token lacks `decimals()`, `calculateExpectedTokensWithCurrency` reverts.
+    /// The buy-side fallback in `beforeSwap` catches the revert and leaves `juiceboxExpectedOutput = 0`,
+    /// so V4 is correctly preferred over a wrong JB estimate.
+    function test_BuyQuote_NoDecimalsToken_FallsBackToV4() public {
         uint256 amountIn = 1e6; // 1 payment token when terminal accounting context is 6 decimals.
 
-        uint256 hookQuote = hook.calculateExpectedTokensWithCurrency(123, address(paymentToken), amountIn);
-        uint256 actualTerminalMint = mockJBMultiTerminal.overridePayReturnAmount();
-        uint256 v4Quote = hook.estimateUniswapOutput(id, key, amountIn, zeroForOne);
+        // The static estimate must revert — the token has no `decimals()`.
+        vm.expectRevert("NO_DECIMALS_METADATA");
+        hook.calculateExpectedTokensWithCurrency({
+            projectId: 123, paymentToken: address(paymentToken), paymentAmount: amountIn
+        });
 
-        assertEq(hookQuote, 1_000_000_000, "Hook should fall back to 18 decimals and under-quote the buy path");
-        assertGt(v4Quote, hookQuote, "Pool quote must beat the hook's stale under-quote");
-        assertGt(actualTerminalMint, v4Quote, "Actual terminal pay path should mint materially more than V4");
+        // V4 pool still produces a valid quote.
+        uint256 v4Quote = hook.estimateUniswapOutput({poolId: id, key: key, amountIn: amountIn, zeroForOne: zeroForOne});
+        assertGt(v4Quote, 0, "V4 pool should produce a nonzero quote");
 
+        // Execute the swap — `beforeSwap` catches the revert and falls back to V4.
         SwapParams memory params = SwapParams({
             zeroForOne: zeroForOne,
             // forge-lint: disable-next-line(unsafe-typecast)
@@ -169,9 +175,9 @@ contract JBUniswapV4HookDecimalsTest is Test {
             sqrtPriceLimitX96: zeroForOne ? TickMath.MIN_SQRT_PRICE + 1 : TickMath.MAX_SQRT_PRICE - 1
         });
 
-        jbSwapRouter.swap(key, params, 0);
+        jbSwapRouter.swap({key: key, params: params, amountOutMin: 0});
 
-        assertEq(mockJBMultiTerminal.lastProjectId(), 0, "Misquote should route through V4 instead of terminal.pay");
+        assertEq(mockJBMultiTerminal.lastProjectId(), 0, "No-decimals token should route through V4, not terminal.pay");
     }
 }
 

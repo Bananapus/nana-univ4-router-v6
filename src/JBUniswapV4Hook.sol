@@ -719,16 +719,29 @@ contract JBUniswapV4Hook is BaseHook {
                 ) {
                     juiceboxExpectedOutput = beneficiaryTokenCount;
                 } catch {
-                    // Fall back to static weight estimation if preview reverts.
-                    juiceboxExpectedOutput = calculateExpectedTokensWithCurrency({
+                    // Fall back to static weight estimation if preview reverts. If the estimation also fails
+                    // (e.g. token lacks decimals()), leave juiceboxExpectedOutput = 0 so V4 is preferred
+                    // rather than silently using a wrong estimate.
+                    // slither-disable-next-line unused-return
+                    try this.calculateExpectedTokensWithCurrency({
                         projectId: buyProjectId, paymentToken: tokenIn, paymentAmount: amountIn
-                    });
+                    }) returns (
+                        uint256 estimated
+                    ) {
+                        juiceboxExpectedOutput = estimated;
+                    } catch {}
                 }
             } else {
-                // No terminal available — use static weight estimation.
-                juiceboxExpectedOutput = calculateExpectedTokensWithCurrency({
+                // No terminal available — use static weight estimation. If estimation fails, leave output
+                // as 0 so V4 is preferred.
+                // slither-disable-next-line unused-return
+                try this.calculateExpectedTokensWithCurrency({
                     projectId: buyProjectId, paymentToken: tokenIn, paymentAmount: amountIn
-                });
+                }) returns (
+                    uint256 estimated
+                ) {
+                    juiceboxExpectedOutput = estimated;
+                } catch {}
             }
         } else if (isSellingJBToken) {
             // Selling JB tokens: compare Juicebox vs Uniswap for getting output tokens
@@ -849,17 +862,18 @@ contract JBUniswapV4Hook is BaseHook {
         }
     }
 
-    /// @notice Gets token decimals, defaulting to 18 if unavailable
-    /// @param token The token address
-    /// @return decimals The token decimals (defaults to 18)
+    /// @notice Gets token decimals, defaulting to 18 if unavailable.
+    /// @dev 18 is the standard for ETH and most ERC-20 tokens.
+    /// @param token The token address.
+    /// @return decimals The token decimals (defaults to 18).
     function _getTokenDecimals(address token) internal view returns (uint8) {
         if (token == JB_NATIVE_TOKEN) {
-            return 18; // Native ETH has 18 decimals
+            return 18; // Native ETH has 18 decimals.
         }
         try IERC20Metadata(token).decimals() returns (uint8 decimals) {
             return decimals;
         } catch {
-            return 18; // Default to 18 if unavailable
+            return 18; // 18 is standard.
         }
     }
 
