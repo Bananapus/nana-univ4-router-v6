@@ -862,18 +862,19 @@ contract JBUniswapV4Hook is BaseHook {
         }
     }
 
-    /// @notice Gets token decimals. Reverts if the token does not implement `decimals()`.
-    /// @dev Native ETH always returns 18. For ERC-20 tokens, reverts on failure instead of silently defaulting
-    /// to 18 — callers should handle the revert to avoid mis-estimating amounts for non-standard tokens.
+    /// @notice Gets token decimals, defaulting to 18 if unavailable.
+    /// @dev 18 is the standard for ETH and most ERC-20 tokens.
     /// @param token The token address.
-    /// @return decimals The token decimals.
+    /// @return decimals The token decimals (defaults to 18).
     function _getTokenDecimals(address token) internal view returns (uint8) {
         if (token == JB_NATIVE_TOKEN) {
-            return 18;
+            return 18; // Native ETH has 18 decimals.
         }
-        // Let the call revert naturally if decimals() is unavailable. Callers (e.g. the buy-side fallback
-        // estimation) wrap this in a try-catch and skip the comparison rather than using a wrong default.
-        return IERC20Metadata(token).decimals();
+        try IERC20Metadata(token).decimals() returns (uint8 decimals) {
+            return decimals;
+        } catch {
+            return 18; // 18 is standard.
+        }
     }
 
     /// @notice Get the TWAP sqrt price for a pool
