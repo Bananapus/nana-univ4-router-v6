@@ -386,6 +386,7 @@ contract JBUniswapV4Hook is BaseHook {
         // Fee values are in hundredths of a bip (pips), so 3000 = 0.3%.
         {
             // Read protocol fee from slot0 (directional: lower 12 bits = zeroForOne, upper 12 bits = oneForZero)
+            // slither-disable-next-line unused-return
             (,, uint24 protocolFee, uint24 slot0LpFee) = poolManager.getSlot0(PoolIdLibrary.toId(key));
 
             // Determine the LP fee: use key.fee for static pools, slot0LpFee for dynamic pools
@@ -397,10 +398,8 @@ contract JBUniswapV4Hook is BaseHook {
             }
 
             // Extract the directional protocol fee and compose with LP fee
-            uint16 directionalProtocolFee =
-                zeroForOne ? protocolFee.getZeroForOneFee() : protocolFee.getOneForZeroFee();
-            uint24 swapFee =
-                directionalProtocolFee == 0 ? lpFee : directionalProtocolFee.calculateSwapFee(lpFee);
+            uint16 directionalProtocolFee = zeroForOne ? protocolFee.getZeroForOneFee() : protocolFee.getOneForZeroFee();
+            uint24 swapFee = directionalProtocolFee == 0 ? lpFee : directionalProtocolFee.calculateSwapFee(lpFee);
 
             if (swapFee > 0) {
                 estimatedOut = estimatedOut - FullMath.mulDiv({a: estimatedOut, b: swapFee, denominator: 1_000_000});

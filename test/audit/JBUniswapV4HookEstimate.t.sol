@@ -330,11 +330,7 @@ contract JBUniswapV4HookProtocolFeeTest is Test {
         uint256 estimateWithoutProtocolFee = hook.estimateUniswapOutput(id, key, amountIn, zeroForOne);
 
         // The estimate with protocol fee should be strictly less than without
-        assertLt(
-            estimateWithProtocolFee,
-            estimateWithoutProtocolFee,
-            "Protocol fee should reduce the output estimate"
-        );
+        assertLt(estimateWithProtocolFee, estimateWithoutProtocolFee, "Protocol fee should reduce the output estimate");
 
         // Verify the difference is approximately correct.
         // LP fee = 3000 pips (0.3%), protocol fee = 1000 pips (0.1%)
