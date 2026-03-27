@@ -27,7 +27,7 @@ Uniswap V4 hook that automatically routes swaps involving Juicebox project token
 
 | Function | What it does |
 |----------|-------------|
-| `calculateExpectedTokensWithCurrency(uint256 projectId, address paymentToken, uint256 paymentAmount) -> uint256 expectedTokens` | Estimates project tokens from paying `paymentAmount` of `paymentToken`. Normalizes to 18 decimals, converts currency via `PRICES.pricePerUnitOf()`, applies ruleset weight, deducts reserved rate. Returns 0 on any try-catch failure (missing ruleset, price feed). |
+| `calculateExpectedTokensWithCurrency(uint256 projectId, address paymentToken, uint256 paymentAmount) -> uint256 expectedTokens` | Estimates project tokens from paying `paymentAmount` of `paymentToken`. Normalizes to 18 decimals, converts currency via `PRICES.pricePerUnitOf()`, applies ruleset weight, deducts reserved rate. Returns 0 on any try-catch failure (missing ruleset, price feed, `_getTokenDecimals` revert). |
 | `calculateExpectedOutputFromSelling(uint256 projectId, uint256 tokenAmountIn, address outputToken, IJBTerminal terminal) -> uint256 expectedOutput` | Estimates terminal tokens from cashing out `tokenAmountIn` project tokens. Calls `IJBCashOutTerminal(terminal).previewCashOutFrom()` which simulates the full cash-out path including any configured cash-out data hook. Deducts protocol fee read dynamically via `IJBFeeTerminal(terminal).FEE()`. Returns 0 on any try-catch failure (swap falls back to V4). |
 | `estimateUniswapOutput(poolId, key, amountIn, zeroForOne)` | Estimates V4 swap output using TWAP sqrtPrice (30-min window). Falls back to spot price if TWAP unavailable. Deducts pool fee (reads LP fee from `slot0` for dynamic fee pools instead of using the `DYNAMIC_FEE_FLAG` sentinel). |
 | `observeTWAP(poolId, secondsAgo, tick, index, liquidity, cardinality)` | Returns arithmetic mean tick over `secondsAgo` for a V4 pool's oracle. |
@@ -134,6 +134,7 @@ Deployment requires `HookMiner.find()` to discover a CREATE2 salt that produces 
 14. **The hook is fully immutable.** No admin functions, no upgrade path. All parameters are constants or immutable constructor arguments. Changing behavior requires deploying a new hook and migrating pools.
 15. **Non-JB token swaps pass through unchanged.** If neither token in the pair is a registered JB project token (via `TOKENS.projectIdOf()`), the hook returns `ZERO_DELTA` and the V4 AMM executes normally. No routing overhead.
 16. **Composition with JBBuybackHook.** This hook is designed to serve as both the pool hook and the oracle (`ORACLE_HOOK`) for `JBBuybackHook` on the same pool. When the buyback hook swaps, `_beforeSwap` fires and may route through JB, re-entering the buyback hook. The `_routing` reentrancy guard prevents infinite recursion — the inner swap reverts, and the buyback hook's try/catch falls back to minting.
+17. **`_getTokenDecimals` reverts for non-standard tokens.** `_getTokenDecimals` reverts if the token does not implement `decimals()` instead of silently returning 18. `calculateExpectedTokensWithCurrency` is called via `this.` (external call) wrapped in try-catch, so a revert causes it to return 0 and the router prefers V4 rather than producing a wrong estimate based on an assumed 18-decimal default.
 
 ## Composition with JBBuybackHook
 
