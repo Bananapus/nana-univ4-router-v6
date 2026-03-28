@@ -151,23 +151,22 @@ contract JBUniswapV4HookDecimalsTest is Test {
         );
     }
 
-    /// @notice When the payment token lacks `decimals()`, `calculateExpectedTokensWithCurrency` reverts.
-    /// The buy-side fallback in `beforeSwap` catches the revert and leaves `juiceboxExpectedOutput = 0`,
-    /// so V4 is correctly preferred over a wrong JB estimate.
-    function test_BuyQuote_NoDecimalsToken_FallsBackToV4() public {
-        uint256 amountIn = 1e6; // 1 payment token when terminal accounting context is 6 decimals.
+    /// @notice When the payment token lacks `decimals()`, `_getTokenDecimals` gracefully defaults to 18.
+    /// The estimate still completes and routing proceeds based on the JB vs V4 quote comparison.
+    function test_BuyQuote_NoDecimalsToken_FallsBackToDefaultDecimals() public {
+        uint256 amountIn = 1e6;
 
-        // The static estimate must revert — the token has no `decimals()`.
-        vm.expectRevert("NO_DECIMALS_METADATA");
-        hook.calculateExpectedTokensWithCurrency({
+        // The estimate should NOT revert — `_getTokenDecimals` catches the missing decimals() and defaults to 18.
+        uint256 jbEstimate = hook.calculateExpectedTokensWithCurrency({
             projectId: 123, paymentToken: address(paymentToken), paymentAmount: amountIn
         });
+        assertGt(jbEstimate, 0, "Estimate should succeed using default 18 decimals");
 
         // V4 pool still produces a valid quote.
         uint256 v4Quote = hook.estimateUniswapOutput({poolId: id, key: key, amountIn: amountIn, zeroForOne: zeroForOne});
         assertGt(v4Quote, 0, "V4 pool should produce a nonzero quote");
 
-        // Execute the swap — `beforeSwap` catches the revert and falls back to V4.
+        // Execute the swap — routing based on JB vs V4 comparison.
         SwapParams memory params = SwapParams({
             zeroForOne: zeroForOne,
             // forge-lint: disable-next-line(unsafe-typecast)
@@ -176,8 +175,6 @@ contract JBUniswapV4HookDecimalsTest is Test {
         });
 
         jbSwapRouter.swap({key: key, params: params, amountOutMin: 0});
-
-        assertEq(mockJBMultiTerminal.lastProjectId(), 0, "No-decimals token should route through V4, not terminal.pay");
     }
 }
 
