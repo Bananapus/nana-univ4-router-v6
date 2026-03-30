@@ -601,9 +601,10 @@ contract JBUniswapV4Hook is BaseHook {
                 int128 rawOutput =
                     params.zeroForOne ? BalanceDeltaLibrary.amount1(delta) : BalanceDeltaLibrary.amount0(delta);
 
-                // Only validate if there is a real V4 swap (non-zero output).
-                // For Juicebox-routed swaps, delta is zero and slippage was already validated in _beforeSwap.
-                if (rawOutput != 0) {
+                // Only validate if there is a real V4 swap (non-zero output or non-zero delta).
+                // For Juicebox-routed swaps, both rawOutput and delta are zero and slippage was already validated
+                // in _beforeSwap. A dust swap may have rawOutput==0 but a non-zero delta (input side is non-zero).
+                if (rawOutput != 0 || BalanceDelta.unwrap(delta) != 0) {
                     // Output is negative in V4 convention; negate to get the positive amount received.
                     // forge-lint: disable-next-line(unsafe-typecast)
                     uint256 outputAmount = rawOutput < 0 ? uint256(int256(-rawOutput)) : uint256(int256(rawOutput));

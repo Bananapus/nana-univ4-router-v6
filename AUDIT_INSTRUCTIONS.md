@@ -1,6 +1,6 @@
 # Audit Instructions -- univ4-router-v6
 
-You are auditing a Uniswap V4 hook that provides intelligent price comparison and routing between V4 pool swaps and Juicebox protocol operations (minting via `pay()` or redeeming via `cashOutTokensOf()`). It also provides a TWAP oracle for all pools using this hook. Read [RISKS.md](./RISKS.md) first -- it documents all known risks, Nemesis audit findings, and trust assumptions. Then come back here.
+You are auditing a Uniswap V4 hook that provides intelligent price comparison and routing between V4 pool swaps and Juicebox protocol operations (minting via `pay()` or redeeming via `cashOutTokensOf()`). It also provides a TWAP oracle for all pools using this hook. Read [RISKS.md](./RISKS.md) first -- it documents all known risks and trust assumptions. Then come back here.
 
 ## Scope
 
@@ -350,7 +350,7 @@ The test suite includes:
 
 ## Previous Audit Findings
 
-Nemesis Security conducted an audit. No individual finding IDs are referenced inline in this repository, but all known risks, trust assumptions, and previously identified issues are documented in [RISKS.md](./RISKS.md). Key areas that emerged from prior review:
+An automated audit was conducted. All known risks, trust assumptions, and previously identified issues are documented in [RISKS.md](./RISKS.md). Key areas that emerged from prior review:
 
 - **Spot price fallback during TWAP warmup** (Section 2.1) -- manipulable routing window for the first 30 minutes after pool creation.
 - **tickCumulative int56 overflow** (Section 2.4) -- silent overflow after ~1.4 years at max tick. Widened from int48 (which overflowed after ~44 hours) as a direct result of prior findings.
