@@ -2,6 +2,32 @@
 
 Admin privileges and their scope in univ4-router-v6.
 
+## At A Glance
+
+| Item | Details |
+|------|---------|
+| Scope | Autonomous Uniswap V4 routing hook with no mutable admin surface after deployment. |
+| Operators | Pool creators, swap callers, liquidity providers, the external Juicebox project owners whose economics the hook reads, and the V4 PoolManager. |
+| Highest-risk actions | Creating a pool with the wrong hook address, supplying bad `hookData`, or assuming there is an admin who can pause or retune the router later. |
+| Recovery posture | Fixes require a new hook deployment and new hooked pools; the existing deployment is intentionally immutable. |
+
+## Routine Operations
+
+- Verify pool initialization parameters and the hooked address before creating production pools.
+- Ensure integrations always supply exactly the `amountOutMin`-encoded `hookData` the hook expects.
+- Treat external Juicebox project economics as an input the hook reads, not an admin surface the hook controls.
+
+## One-Way Or High-Risk Actions
+
+- There is no owner, pause, or upgrade path after deployment.
+- Hook behavior depends on constructor immutables and hardcoded constants only.
+- Pool creators permanently bind this hook to the pools they initialize with it.
+
+## Recovery Notes
+
+- If the routing behavior or immutable references are wrong, deploy a replacement hook and migrate liquidity to new pools that use it.
+- There is no privileged operator who can hotfix the existing deployment.
+
 ## Roles
 
 ### No Admin Roles
