@@ -229,7 +229,12 @@ contract JBUniswapV4Hook is BaseHook {
         ) {
             // Deduct JB protocol fee. Conservative: assumes fee even for feeless addresses, which may
             // underestimate output and bias toward pool swaps. Intentional trade-off.
-            uint256 fee = IJBFeeTerminal(address(terminal)).FEE();
+            uint256 fee;
+            try IJBFeeTerminal(address(terminal)).FEE() returns (uint256 _fee) {
+                fee = _fee;
+            } catch {
+                fee = 0;
+            }
             return grossReclaim - FullMath.mulDiv({a: grossReclaim, b: fee, denominator: JBConstants.MAX_FEE});
         } catch {
             return 0;
