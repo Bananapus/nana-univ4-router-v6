@@ -72,7 +72,7 @@ The oracle is a ring buffer of up to 65,535 observations per pool. Cardinality a
 
 **Selling project tokens** (cashing out):
 1. Call `terminal.previewCashOutFrom(...)` to simulate the cash-out, including any configured cash-out data-hook effects
-2. Deduct protocol fee from the gross reclaim (read dynamically from terminal via `IJBFeeTerminal.FEE()`)
+2. Deduct protocol fee from the gross reclaim (read dynamically from terminal via `IJBFeeTerminal.FEE()`, wrapped in try-catch -- defaults to 0 if the terminal does not implement `IJBFeeTerminal`)
 3. Return net output
 4. All external calls are wrapped in try-catch -- if any call reverts, the estimate returns 0 and the swap falls back to V4
 
