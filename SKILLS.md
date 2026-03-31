@@ -37,5 +37,8 @@ Uniswap V4 hook and oracle surface for Juicebox-aware swaps. This repo compares 
 
 - Start in [`src/JBUniswapV4Hook.sol`](./src/JBUniswapV4Hook.sol) for routing behavior, but verify oracle assumptions in [`src/libraries/Oracle.sol`](./src/libraries/Oracle.sol) before changing quote logic.
 - Treat exact-input assumptions, fallback-to-V4 behavior, and slippage checks as high-risk. Small changes there alter execution quality directly.
+- Buy-side quoting now prefers `previewPayFor(...)` when a terminal is available, then falls back to static weight estimation. Keep both paths in sync with the docs.
+- Sell-side quoting depends on `previewCashOutFrom(...)` plus optional fee deduction, so review terminal-interface assumptions before simplifying that path.
+- Keep the `hookData` contract straight: `_beforeSwap` expects exactly one encoded `uint256 amountOutMin`, while `_afterSwap` is intentionally more permissive for passthrough swaps.
 - When a task mentions buyback composition, confirm whether the behavior actually lives in this repo or in `nana-buyback-hook-v6`.
 - If you change deployment or permission bits, verify they still match Uniswap V4 hook flag requirements.

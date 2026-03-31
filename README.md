@@ -75,6 +75,9 @@ script/
 ## Risks And Notes
 
 - early pools may not have enough oracle history, which weakens TWAP-based protection
+- buy-side routing prefers `previewPayFor(...)` when a terminal is available and only falls back to static weight math if previewing fails
 - the hook falls back when Juicebox-side estimation fails, so liveness and perfect observability are traded against each other
 - spot-price fallback is intentionally allowed but materially weaker than a mature TWAP
+- every Juicebox-routed swap expects `hookData` to encode exactly one `uint256 amountOutMin`
+- composition with `nana-buyback-hook-v6` depends on the router's reentrancy guard to fail closed into minting
 - because the deployment is immutable, bad constructor wiring is operationally expensive to fix

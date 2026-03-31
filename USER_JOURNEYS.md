@@ -50,7 +50,8 @@
 **Flow**
 1. Initialize the pool and begin recording observations through live activity over time.
 2. Treat the earliest period as oracle warmup, not as fully mature TWAP protection.
-3. Only rely on the hook's time-weighted routing assumptions once the pool has accumulated enough history for the configured lookback window.
+3. Expect `estimateUniswapOutput(...)` to fall back to spot pricing until there are at least two observations and the oldest one is old enough for the 30-minute lookback.
+4. Only rely on the hook's time-weighted routing assumptions once the pool has accumulated enough history for the configured lookback window.
 
 **Failure cases that matter:** single-block or short-window spot manipulation during warmup, assuming cardinality alone means the oracle is mature, and building downstream safety assumptions that ignore the hook's fallback behavior.
 

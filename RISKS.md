@@ -72,7 +72,7 @@ Forward-looking risk analysis of `JBUniswapV4Hook` and its `Oracle` library. Thi
 
 ### 3.4 Conservative sell estimate
 
-- `calculateExpectedOutputFromSelling` always deducts the terminal fee (read dynamically via `terminal.FEE()` / `JBConstants.MAX_FEE`) even if the hook address is registered as feeless. This systematically disadvantages JB sell routing.
+- `calculateExpectedOutputFromSelling` deducts the terminal fee (read dynamically via `terminal.FEE()` / `JBConstants.MAX_FEE`, wrapped in try-catch -- defaults to 0 if the terminal does not implement `IJBFeeTerminal`) even if the hook address is registered as feeless. For standard terminals, this systematically disadvantages JB sell routing. For non-standard terminals without `IJBFeeTerminal`, no fee is deducted.
 - Uses total surplus (empty terminals/accountingContexts arrays) regardless of the project's `useTotalSurplusForCashOuts` flag. May overestimate JB cashout output for projects with local-surplus-only configuration. Actual cashout would return less, but `amountOutMin` protects the user.
 - Sell-side estimation now prefers `previewCashOutFrom`, which can incorporate cash-out data-hook effects when the
   terminal store supports that preview surface. If previewing is unavailable or reverts, the hook falls back to the

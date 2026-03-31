@@ -39,7 +39,10 @@ swap involving a project token
 ## Where Complexity Lives
 
 - Oracle upkeep and routing are coupled because the contract both measures the market and overrides it.
-- Warmup behavior, low-observation history, and buyback-hook composition are the review hotspots.
+- Warmup behavior matters because V4 estimation falls back to spot pricing until the pool has enough history for the 30-minute TWAP window.
+- Buy-side routing may use `previewPayFor(...)` and fall back to static weight estimation if previewing fails or no terminal is configured.
+- Sell-side routing uses `previewCashOutFrom(...)`, then deducts the terminal fee when available, so quote quality depends on terminal semantics.
+- Buyback-hook composition is a review hotspot because recursive routing must fail safely through the `_routing` guard.
 - The contract is intentionally immutable, so mistakes are more expensive than in registry-governed repos.
 
 ## Dependencies
