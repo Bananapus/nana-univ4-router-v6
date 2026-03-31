@@ -193,9 +193,8 @@ contract JBUniswapV4Hook is BaseHook {
     /// cash-out data-hook effects when the underlying store supports that surface. Falls back to a static surplus
     /// estimate if previewing is unavailable or reverts.
     /// The estimate also conservatively deducts fees even for feeless addresses, which may underestimate output.
-    /// @dev NOTE: The `FEE()` call casts the terminal to `IJBFeeTerminal`. If the terminal is a non-standard
-    /// implementation that does not implement `IJBFeeTerminal`, this call will propagate a revert. The standard
-    /// `JBMultiTerminal` is NOT affected since it implements `IJBFeeTerminal`.
+    /// @dev NOTE: The `FEE()` call casts the terminal to `IJBFeeTerminal` inside a try-catch. If the terminal
+    /// does not implement `IJBFeeTerminal`, the fee defaults to 0 (no fee deduction in the estimate).
     /// @param projectId The Juicebox project ID
     /// @param tokenAmountIn The amount of JB tokens being sold
     /// @param outputToken The token to receive (e.g., ETH, USDC)
