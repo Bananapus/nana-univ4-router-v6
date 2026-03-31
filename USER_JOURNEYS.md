@@ -2,48 +2,46 @@
 
 ## Who This Repo Serves
 
-- teams building protocol-aware project-token markets on Uniswap V4
-- traders swapping against pools that may be outperformed by Juicebox-native execution
-- integrators and hooks that need a queryable TWAP surface for those pools
+- projects that want UniV4 swaps to respect Juicebox mint and cash-out economics
+- traders whose best route may be the pool or the protocol depending on direction and price
+- integrators reading the per-pool TWAP oracle this hook maintains
 
 ## Journey 1: Deploy The V4 Routing Hook For A Juicebox-Aware Pool
 
-**Starting state:** you know the pool manager, token registry, directory, and price-feed dependencies for the environment.
+**Starting state:** a project token is expected to trade against some paired asset in UniV4.
 
-**Success:** a pool hook exists that is able to compare V4 execution against Juicebox-native execution for the supported routing cases.
+**Success:** the pool uses `JBUniswapV4Hook` so buy and sell routing can compare market execution with protocol execution.
 
 **Flow**
-1. Deploy `JBUniswapV4Hook` with its constructor dependencies.
-2. Attach it to the intended pool setup.
-3. Treat the deployment as immutable. If constructor wiring is wrong, the remedy is redeployment, not admin repair.
+1. Deploy the hook with the project-token and terminal assumptions it needs.
+2. Create or attach the relevant UniV4 pool using that hook.
+3. Confirm the hook can reach the Juicebox terminal and accounting context required for buy-versus-mint and sell-versus-cash-out decisions.
 
 ## Journey 2: Let Traders Swap Through The Better Route
 
-**Starting state:** a Uniswap V4 pool involving a Juicebox project token is using this hook.
+**Starting state:** a trade is about to cross the pool and the hook must decide whether the market or the protocol offers the better outcome.
 
-**Success:** swaps involving supported Juicebox project-token cases can either proceed through the pool or be rerouted through Juicebox under the hook's protections.
+**Success:** the user gets the better execution path without being forced through the pool by default.
 
 **Flow**
-1. A trader initiates a swap.
-2. `beforeSwap` detects whether a Juicebox project token is involved.
-3. The hook estimates the V4 path from TWAP-protected pool data and estimates the Juicebox-native path from terminal state.
-4. If the pool is better, it returns control to normal V4 execution.
-5. If the Juicebox path is better, it settles the swap through Juicebox instead.
+1. On buys, compare the current pool trade against minting through the Juicebox terminal.
+2. On sells, compare the pool trade against the project's cash-out path.
+3. Route through the better option while preserving the slippage and reentrancy protections the hook expects.
+
+**Failure cases that matter:** dust swaps, dynamic pool or protocol fees, sign-convention errors around slippage, and reentrancy on the sell path.
 
 ## Journey 3: Provide Oracle Data To Other Protocol Components
 
-**Starting state:** the hook has been recording observations over time.
+**Starting state:** another contract needs a TWAP-style view of pool behavior rather than a one-shot spot price.
 
-**Success:** other contracts can query a TWAP-compatible oracle surface backed by the same routing-aware pool history.
+**Success:** the contract can read observations from the hook's oracle layer instead of maintaining its own pool-history logic.
 
 **Flow**
-1. Swaps and liquidity events record observations into the ring buffer.
-2. External contracts call `observe()`-style queries.
-3. Those callers use the returned history for protected pricing, often inside buyback or liquidity-management flows.
-
-**Important limitation:** early pools or sparse activity weaken TWAP quality and may force weaker fallbacks.
+1. Let `JBUniswapV4Hook` record the observations relevant to the pool.
+2. Query the `Oracle` library through the hook's `observe()`-style surface.
+3. Use that output for routing, safety checks, or external integrations that need time-weighted data.
 
 ## Hand-Offs
 
-- Use [nana-buyback-hook-v6](../nana-buyback-hook-v6/USER_JOURNEYS.md) for project-level buy and sell routing decisions built on top of this pool-hook primitive.
-- Use [univ4-lp-split-hook-v6](../univ4-lp-split-hook-v6/USER_JOURNEYS.md) for treasury-managed liquidity that relies on the same oracle surface.
+- Use [nana-buyback-hook-v6](../nana-buyback-hook-v6/USER_JOURNEYS.md) when the question is project-level buyback routing rather than the hook-level swap primitive.
+- Use [univ4-lp-split-hook-v6](../univ4-lp-split-hook-v6/USER_JOURNEYS.md) when the question is about deploying reserved tokens into liquidity instead of choosing swap execution paths.
