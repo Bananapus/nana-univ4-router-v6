@@ -50,7 +50,7 @@ A V4 pool exists with `hooks = JBUniswapV4Hook`. One of the pool's tokens is a J
      - Deducts reserved percent
    - Selling: `calculateExpectedOutputFromSelling(projectId, amountIn, tokenOut, terminal)`
      - Uses `previewCashOutFrom` simulation when available; falls back to returning 0 on failure
-     - Deducts protocol fee (2.5%)
+     - Deducts protocol fee (2.5% for standard terminals; defaults to 0 if `FEE()` call fails)
 
 4. **V4 route estimation via `estimateUniswapOutput()`**
 

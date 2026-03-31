@@ -34,6 +34,8 @@ Swap arrives → JBUniswapV4Hook._beforeSwap()
 terminal.previewCashOutFrom(holder, projectId, tokenAmountIn, outputToken, beneficiary, metadata)
   [try-catch: returns 0 on failure]
   → grossReclaim from the terminal's cash-out preview (incorporates data-hook effects)
+  → Read protocol fee: IJBFeeTerminal(terminal).FEE()
+    [try-catch: defaults to 0 if terminal does not implement IJBFeeTerminal]
   → Deduct protocol fee: grossReclaim - grossReclaim * FEE / MAX_FEE
   → Return net reclaim amount
 ```
