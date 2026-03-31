@@ -1,200 +1,83 @@
 # Juicebox UniV4 Router
 
-Uniswap V4 hook that intelligently routes swaps involving Juicebox project tokens to the best price between two sources -- the V4 pool and Juicebox's native minting/cash-out mechanism -- with TWAP oracle protection against manipulation. Includes a built-in `observe()` function (IGeomeanOracle-compatible) for external TWAP queries. Ensures project tokens always trade at or above their intrinsic treasury-backed value.
+`@bananapus/univ4-router-v6` provides the Uniswap V4 hook and oracle surface used to compare market execution with Juicebox-native execution. It is a routing primitive for projects that want protocol-aware swaps instead of blind pool usage.
 
-[Docs](https://docs.juicebox.money) | [Discord](https://discord.gg/juicebox)
+Docs: <https://docs.juicebox.money>
+Architecture: [ARCHITECTURE.md](./ARCHITECTURE.md)
 
-## Conceptual Overview
+## Overview
 
-When a Juicebox project token is traded on Uniswap V4, the `JBUniswapV4Hook` intercepts the swap in `beforeSwap` and compares the output from two routes:
+The hook intercepts swaps involving a Juicebox project token and decides whether the better path is:
 
-1. **V4 pool** -- the pool the user is swapping in, priced via 30-minute TWAP
-2. **Juicebox protocol** -- minting tokens via `terminal.pay()` (buying) or cashing out via `terminal.cashOutTokensOf()` (selling), priced from the project's ruleset weight and surplus when the project's sell-side economics are not data-hook controlled
+- the current Uniswap V4 pool
+- minting through the Juicebox terminal on buys
+- cashing out through the Juicebox terminal on sells
 
-Whichever route yields the most output tokens wins. If Juicebox is chosen, the hook takes the input from the V4 PoolManager, executes the pay/cashout, and settles the output back -- all within the same transaction. If V4 wins, it returns `ZERO_DELTA` and lets the V4 AMM execute normally.
+It also maintains a per-pool TWAP oracle that other contracts can query through an `observe()`-style interface.
 
-The contract is fully immutable after deployment -- no admin functions, no upgradeability. All configuration is set via constructor arguments and constants.
+Use this repo when swap routing should be aware of Juicebox-native issuance and redemption. Do not use it as a generic Uniswap utility package divorced from Juicebox project-token semantics.
 
-### How It Works
+If the issue is "should the project use market execution or protocol execution?" you may need `nana-buyback-hook-v6`. This repo supplies the hook-level swap and oracle primitive that decision can depend on.
 
-```mermaid
-sequenceDiagram
-    participant User
-    participant V4Pool as Uniswap V4 Pool
-    participant Hook as JBUniswapV4Hook
-    participant Oracle as TWAP Oracle
-    participant JB as Juicebox Terminal
+## Key Contracts
 
-    User->>V4Pool: Initiate swap
-    V4Pool->>Hook: beforeSwap()
-    Hook->>Hook: Is a JB project token involved?
-    alt No project token
-        Hook-->>V4Pool: Proceed with normal V4 swap
-    else Project token found
-        Hook->>Oracle: Get V4 TWAP estimate (30-min window)
-        Oracle-->>Hook: V4 estimated output
-        Hook->>JB: Get JB estimate (pay weight or cashOut preview)
-        JB-->>Hook: JB estimated output
-        Hook->>Hook: Compare V4 vs JB output
-        alt JB wins
-            Hook->>V4Pool: Take input from PoolManager
-            Hook->>JB: Execute pay() or cashOutTokensOf()
-            JB-->>Hook: Output tokens
-            Hook->>V4Pool: Settle output back
-        else V4 wins
-            Hook-->>V4Pool: Return ZERO_DELTA (let AMM execute)
-        end
-    end
-    V4Pool->>Hook: afterSwap()
-    Hook->>Oracle: Record observation
-    Hook->>Hook: Validate slippage for V4 swaps
-```
+| Contract | Role |
+| --- | --- |
+| `JBUniswapV4Hook` | Main Uniswap V4 hook that performs routing decisions and records oracle observations. |
+| `Oracle` | Observation-ring library used for TWAP accounting and lookup. |
 
-### Composition with JBBuybackHook
+## Mental Model
 
-This hook is designed to serve as both the V4 pool hook and the `ORACLE_HOOK` for `JBBuybackHook` on the same pool. The buyback hook queries `observe()` for TWAP data and executes swaps through this hook. When the routing logic tries to route back through Juicebox (re-entering the buyback hook), a `_routing` reentrancy guard prevents infinite recursion. The buyback hook's try/catch catches the revert and falls back to minting.
+This repo owns two things:
 
-### TWAP Oracle
+1. route-aware Uniswap V4 hook behavior for Juicebox project tokens
+2. the observation history needed to make that behavior oracle-aware
 
-The hook maintains its own TWAP oracle per pool, recording observations on every swap, liquidity change, and pool initialization. This protects price estimates from single-block manipulation.
+It is infrastructure, but infrastructure with direct economic consequences.
 
-- **V4**: 30-minute lookback (`TWAP_PERIOD = 1800`). Falls back to spot price if fewer than 2 observations or less than 30 minutes of history.
+## Read These Files First
 
-The oracle is a ring buffer of up to 65,535 observations per pool. Cardinality auto-grows (doubling up to `MAX_TWAP_CARDINALITY = 1024`) when the buffer fills. That keeps a 30-minute TWAP available even on fast-block L2s with roughly 2-second block times. The hook exposes an `observe()` function (IGeomeanOracle-compatible) so external contracts can query TWAP data.
-
-### Juicebox Price Estimation
-
-**Buying project tokens** (paying into the project):
-1. Get current ruleset weight (tokens minted per unit paid)
-2. Convert payment currency to base currency via `JBPrices`
-3. Deduct reserved rate (tokens reserved for splits, not given to payer)
-4. Return user-receivable token count
-
-**Selling project tokens** (cashing out):
-1. Call `terminal.previewCashOutFrom(...)` to simulate the cash-out, including any configured cash-out data-hook effects
-2. Deduct protocol fee from the gross reclaim (read dynamically from terminal via `IJBFeeTerminal.FEE()`, wrapped in try-catch -- defaults to 0 if the terminal does not implement `IJBFeeTerminal`)
-3. Return net output
-4. All external calls are wrapped in try-catch -- if any call reverts, the estimate returns 0 and the swap falls back to V4
-
-## Architecture
-
-| Contract | Description |
-|----------|-------------|
-| `JBUniswapV4Hook` | Uniswap V4 `BaseHook` that compares prices across V4 and Juicebox for every swap involving a project token, then routes to the best option. Maintains its own TWAP oracle with IGeomeanOracle-compatible `observe()`. |
-| `Oracle` (library) | Ring-buffer observation array (up to 65,535 slots) storing tick cumulatives and seconds-per-liquidity. Supports `observe`, `observeSingle`, `write`, `grow`, and binary search over the circular buffer. |
-
-### Constructor
-
-The contract is fully immutable after deployment. All dependencies are injected at construction time:
-
-```solidity
-constructor(
-    IPoolManager poolManager,       // Uniswap V4 singleton PoolManager
-    IJBTokens tokens,               // Juicebox token registry (project token lookup)
-    IJBDirectory directory,         // Juicebox directory (terminal routing)
-    IJBPrices prices                // Juicebox price feeds (currency conversion)
-)
-```
-
-## Hook Permissions
-
-```
-afterInitialize:          true   -- initialize oracle ring buffer
-beforeSwap:               true   -- price comparison and routing
-beforeSwapReturnDelta:    true   -- override swap when routing via JB
-afterSwap:                true   -- record observation, enforce slippage
-afterAddLiquidity:        true   -- record observation
-afterRemoveLiquidity:     true   -- record observation
-```
+1. `src/JBUniswapV4Hook.sol`
+2. `src/libraries/Oracle.sol`
+3. `nana-buyback-hook-v6/src/JBBuybackHook.sol` if reviewing the composed buyback path
 
 ## Install
 
 ```bash
-npm install
+npm install @bananapus/univ4-router-v6
 ```
 
-If using Forge directly:
+## Development
 
 ```bash
-forge install
+npm install
+forge build
+forge test
 ```
 
-## Develop
+## Deployment Notes
 
-| Command | Description |
-|---------|-------------|
-| `forge build` | Compile contracts (requires solc ^0.8.24, Cancun EVM) |
-| `forge test` | Run all tests |
-| `forge test --match-contract JuiceboxHookTest` | Run unit tests only |
-| `forge test --match-contract TwoWayRoutingTest` | Run routing comparison tests |
-| `forge test --match-contract JBUniswapV4HookForkTest` | Run fork tests (needs `MAINNET_RPC_URL`) |
-| `forge test -vvv` | Run tests with full trace |
-| `forge test --gas-report` | Gas profiling |
-
-### Settings
-
-```toml
-# foundry.toml
-[profile.default]
-solc = '0.8.26'
-evm_version = 'cancun'
-optimizer_runs = 200
-via_ir = true
-
-[fuzz]
-runs = 4096
-```
+This repo is commonly paired with the buyback hook and the UniV4 LP split hook. It is immutable after deployment, so constructor configuration should be treated as final.
 
 ## Repository Layout
 
-```
+```text
 src/
-  JBUniswapV4Hook.sol                  # Main hook contract
+  JBUniswapV4Hook.sol
   libraries/
-    Oracle.sol                         # Ring-buffer TWAP oracle
 test/
-  JBUniswapV4Hook.t.sol                # Unit tests
-  JBUniswapV4HookFork.t.sol            # Fork tests against mainnet
-  ThreeWayRouting.t.sol                # V4 vs JB routing tests
-  StressAndOrderOfMagnitude.t.sol      # Large swaps, deep liquidity
-  OracleDeepTest.t.sol                 # Ring buffer, cardinality, interpolation
-  SlippageTolerance.t.sol              # amountOutMin enforcement
-  Invariant.t.sol                      # Invariant / fuzz tests
-  TestObserve.t.sol                    # observe() integration tests
-  TestStructuralArbitrage.t.sol        # Structural arbitrage tests
-  TestAuditGaps.sol                    # Audit-gap coverage
-  mock/                                # Mock contracts (ERC20, WETH)
-  regression/                          # Regression tests (reentrancy, slippage, fees, oracle, dynamic pool fees)
-  utils/                               # Test helpers (Deployers, JuiceboxSwapRouter, EasyPosm)
+  routing, oracle, fork, invariant, audit, and regression coverage
 script/
-  Deploy.s.sol                         # Deployment (HookMiner for address, per-chain PoolManager)
+  Deploy.s.sol
   helpers/
-    Univ4RouterDeploymentLib.sol       # Deployment helper library
 ```
 
-## Supported Networks
+## Risks And Notes
 
-Deployment scripts support:
-
-| Network | Chain ID |
-|---------|----------|
-| Ethereum Mainnet | 1 |
-| Ethereum Sepolia | 11155111 |
-| Optimism Mainnet | 10 |
-| Optimism Sepolia | 11155420 |
-| Base Mainnet | 8453 |
-| Base Sepolia | 84532 |
-| Arbitrum Mainnet | 42161 |
-| Arbitrum Sepolia | 421614 |
-
-## Risks
-
-- **TWAP manipulation**: With low cardinality (few observations), the TWAP window may be shorter than intended. The auto-grow mechanism now expands to 1024 observations so the full 30-minute window remains available on fast-block L2s after warmup, but early pools are still more vulnerable.
-- **Spot price fallback**: When TWAP data is insufficient, spot price is used silently. This removes manipulation protection for that swap.
-- **Juicebox route depends on terminal availability**: If `DIRECTORY.primaryTerminalOf()` returns address(0), the JB route is skipped entirely.
-- **Surplus estimation uses total surplus**: The sell-side estimate always uses total surplus across all terminals (empty arrays to `currentReclaimableSurplusOf`). This may overestimate reclaim value for projects that don't use `useTotalSurplusForCashOuts`.
-- **External call failures are silent**: If the terminal store or any JB protocol call reverts during sell estimation, the hook returns 0 and falls back to V4 routing. No event is emitted for the failure.
-
-## License
-
-MIT
+- early pools may not have enough oracle history, which weakens TWAP-based protection
+- buy-side routing prefers `previewPayFor(...)` when a terminal is available and only falls back to static weight math if previewing fails
+- the hook falls back when Juicebox-side estimation fails, so liveness and perfect observability are traded against each other
+- spot-price fallback is intentionally allowed but materially weaker than a mature TWAP
+- every Juicebox-routed swap expects `hookData` to encode exactly one `uint256 amountOutMin`
+- composition with `nana-buyback-hook-v6` depends on the router's reentrancy guard to fail closed into minting
+- because the deployment is immutable, bad constructor wiring is operationally expensive to fix

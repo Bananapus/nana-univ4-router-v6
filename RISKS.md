@@ -1,6 +1,20 @@
-# univ4-router-v6 -- Risks
+# UniV4 Router Risk Register
 
-Forward-looking risk analysis of `JBUniswapV4Hook` (~963 lines) and `Oracle` library (~392 lines).
+Forward-looking risk analysis of `JBUniswapV4Hook` and its `Oracle` library. This file focuses on route selection, oracle integrity, and the compositional edge cases that appear when a single V4 hook services many pools and many Juicebox projects.
+
+## How to use this file
+
+- Read `Priority risks` first; these are the routing and oracle failures with the widest system impact.
+- Use the detailed sections for TWAP, routing, MEV, and buyback composition reasoning.
+- Treat `Accepted Behaviors` and `Invariants to Verify` as the deployment contract for this singleton hook.
+
+## Priority risks
+
+| Priority | Risk | Why it matters | Primary controls |
+|----------|------|----------------|------------------|
+| P0 | Oracle warmup or stale-history routing error | During warmup or sparse observation periods, the hook may fall back to spot pricing and become easier to manipulate. | TWAP once warmed, observation writes on key callbacks, and user `amountOutMin` floors. |
+| P0 | Singleton hook blast radius | One hook instance can service many pools; a bug in routing or callbacks affects every attached pool. | Careful deployment with correct hook flags, invariant testing, and ecosystem-wide scrutiny. |
+| P1 | Buyback composition recursion and estimate drift | Same-pool composition with the buyback hook creates deep call chains and makes estimate fidelity critical. | Recursion guard, fallback behavior, and explicit composition caveats for deployers. |
 
 ## 1. Trust Assumptions
 
@@ -26,7 +40,7 @@ Forward-looking risk analysis of `JBUniswapV4Hook` (~963 lines) and `Oracle` lib
 - Oracle starts at cardinality 1, auto-grows by doubling at capacity boundaries until `MAX_TWAP_CARDINALITY = 1024`.
 - Largest single growth (512 -> 1024) costs ~512 cold SSTOREs. This cost is borne by the swap/liquidity caller that triggers the growth. An attacker could grief callers by timing transactions to coincide with growth boundaries.
 - At cardinality 1024 with 12-second blocks, the oracle stores ~205 minutes of history. At 2-second blocks, it stores just over 34 minutes -- enough to support the 30-minute TWAP window after warmup.
-- **Gas cost of cardinality growth as DoS surface.** The largest single growth step (512 → 1024) costs ~512 cold SSTOREs (~10M gas). The caller who triggers this growth boundary bears the entire cost. An attacker could monitor cardinality levels and time their transactions to avoid triggering growth, while legitimate users bear the cost unpredictably. This is not exploitable for profit but can cause user-facing gas spikes. Mitigation: projects can pre-grow cardinality by calling `increaseCardinalityNext` during low-activity periods (not currently exposed as a public function — growth is automatic).
+- **Gas cost of cardinality growth as DoS surface.** The largest single growth step (512 → 1024) costs ~512 cold SSTOREs (~10M gas). The caller who triggers this growth boundary bears the entire cost. An attacker could monitor cardinality levels and time their transactions to avoid triggering growth, while legitimate users bear the cost unpredictably. This is not exploitable for profit but can cause user-facing gas spikes. Mitigation is operational rather than administrative: seed pools early, expect a few initial growth-triggering swaps, and avoid assuming there is a separate public pre-growth control because growth is automatic inside `_recordObservation`.
 
 ### 2.3 TWAP_PERIOD selection tradeoffs
 

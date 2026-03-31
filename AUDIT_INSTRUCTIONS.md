@@ -1,265 +1,91 @@
-# Audit Instructions -- univ4-router-v6
+# Audit Instructions
 
-You are auditing a Uniswap V4 hook that provides intelligent price comparison and routing between V4 pool swaps and Juicebox protocol operations (minting via `pay()` or redeeming via `cashOutTokensOf()`). It also provides a TWAP oracle for all pools using this hook. Read [RISKS.md](./RISKS.md) first -- it documents all known risks and trust assumptions. Then come back here.
+This repo is the Uniswap V4 hook that compares V4 execution against Juicebox execution and routes to the better outcome. It also maintains the TWAP oracle used by other repos.
+
+## Objective
+
+Find issues that:
+- mis-estimate V4 or Juicebox outputs
+- choose the wrong path and lose user value
+- break swap settlement through sign, delta, or slippage mistakes
+- let oracle state become manipulable or stale in ways downstream repos trust
+- recurse unsafely when composed with the buyback hook
 
 ## Scope
 
-**In scope -- all Solidity in `src/`:**
-```
-src/JBUniswapV4Hook.sol     # Hook + router (~1,010 lines)
-src/libraries/Oracle.sol    # TWAP oracle ring buffer (~394 lines)
-```
+In scope:
+- `src/JBUniswapV4Hook.sol`
+- `src/libraries/Oracle.sol`
+- deployment scripts in `script/`
 
-**Out of scope:** Test files, OpenZeppelin/Uniswap/JB Core dependencies (assume correct), forge-std.
+Key dependencies:
+- `nana-core-v6`
+- Uniswap V4
+- consumers such as `nana-buyback-hook-v6` and `univ4-lp-split-hook-v6`
 
-## Architecture
+## System Model
 
-### JBUniswapV4Hook
+On swaps involving a Juicebox project token, the hook:
+- estimates the V4 path
+- estimates the Juicebox path
+- routes through the better option
+- records observations for future TWAP queries
 
-A Uniswap V4 hook (`BaseHook`) that intercepts swaps to compare prices between the V4 pool and the Juicebox protocol. For every swap involving a JB project token, it:
+It is also an oracle surface:
+- pools using it depend on its observation ring buffer
+- other repos may call `observe()` and trust its output as a pricing guardrail
 
-1. Estimates the output from the V4 pool (using TWAP or spot price)
-2. Estimates the output from Juicebox (minting or cashing out)
-3. Routes to whichever gives the user more tokens
-4. Records oracle observations for TWAP computation
+## Critical Invariants
 
-The hook uses these V4 hook permissions:
-- `afterInitialize` -- set up oracle on pool creation
-- `beforeSwap` + `beforeSwapReturnDelta` -- intercept swaps, compare routes, optionally override with JB route
-- `afterSwap` -- record oracle observation, enforce slippage for V4 routes
-- `afterAddLiquidity` / `afterRemoveLiquidity` -- record oracle observations
+1. Route selection is honest
+The hook must compare like-for-like outputs and not mix preview semantics or fee conventions across routes.
 
-Immutable dependencies: `TOKENS` (IJBTokens), `DIRECTORY` (IJBDirectory), `PRICES` (IJBPrices).
+2. Settlement deltas are signed correctly
+Any override path must satisfy Uniswap’s delta conventions and the user’s minimum-out expectation.
 
-### Oracle Library
+3. Oracle writes remain usable
+Observation growth, lookup, and fallback-to-spot behavior must not silently degrade into unsafe values for downstream consumers.
 
-A ring buffer implementation for TWAP price tracking, adapted from Uniswap V3's oracle design. Stores `Observation` structs packed into 256 bits: `blockTimestamp` (uint32) + `tickCumulative` (int56) + `secondsPerLiquidityCumulativeX128` (uint160) + `initialized` (bool).
+4. Reentrancy guard is effective
+Recursive routing through the buyback hook or terminal calls must degrade safely rather than spin or corrupt state.
 
-Key properties:
-- Array size: `65_535` observations per pool
-- Auto-growth: cardinality doubles at capacity (1 -> 2 -> 4 -> ... -> 1024 cap)
-- At most one observation per block (same-block writes are no-ops)
-- Binary search for historical lookups
-- Handles uint32 timestamp overflow (safe for 0 or 1 overflows)
-- `tickCumulative` uses int56, good for ~1.4 years at max tick (887,272)
+## Threat Model
 
-## Key Flows
+Prioritize:
+- slippage-sign mismatches
+- preview calls that revert or return partial information
+- dynamic protocol or pool fees
+- low-history or stale-history oracle behavior
+- exact-input versus unsupported exact-output assumptions
 
-### 1. Price Comparison and Routing (`_beforeSwap`)
+## Hotspots
 
-Called by V4 PoolManager on every swap. The routing logic:
+- `beforeSwap` and any override-delta return path
+- output estimation helpers for both routes
+- `afterSwap`, `afterAddLiquidity`, and `afterRemoveLiquidity` oracle writes
+- ring-buffer growth and historical lookup in `Oracle.sol`
+- recursion guard behavior when composed with buyback logic
 
-```
-Swap initiated
-  |
-  v
-Decode hookData -> amountOutMin (exactly 32 bytes, uint256)
-  |
-  v
-Reject exact-output swaps (amountSpecified > 0)
-  |
-  v
-Identify token roles via TOKENS.projectIdOf()
-  |
-  +-- tokenIn is JB token  -> isSellingJBToken = true
-  +-- tokenOut is JB token -> isBuyingJBToken = true
-  +-- neither              -> passthrough to V4 (ZERO_DELTA)
-  |
-  v
-Calculate Juicebox expected output:
-  +-- Buying:  calculateExpectedTokensWithCurrency(buyProjectId, tokenIn, amountIn)
-  +-- Selling: calculateExpectedOutputFromSelling(sellProjectId, amountIn, tokenOut, terminal)
-  |
-  v
-Calculate V4 expected output:
-  estimateUniswapOutput(poolId, key, amountIn, zeroForOne)
-    -> Uses TWAP price if available (>= 2 observations, oldest > 30min ago)
-    -> Falls back to spot price if TWAP unavailable
-  |
-  v
-Compare: JB output > V4 output AND terminal is available?
-  +-- YES: _routeThroughJuicebox() -> return custom BeforeSwapDelta
-  +-- NO:  return ZERO_DELTA (let V4 execute normally)
-```
+## Build And Verification
 
-### 2. JB Buy Route (Minting)
+Standard workflow:
+- `npm install`
+- `forge build`
+- `forge test`
 
-When buying JB tokens and JB gives a better rate:
+Current tests focus on:
+- route-estimate regressions
+- oracle width and observation behavior
+- slippage semantics
+- three-way routing and structural arbitrage
+- sell-path reentrancy
 
-```
-_routeThroughJuicebox(isBuying = true)
-  |
-  v
-poolManager.take(inputCurrency, amountIn)  -- withdraw input from PoolManager
-  |
-  v
-IERC20.forceApprove(terminal, amountIn)    -- approve terminal to pull tokens
-  |
-  v
-terminal.pay(projectId, token, amountIn,   -- pay into JB project
-             beneficiary=address(this),
-             minReturnedTokens=amountOutMin)
-  |
-  v
-outputReceived = tokens minted to hook
-  |
-  v
-_settleOutput(outputCurrency, outputReceived)  -- deposit output back to PoolManager
-  |
-  v
-return BeforeSwapDelta(+amountIn, -outputReceived)
-```
-
-### 3. JB Sell Route (Cashing Out)
-
-When selling JB tokens and JB gives a better rate:
-
-```
-_routeThroughJuicebox(isBuying = false)
-  |
-  v
-poolManager.take(inputCurrency, amountIn)  -- withdraw JB tokens from PoolManager
-  |
-  v
-terminal.cashOutTokensOf(
-    holder=address(this),
-    projectId, cashOutCount=amountIn,
-    tokenToReclaim=normalizedTokenOut,
-    minTokensReclaimed=amountOutMin,
-    beneficiary=address(this))
-  |
-  v
-outputReceived = terminal tokens received
-  |
-  v
-_settleOutput(outputCurrency, outputReceived)  -- deposit output back to PoolManager
-  |
-  v
-return BeforeSwapDelta(+amountIn, -outputReceived)
-```
-
-### 4. V4 Route (Passthrough)
-
-When V4 gives a better rate or no JB token is involved:
-
-```
-_beforeSwap returns ZERO_DELTA
-  |
-  v
-V4 PoolManager executes the swap normally (AMM)
-  |
-  v
-_afterSwap:
-  - Validates amountOutMin against actual swap delta
-  - Records oracle observation
-```
-
-### 5. Oracle Observation Recording (`_recordObservation`)
-
-Called after every swap, liquidity add, and liquidity remove:
-
-```
-Read current tick and liquidity from poolManager.getSlot0/getLiquidity
-  |
-  v
-Check if cardinality growth needed:
-  (cardinality == cardinalityNext AND index == cardinality - 1)
-  -> Double cardinality (cap at 1024)
-  -> Oracle.grow() pre-allocates storage slots
-  |
-  v
-Oracle.write():
-  - Skip if same block as last observation
-  - Transform: tickCumulative += tick * timeDelta
-  - Advance index (wrapping around ring buffer)
-```
-
-### 6. TWAP Computation (`_getTWAPSqrtPrice`)
-
-```
-Read observation state for pool
-  |
-  v
-Need >= 2 observations? No -> return 0 (spot fallback)
-  |
-  v
-Oldest observation old enough (> 30min ago)? No -> return 0 (spot fallback)
-  |
-  v
-observeTWAP(poolId, TWAP_PERIOD=1800, tick, index, liquidity, cardinality)
-  -> Oracle.observeSingle(0 secondsAgo) for current tickCumulative
-  -> Oracle.observeSingle(1800 secondsAgo) for past tickCumulative
-  -> arithmeticMeanTick = (current - past) / secondsAgo
-  -> Round toward negative infinity for negative ticks
-  |
-  v
-TickMath.getSqrtPriceAtTick(arithmeticMeanTick) -> sqrtPriceX96
-```
-
-## Oracle Mechanics
-
-The oracle is critical to routing security. Understand these properties:
-
-**Ring buffer**: Fixed-size array per pool (`observations[poolId][65_535]`). Observations overwrite the oldest when the buffer is full. The `states[poolId]` struct tracks `index`, `cardinality`, and `cardinalityNext`.
-
-**Auto-growth**: When the buffer fills (`index == cardinality - 1` and `cardinality == cardinalityNext`), `_recordObservation` doubles `cardinalityNext` up to 1024. `Oracle.grow()` pre-allocates storage slots. Actual cardinality increases when new writes reach the expanded region.
-
-**Warmup period**: A new pool starts with cardinality 1. The first swap adds a second observation. TWAP becomes available only after the oldest observation is at least `TWAP_PERIOD` (1800) seconds old AND cardinality >= 2.
-
-**Same-block dedup**: `Oracle.write()` is a no-op if `last.blockTimestamp == blockTimestamp`. This prevents the same block from overwriting observations.
-
-**Binary search**: `Oracle.binarySearch()` finds the two observations surrounding a target timestamp. `observeSingle()` interpolates between them for intermediate timestamps.
-
-**Timestamp overflow**: `Oracle.lte()` handles uint32 overflow (wraps every ~136 years). Safe for 0 or 1 overflows.
-
-## Key Constants
-
-| Constant | Value | Meaning |
-|----------|-------|---------|
-| `TWAP_PERIOD` | 1,800 | 30-minute TWAP window |
-| `TWAP_SLIPPAGE_DENOMINATOR` | 10,000 | Denominator for slippage calculations |
-| `UNISWAP_NATIVE_ETH` | `address(0)` | V4's native ETH representation |
-| `JB_NATIVE_TOKEN` | `0x...EEEe` | JB's native token constant |
-
-## Priority Audit Areas
-
-### 1. Flash-Accounting Correctness (Highest Priority)
-
-The `_routeThroughJuicebox` function operates within V4's flash-accounting context:
-- `poolManager.take()` withdraws tokens (creates a debt the hook must repay)
-- External JB terminal call transforms tokens
-- `_settleOutput()` deposits output tokens (repays a credit to the swapper)
-
-Verify:
-- If the JB terminal call reverts, the entire swap reverts atomically (PoolManager balance check at `unlock()` end)
-- If the JB terminal silently consumes tokens without returning output, `_settleOutput(0)` causes a PoolManager balance mismatch and revert
-- The `BeforeSwapDelta` returned from `_beforeSwap` correctly represents the hook's token movements: `+amountIn` (hook takes specified token), `-outputReceived` (hook gives unspecified token)
-- For V4 routes (ZERO_DELTA), the hook neither takes nor settles anything -- V4 handles the swap normally
-
-### 2. TWAP Manipulation
-
-The TWAP uses a 30-minute window. Verify:
-- An attacker sustaining price manipulation for 30 minutes faces significant arbitrage losses (quantify the cost)
-- The spot price fallback (when TWAP unavailable) is trivially manipulable. Verify that `amountOutMin` protects users during the warmup window.
-- Can an attacker force a pool back into spot-price-only mode by manipulating observation state?
-- The auto-growth mechanism: can an attacker cause excessive gas costs by triggering cardinality growth at inopportune times?
-- `Oracle.write()` deduplication: can an attacker exploit the same-block no-op to prevent observation recording?
-
-### 3. Spot Price Fallback Window
-
-When `_getTWAPSqrtPrice` returns 0, `estimateUniswapOutput` falls back to `poolManager.getSlot0()` spot price. This window exists:
-- From pool initialization until observations span 30 minutes
-- On pools with very low trading activity
-
-During this window, an attacker can:
-1. Manipulate spot price in a single block
-2. Force routing through a worse path
-3. Sandwich the victim's swap
-
-Verify that `amountOutMin` (decoded from hookData) provides sufficient protection.
-
-### 4. Routing Decision Accuracy
-
+Strong findings here usually show a path-selection bug that downstream repos would treat as economic truth.
+Additional source-specific checks worth doing:
+- confirm buy-side estimation still prefers `previewPayFor(...)` before static weight math
+- confirm sell-side estimation still uses `previewCashOutFrom(...)` and deducts terminal fee only when it can read one
+- confirm `hookData` semantics remain split: `_beforeSwap` requires exactly one encoded `uint256 amountOutMin`, while `_afterSwap` tolerates extra metadata for pure V4 routes
+- confirm spot fallback is still the only low-history escape hatch and not an accidental bypass of routing safeguards
 The hook compares JB expected output vs V4 expected output. Verify:
 - `calculateExpectedTokensWithCurrency()`: correctly handles currency conversion via `PRICES.pricePerUnitOf()`, reserved percent deduction, and payment token decimal normalization
 - `calculateExpectedOutputFromSelling()`: uses total surplus (all terminals) which may overestimate for projects with `useTotalSurplusForCashOuts = false`. The fee deduction uses `terminal.FEE()` (wrapped in try-catch; defaults to 0 if the terminal does not implement `IJBFeeTerminal`) even for feeless addresses (conservative by design for standard terminals).
