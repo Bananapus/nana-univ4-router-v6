@@ -41,6 +41,19 @@
 2. Query the `Oracle` library through the hook's `observe()`-style surface.
 3. Use that output for routing, safety checks, or external integrations that need time-weighted data.
 
+## Journey 4: Warm Up The Oracle Before Trusting It For Safety-Critical Routing
+
+**Starting state:** the pool and hook were just initialized or have too little recent history for a meaningful TWAP.
+
+**Success:** operators and integrators know when the system is still relying on spot-like behavior and wait for enough history before treating the oracle as protective.
+
+**Flow**
+1. Initialize the pool and begin recording observations through live activity over time.
+2. Treat the earliest period as oracle warmup, not as fully mature TWAP protection.
+3. Only rely on the hook's time-weighted routing assumptions once the pool has accumulated enough history for the configured lookback window.
+
+**Failure cases that matter:** single-block or short-window spot manipulation during warmup, assuming cardinality alone means the oracle is mature, and building downstream safety assumptions that ignore the hook's fallback behavior.
+
 ## Hand-Offs
 
 - Use [nana-buyback-hook-v6](../nana-buyback-hook-v6/USER_JOURNEYS.md) when the question is project-level buyback routing rather than the hook-level swap primitive.
