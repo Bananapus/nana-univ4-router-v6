@@ -690,30 +690,19 @@ contract JBUniswapV4Hook is BaseHook {
         uint256 buyProjectId = isBuyingJBToken ? tokenOutProjectId : 0;
         uint256 sellProjectId = isSellingJBToken ? tokenInProjectId : 0;
 
-        // Use the appropriate project ID for Juicebox operations.
-        // Buying takes priority: if both are JB tokens, we compare buying via Juicebox vs Uniswap.
-        // When both tokens are JB project tokens, only the buy-side (minting) is evaluated for routing.
-        // The sell-side token is the project token being sold and is intentionally not evaluated separately —
-        // evaluating both sides would double gas costs. The buy-side heuristic is conservative: it may miss
-        // sell-side opportunities where cash-out yields more, but never overpays.
-        uint256 projectId = isBuyingJBToken ? buyProjectId : sellProjectId;
-
-        uint256 juiceboxExpectedOutput;
-
-        // Check if Juicebox is better than the best Uniswap option
-        // Only consider Juicebox if a valid terminal exists for the appropriate token
-        // For buying: terminal must support the payment token (tokenIn), projectId is the buy-side project
-        // For selling: terminal must have the output token (tokenOut), projectId is the sell-side project
-        address terminalToken = isBuyingJBToken ? tokenIn : tokenOut;
-        IJBTerminal jbTerminal = _getPrimaryTerminal({projectId: projectId, token: terminalToken});
+        uint256 buySideExpectedOutput;
+        uint256 sellSideExpectedOutput;
+        IJBTerminal buySideTerminal;
+        IJBTerminal sellSideTerminal;
 
         if (isBuyingJBToken) {
+            buySideTerminal = _getPrimaryTerminal({projectId: buyProjectId, token: tokenIn});
             // Buying JB tokens: compare Juicebox vs Uniswap for getting JB tokens.
             // Prefer previewPayFor (accounts for data hooks like buyback hooks) over static weight estimation.
             // Guard: terminal must exist for preview. Fall back to static estimation if not.
-            if (address(jbTerminal) != address(0)) {
+            if (address(buySideTerminal) != address(0)) {
                 // slither-disable-next-line unused-return
-                try jbTerminal.previewPayFor({
+                try buySideTerminal.previewPayFor({
                     projectId: buyProjectId,
                     token: _normalizeToken(tokenIn),
                     amount: amountIn,
@@ -722,33 +711,26 @@ contract JBUniswapV4Hook is BaseHook {
                 }) returns (
                     JBRuleset memory, uint256 beneficiaryTokenCount, uint256, JBPayHookSpecification[] memory
                 ) {
-                    juiceboxExpectedOutput = beneficiaryTokenCount;
+                    buySideExpectedOutput = beneficiaryTokenCount;
                 } catch {
                     // Fall back to static weight estimation if preview reverts. If the estimation also fails
                     // (e.g. token lacks decimals()), leave juiceboxExpectedOutput = 0 so V4 is preferred
                     // rather than silently using a wrong estimate.
-                    // slither-disable-next-line unused-return
-                    try this.calculateExpectedTokensWithCurrency({
+                    buySideExpectedOutput = calculateExpectedTokensWithCurrency({
                         projectId: buyProjectId, paymentToken: tokenIn, paymentAmount: amountIn
-                    }) returns (
-                        uint256 estimated
-                    ) {
-                        juiceboxExpectedOutput = estimated;
-                    } catch {}
+                    });
                 }
             } else {
                 // No terminal available — use static weight estimation. If estimation fails, leave output
                 // as 0 so V4 is preferred.
-                // slither-disable-next-line unused-return
-                try this.calculateExpectedTokensWithCurrency({
+                buySideExpectedOutput = calculateExpectedTokensWithCurrency({
                     projectId: buyProjectId, paymentToken: tokenIn, paymentAmount: amountIn
-                }) returns (
-                    uint256 estimated
-                ) {
-                    juiceboxExpectedOutput = estimated;
-                } catch {}
+                });
             }
-        } else if (isSellingJBToken) {
+        }
+
+        if (isSellingJBToken) {
+            sellSideTerminal = _getPrimaryTerminal({projectId: sellProjectId, token: tokenOut});
             // Selling JB tokens: compare Juicebox vs Uniswap for getting output tokens
             // NOTE: When cashOutTaxRate == 0, the bonding curve is linear — each token redeems for its
             // exact proportional share of surplus. The hook will repeatedly prefer JB cashout over V4
@@ -757,10 +739,12 @@ contract JBUniswapV4Hook is BaseHook {
             // The V4 pool loses its sell-side price-discovery role while JB cashout offers better rates,
             // but no value is extracted beyond what the token holders are entitled to.
             // See RISKS.md for full analysis.
-            juiceboxExpectedOutput = calculateExpectedOutputFromSelling({
-                projectId: sellProjectId, tokenAmountIn: amountIn, outputToken: tokenOut, terminal: jbTerminal
+            sellSideExpectedOutput = calculateExpectedOutputFromSelling({
+                projectId: sellProjectId, tokenAmountIn: amountIn, outputToken: tokenOut, terminal: sellSideTerminal
             });
-        } else {
+        }
+
+        if (!isBuyingJBToken && !isSellingJBToken) {
             // No JB token involved, proceed with normal Uniswap swap
             emit RouteSelected(poolId, false, 0, msg.sender);
             return (BaseHook.beforeSwap.selector, BeforeSwapDeltaLibrary.ZERO_DELTA, 0);
@@ -771,9 +755,17 @@ contract JBUniswapV4Hook is BaseHook {
             estimateUniswapOutput({poolId: poolId, key: key, amountIn: amountIn, zeroForOne: params.zeroForOne});
 
         // Compare V4 vs Juicebox
-        bool jbTerminalAvailable = address(jbTerminal) != address(0) && address(jbTerminal).code.length > 0;
+        bool buySideAvailable = address(buySideTerminal) != address(0) && address(buySideTerminal).code.length > 0;
+        bool sellSideAvailable = address(sellSideTerminal) != address(0) && address(sellSideTerminal).code.length > 0;
+        bool routeViaBuySide =
+            buySideAvailable && buySideExpectedOutput >= sellSideExpectedOutput && buySideExpectedOutput > 0;
+        bool routeViaSellSide =
+            sellSideAvailable && sellSideExpectedOutput > buySideExpectedOutput && sellSideExpectedOutput > 0;
+        uint256 juiceboxExpectedOutput = routeViaSellSide ? sellSideExpectedOutput : buySideExpectedOutput;
+        IJBTerminal jbTerminal = routeViaSellSide ? sellSideTerminal : buySideTerminal;
+        uint256 projectId = routeViaSellSide ? sellProjectId : buyProjectId;
         bool juiceboxBetterThanV4 =
-            jbTerminalAvailable && juiceboxExpectedOutput > uniswapV4ExpectedTokens && juiceboxExpectedOutput > 0;
+            (routeViaBuySide || routeViaSellSide) && juiceboxExpectedOutput > uniswapV4ExpectedTokens;
 
         emit BestRouteSelected(
             poolId,
@@ -791,7 +783,7 @@ contract JBUniswapV4Hook is BaseHook {
                 inputCurrency: inputCurrency,
                 outputCurrency: outputCurrency,
                 amountIn: amountIn,
-                isBuying: isBuyingJBToken,
+                isBuying: routeViaBuySide,
                 terminal: jbTerminal,
                 amountOutMin: amountOutMin
             });
