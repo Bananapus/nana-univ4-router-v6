@@ -1090,6 +1090,7 @@ contract JBUniswapV4Hook is BaseHook {
     /// @dev Uses OpenZeppelin's CurrencySettler library to ensure correct settlement order
     /// @dev This handles sync -> transfer -> settle in the correct order for flash-accounting safety
     function _settleOutput(Currency outputCurrency, uint256 amount) internal {
+        // PoolManager settlement is expressed through signed `int128` deltas, so oversized JB outputs must stop here.
         if (amount > MAX_V4_DELTA) revert JBUniswapV4Hook_OutputExceedsV4DeltaLimit(amount);
         // Use CurrencySettler library to ensure correct settlement order and flash-accounting safety
         // payer = address(this) since we're settling tokens we received
