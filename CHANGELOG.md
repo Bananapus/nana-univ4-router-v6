@@ -19,3 +19,11 @@ This repo was not part of the deployed v5 ecosystem that the top-level changelog
 
 - Do not count this repo in the deployed v5-to-v6 ecosystem summary.
 - If you are integrating it, use the current v6 sources and tests as the source of truth rather than trying to map it onto the older deployed ecosystem.
+
+## Local audit remediations
+
+- JB quotes that exceed Uniswap V4's signed `int128` delta capacity are now treated as ineligible, so swaps fall back to V4 instead of reverting during settlement.
+- `_beforeSwap` and `_afterSwap` now agree on hook-data parsing: the first 32 bytes are `amountOutMin`, and extra trailing metadata is tolerated.
+- Buy-side live routing now trusts `previewPayFor()` only. Preview failures, missing buy terminals, and extreme token-decimal metadata all degrade to a `0` JB quote so V4 stays live.
+- Sell-side live routing now treats `previewCashOutFrom()` as authoritative. If that preview surface is unavailable or reverts, the JB sell quote intentionally degrades to `0` so the router does not rely on a stale static reclaim estimate.
+- Large-trade V4 quote drift remains a documented limitation of the current linear estimator; fork tests pin sample small-trade and large-trade drift envelopes for operators.

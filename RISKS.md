@@ -53,30 +53,39 @@ Forward-looking risk analysis of `JBUniswapV4Hook` and its `Oracle` library. Thi
 ### 3.1 Three-way routing logic
 
 - `_beforeSwap` evaluates two routes: V4 pool (via TWAP-based `estimateUniswapOutput`) and Juicebox (via `previewPayFor` for buying, falling back to `calculateExpectedTokensWithCurrency` if the preview reverts or no terminal exists; or `calculateExpectedOutputFromSelling` for selling). Picks the one with higher estimated output.
+- Buy-side routing only trusts `previewPayFor`. If previewing is unavailable, reverts, or no primary terminal exists, the hook leaves the JB buy quote at `0` and falls back to V4.
 - If neither token is a JB project token (`TOKENS.projectIdOf` returns 0 for both), routing skips JB comparison entirely and passes through to V4 (`ZERO_DELTA`).
-- When both tokens are JB project tokens, only the buy-side (minting into the output project) is compared. Sell-side evaluation is omitted to save gas. This may miss sell-side opportunities.
+- When both tokens are JB project tokens, the hook evaluates both the buy-side and sell-side Juicebox paths and chooses the better one.
+- JB routes whose previewed output exceeds Uniswap V4's signed `int128` delta capacity are treated as ineligible and automatically fall back to V4.
 
 ### 3.2 Slippage protection layers
 
 - **Hook level (`_beforeSwap`)**: JB routes enforce `amountOutMin` via the terminal's `minReturnedTokens` / `minTokensReclaimed` parameter.
 - **Hook level (`_afterSwap`)**: V4 routes validate actual delta output against `amountOutMin`. Uses absolute value of negative delta (V4 convention: output amounts are negative). Fixed from a prior bug where `outputAmount > 0` was never true for V4's negative convention.
 - **JuiceboxSwapRouter (test utility)**: Additional slippage check in `unlockCallback` after adjusting for pre-deposited amounts.
-- Gap: `_beforeSwap` requires exactly 32 bytes hookData (`== 32`), while `_afterSwap` accepts `>= 32`. Routers cannot append extra metadata beyond `amountOutMin`.
+- `hookData` now accepts any payload with at least the first 32 bytes reserved for `amountOutMin`. Pure V4 callers may append extra metadata without being rejected by `_beforeSwap`.
 
 ### 3.3 estimateUniswapOutput accuracy
 
 - Uses TWAP sqrtPrice (not spot) to estimate output. Deducts the pool fee: for static fee pools uses `key.fee` directly; for dynamic fee pools (where `key.fee == DYNAMIC_FEE_FLAG`) reads the actual LP fee from `slot0` via `poolManager.getSlot0()`. Does not account for actual price impact from the swap itself.
 - For large swaps relative to pool liquidity, the estimate overestimates output because it assumes constant price (no slippage curve). This biases routing toward V4 for large swaps.
+- This is an accepted limitation in the current design. Fork tests show the linear quote remains reasonably close for very small trades on the fork-backed shallow pool (`<= 5%` drift at `0.01 ether`) but becomes materially optimistic for larger trades (`> 20%` drift at `5 ether`). Those thresholds are environment-specific and must be revalidated as pool depth changes.
 - When sqrtPriceX96 exceeds `type(uint128).max`, the function branches to use `FullMath.mulDiv` with `ratioX128` to avoid overflow. Verified across the full tick range in `testFuzz_FullMathSafety_PriceSquared`.
 - The estimate is a view function -- no actual swap is simulated. The V4 pool's real output may differ due to tick crossings, concentrated liquidity gaps, and fee changes (for dynamic fee pools, the LP fee read from `slot0` may change between estimation and execution).
+- Even when a JB preview beats the V4 quote economically, the hook still requires that predicted output to fit Uniswap's signed `int128` accounting width before selecting the JB path.
 
 ### 3.4 Conservative sell estimate
 
 - `calculateExpectedOutputFromSelling` deducts the terminal fee (read dynamically via `terminal.FEE()` / `JBConstants.MAX_FEE`, wrapped in try-catch -- defaults to 0 if the terminal does not implement `IJBFeeTerminal`) even if the hook address is registered as feeless. For standard terminals, this systematically disadvantages JB sell routing. For non-standard terminals without `IJBFeeTerminal`, no fee is deducted.
 - Uses total surplus (empty terminals/accountingContexts arrays) regardless of the project's `useTotalSurplusForCashOuts` flag. May overestimate JB cashout output for projects with local-surplus-only configuration. Actual cashout would return less, but `amountOutMin` protects the user.
 - Sell-side estimation now prefers `previewCashOutFrom`, which can incorporate cash-out data-hook effects when the
-  terminal store supports that preview surface. If previewing is unavailable or reverts, the hook falls back to the
-  static surplus estimate and then to V4 if estimation fails entirely.
+  terminal store supports that preview surface. If previewing is unavailable or reverts, the hook intentionally
+  returns a `0` JB sell quote and degrades to V4 instead of reviving the older static surplus estimate.
+
+### 3.5 Buy-side assumptions
+
+- Buy-side JB routing assumes the payment token is lossless with respect to the terminal's accounting. Deflationary / fee-on-transfer payment tokens can make previewed buy quotes diverge from execution.
+- Project-selected primary terminals are trusted integration surface. If a project points `primaryTerminalOf` at hostile code, the router will treat that terminal as the canonical execution target for that project/token pair.
 
 ## 4. MEV Surface
 
@@ -116,13 +125,14 @@ When `JBUniswapV4Hook` is composed with `JBBuybackHook` (or any data hook) on th
 4. **Sell-side estimation is only as strong as the store preview surface**: `calculateExpectedOutputFromSelling`
    now prefers `previewCashOutFrom`, which is materially better for cash-out-hooked projects because it can simulate
    `beforeCashOutRecordedWith(...)`. If a store implementation lacks that preview or if the preview reverts, the hook
-   falls back to the older static surplus estimate.
+   intentionally declines JB sell routing and lets V4 handle the swap rather than trusting the older static surplus
+   estimate.
 
 **Deployer requirement**: When composing this hook with a project that has an active data hook, treat buy-side and
 sell-side differently. Buy-side routing still assumes static issuance weight, so deployers must verify that pay-side
 overrides do not make the estimate dangerously stale. Sell-side routing is stronger than before because it prefers
-`previewCashOutFrom`, but it still depends on the underlying store preview faithfully matching the terminal's real
-cash-out path.
+`previewCashOutFrom`, but it intentionally treats preview failure as JB-route ineligibility rather than falling back
+to a stale static reclaim estimate.
 
 This is documented inline in `src/JBUniswapV4Hook.sol` as `COMPOSITION WARNING` (near the contract header) and a related `WARNING` note in `_beforeSwap`.
 

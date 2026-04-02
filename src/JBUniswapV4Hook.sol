@@ -78,6 +78,10 @@ contract JBUniswapV4Hook is BaseHook {
     /// @notice Reverts when swap output is below minimum required amount.
     error JBUniswapV4Hook_InsufficientOutput();
 
+    /// @notice Reverts when a Juicebox output cannot fit inside Uniswap V4's signed delta accounting.
+    /// @param amount The oversized output amount.
+    error JBUniswapV4Hook_OutputExceedsV4DeltaLimit(uint256 amount);
+
     /// @notice Reverts when a reentrant swap is detected during Juicebox routing.
     error JBUniswapV4Hook_ReentrantRouting();
 
@@ -127,6 +131,10 @@ contract JBUniswapV4Hook is BaseHook {
     /// @dev 1024 observations cover just over 34 minutes at 2-second block times, keeping a 30-minute TWAP
     /// window available on fast-block L2s while staying well below the storage array's 65,535 hard limit.
     uint16 public constant MAX_TWAP_CARDINALITY = 1024;
+
+    /// @notice Largest output amount that Uniswap V4 can represent in flash-accounting deltas.
+    /// @dev PoolManager settles against signed `int128` deltas, so larger JB outputs must fall back to V4.
+    uint256 public constant MAX_V4_DELTA = uint256(uint128(type(int128).max));
 
     //*********************************************************************//
     // --------------------- public stored properties -------------------- //
@@ -190,8 +198,10 @@ contract JBUniswapV4Hook is BaseHook {
 
     /// @notice Calculate expected output from selling JB tokens
     /// @dev Prefers the terminal store's `previewCashOutFrom` simulation so sell-side estimates can incorporate
-    /// cash-out data-hook effects when the underlying store supports that surface. Falls back to a static surplus
-    /// estimate if previewing is unavailable or reverts.
+    /// cash-out data-hook effects when the underlying store supports that surface.
+    /// If previewing is unavailable or reverts, this helper intentionally returns `0` and makes the JB sell route
+    /// ineligible. That conservative degrade rule avoids routing through JB on a stale static reclaim estimate that
+    /// may disagree with the terminal's live cash-out path.
     /// The estimate also conservatively deducts fees even for feeless addresses, which may underestimate output.
     /// @dev NOTE: The `FEE()` call casts the terminal to `IJBFeeTerminal` inside a try-catch. If the terminal
     /// does not implement `IJBFeeTerminal`, the fee defaults to 0 (no fee deduction in the estimate).
@@ -236,6 +246,9 @@ contract JBUniswapV4Hook is BaseHook {
             }
             return grossReclaim - FullMath.mulDiv({a: grossReclaim, b: fee, denominator: JBConstants.MAX_FEE});
         } catch {
+            // Conservative degrade rule: if the live preview surface is unavailable, do not resurrect the older
+            // static reclaim estimate. Cash-out data hooks and terminal-specific logic can make that estimate stale,
+            // so the router treats the JB sell path as ineligible and leaves execution to V4 instead.
             return 0;
         }
     }
@@ -244,6 +257,8 @@ contract JBUniswapV4Hook is BaseHook {
     /// @dev WARNING: This estimate uses the ruleset's static weight. If the project has a data hook (such as a
     /// buyback hook) that overrides the weight at payment time, the actual token issuance may differ from this
     /// estimate, causing the swap-vs-mint routing decision to diverge. Deployers must ensure weight compatibility.
+    /// @dev This helper is intentionally more permissive than live routing. `_beforeSwap()` only trusts
+    /// `previewPayFor()` for buy-side best-execution decisions and uses this helper as an offchain/reference surface.
     /// @param projectId The Juicebox project ID
     /// @param paymentToken The token being used for payment
     /// @param paymentAmount The amount being paid (in the token's native decimals)
@@ -283,6 +298,9 @@ contract JBUniswapV4Hook is BaseHook {
         // forge-lint: disable-next-line(unsafe-typecast)
         uint32 paymentCurrencyId = uint32(uint160(paymentToken));
         uint8 paymentTokenDecimals = _getTokenDecimals(paymentToken);
+        // `10 ** decimals` only fits in uint256 up through 77 decimals. Larger values are treated as
+        // unsupported metadata so the caller can degrade to a 0 quote instead of reverting.
+        if (paymentTokenDecimals > 77) return 0;
 
         // Get the price: how much baseCurrency per 1 unit of payment token
         // pricePerUnitOf returns the pricingCurrency cost for one unit of unitCurrency
@@ -644,13 +662,12 @@ contract JBUniswapV4Hook is BaseHook {
         // Prevent recursive routing: if we're already routing through Juicebox, block reentrant swaps.
         if (_routing) revert JBUniswapV4Hook_ReentrantRouting();
 
-        // Decode amountOutMin from hookData (required: uint256)
-        // hookData must be exactly 32 bytes, encoding a single uint256 amountOutMin (the minimum
-        // acceptable output amount). This strict check prevents malformed metadata from reaching hook contracts.
-        // Callers must format hookData as abi.encode(uint256).
+        // Decode amountOutMin from the first 32-byte word of hookData.
+        // Pure V4 integrations may append extra metadata after this prefix, so `_beforeSwap` must accept the same
+        // payload family that `_afterSwap` already supports.
         uint256 amountOutMin;
-        if (hookData.length == 32) {
-            amountOutMin = abi.decode(hookData, (uint256));
+        if (hookData.length >= 32) {
+            amountOutMin = abi.decode(hookData[:32], (uint256));
         } else {
             revert JBUniswapV4Hook_AmountOutMinRequired();
         }
@@ -698,8 +715,9 @@ contract JBUniswapV4Hook is BaseHook {
         if (isBuyingJBToken) {
             buySideTerminal = _getPrimaryTerminal({projectId: buyProjectId, token: tokenIn});
             // Buying JB tokens: compare Juicebox vs Uniswap for getting JB tokens.
-            // Prefer previewPayFor (accounts for data hooks like buyback hooks) over static weight estimation.
-            // Guard: terminal must exist for preview. Fall back to static estimation if not.
+            // Prefer previewPayFor because it reflects live terminal execution semantics.
+            // If previewing is unavailable, treat the JB buy path as ineligible so swaps can fall back to V4
+            // instead of relying on static weight math that may ignore runtime terminal constraints.
             if (address(buySideTerminal) != address(0)) {
                 // slither-disable-next-line unused-return
                 try buySideTerminal.previewPayFor({
@@ -713,19 +731,13 @@ contract JBUniswapV4Hook is BaseHook {
                 ) {
                     buySideExpectedOutput = beneficiaryTokenCount;
                 } catch {
-                    // Fall back to static weight estimation if preview reverts. If the estimation also fails
-                    // (e.g. token lacks decimals()), leave juiceboxExpectedOutput = 0 so V4 is preferred
-                    // rather than silently using a wrong estimate.
-                    buySideExpectedOutput = calculateExpectedTokensWithCurrency({
-                        projectId: buyProjectId, paymentToken: tokenIn, paymentAmount: amountIn
-                    });
+                    // Preview failure means the live JB buy path is not trustworthy enough for best execution.
+                    // Leave the quote at 0 so V4 remains available.
+                    buySideExpectedOutput = 0;
                 }
             } else {
-                // No terminal available — use static weight estimation. If estimation fails, leave output
-                // as 0 so V4 is preferred.
-                buySideExpectedOutput = calculateExpectedTokensWithCurrency({
-                    projectId: buyProjectId, paymentToken: tokenIn, paymentAmount: amountIn
-                });
+                // No live terminal means no executable JB buy path.
+                buySideExpectedOutput = 0;
             }
         }
 
@@ -767,9 +779,13 @@ contract JBUniswapV4Hook is BaseHook {
         uint256 juiceboxExpectedOutput = routeViaSellSide ? sellSideExpectedOutput : buySideExpectedOutput;
         IJBTerminal jbTerminal = routeViaSellSide ? sellSideTerminal : buySideTerminal;
         uint256 projectId = routeViaSellSide ? sellProjectId : buyProjectId;
-        // Only route through Juicebox if the chosen JB side beats the best Uniswap quote.
-        bool juiceboxBetterThanV4 =
-            (routeViaBuySide || routeViaSellSide) && juiceboxExpectedOutput > uniswapV4ExpectedTokens;
+        // Uniswap V4 deltas are signed int128 values. Even if Juicebox would return more,
+        // the hook must treat over-cap quotes as ineligible and let the swap continue through V4.
+        bool juiceboxFitsV4Delta = juiceboxExpectedOutput <= MAX_V4_DELTA;
+        // Only route through Juicebox if the chosen JB side beats the best Uniswap quote
+        // and can still be represented by the downstream V4 accounting domain.
+        bool juiceboxBetterThanV4 = (routeViaBuySide || routeViaSellSide) && juiceboxFitsV4Delta
+            && juiceboxExpectedOutput > uniswapV4ExpectedTokens;
 
         emit BestRouteSelected(
             poolId,
@@ -840,10 +856,11 @@ contract JBUniswapV4Hook is BaseHook {
     function _createSwapDelta(uint256 amountIn, uint256 amountOut) internal pure returns (BeforeSwapDelta) {
         // The hook takes the input amount and settles the output amount
         // For both buying and selling: take inputCurrency, settle outputCurrency
+        if (amountOut > MAX_V4_DELTA) revert JBUniswapV4Hook_OutputExceedsV4DeltaLimit(amountOut);
         return toBeforeSwapDelta({
             // forge-lint: disable-next-line(unsafe-typecast)
             deltaSpecified: int128(uint128(amountIn)),
-            // Safe: amountOut is a swap output bounded by pool liquidity, fits in uint128/int128.
+            // Safe: the caller already rejected outputs above Uniswap V4's signed delta capacity.
             // forge-lint: disable-next-line(unsafe-typecast)
             deltaUnspecified: -int128(uint128(amountOut))
         });
@@ -1073,6 +1090,7 @@ contract JBUniswapV4Hook is BaseHook {
     /// @dev Uses OpenZeppelin's CurrencySettler library to ensure correct settlement order
     /// @dev This handles sync -> transfer -> settle in the correct order for flash-accounting safety
     function _settleOutput(Currency outputCurrency, uint256 amount) internal {
+        if (amount > MAX_V4_DELTA) revert JBUniswapV4Hook_OutputExceedsV4DeltaLimit(amount);
         // Use CurrencySettler library to ensure correct settlement order and flash-accounting safety
         // payer = address(this) since we're settling tokens we received
         // burn = false since we're transferring ERC-20 tokens, not burning ERC-6909 tokens

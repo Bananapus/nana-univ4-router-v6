@@ -26,6 +26,7 @@ import {IJBTerminal} from "@bananapus/core-v6/src/interfaces/IJBTerminal.sol";
 import {IJBRulesetApprovalHook} from "@bananapus/core-v6/src/interfaces/IJBRulesetApprovalHook.sol";
 import {JBAccountingContext} from "@bananapus/core-v6/src/structs/JBAccountingContext.sol";
 import {JBCashOutHookSpecification} from "@bananapus/core-v6/src/structs/JBCashOutHookSpecification.sol";
+import {JBPayHookSpecification} from "@bananapus/core-v6/src/structs/JBPayHookSpecification.sol";
 import {JBRuleset} from "@bananapus/core-v6/src/structs/JBRuleset.sol";
 import {JBRulesetMetadata} from "@bananapus/core-v6/src/structs/JBRulesetMetadata.sol";
 import {JBRulesetMetadataResolver} from "@bananapus/core-v6/src/libraries/JBRulesetMetadataResolver.sol";
@@ -176,6 +177,21 @@ contract MockJBMultiTerminal {
         for (uint256 i; i < accountingContexts.length; i++) {
             _accountingContextsOf[projectId].push(accountingContexts[i]);
         }
+    }
+
+    function previewPayFor(
+        uint256,
+        address,
+        uint256 amount,
+        address,
+        bytes calldata
+    )
+        external
+        view
+        returns (JBRuleset memory ruleset, uint256 beneficiaryTokenCount, uint256, JBPayHookSpecification[] memory)
+    {
+        beneficiaryTokenCount = useOverridePayReturn ? overridePayReturnAmount : amount * 1000;
+        return (ruleset, beneficiaryTokenCount, 0, new JBPayHookSpecification[](0));
     }
 
     function pay(
@@ -2411,6 +2427,22 @@ contract ReentrantMockTerminal {
     // forge-lint: disable-next-line(mixed-case-function)
     function FEE() external pure returns (uint256) {
         return 25;
+    }
+
+    function previewPayFor(
+        uint256,
+        address,
+        uint256 amount,
+        address,
+        bytes calldata
+    )
+        external
+        pure
+        returns (JBRuleset memory ruleset, uint256 beneficiaryTokenCount, uint256, JBPayHookSpecification[] memory)
+    {
+        beneficiaryTokenCount =
+            amount * 1000;
+        return (ruleset, beneficiaryTokenCount, 0, new JBPayHookSpecification[](0));
     }
 
     function pay(

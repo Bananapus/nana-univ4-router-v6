@@ -28,6 +28,7 @@ import {JBRulesetMetadataResolver} from "@bananapus/core-v6/src/libraries/JBRule
 import {IJBRulesetApprovalHook} from "@bananapus/core-v6/src/interfaces/IJBRulesetApprovalHook.sol";
 import {IJBTerminalStore} from "@bananapus/core-v6/src/interfaces/IJBTerminalStore.sol";
 import {JBCashOutHookSpecification} from "@bananapus/core-v6/src/structs/JBCashOutHookSpecification.sol";
+import {JBPayHookSpecification} from "@bananapus/core-v6/src/structs/JBPayHookSpecification.sol";
 import {HookMiner} from "@uniswap/v4-periphery/src/utils/HookMiner.sol";
 
 // ============================================================
@@ -183,6 +184,21 @@ contract MockJBMultiTerminal_AuditGaps {
     function setPayReturnAmount(uint256 amount) external {
         overridePayReturnAmount = amount;
         useOverridePayReturn = true;
+    }
+
+    function previewPayFor(
+        uint256,
+        address,
+        uint256 amount,
+        address,
+        bytes calldata
+    )
+        external
+        view
+        returns (JBRuleset memory ruleset, uint256 beneficiaryTokenCount, uint256, JBPayHookSpecification[] memory)
+    {
+        beneficiaryTokenCount = useOverridePayReturn ? overridePayReturnAmount : amount * 1000;
+        return (ruleset, beneficiaryTokenCount, 0, new JBPayHookSpecification[](0));
     }
 
     function pay(
