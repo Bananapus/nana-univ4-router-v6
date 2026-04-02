@@ -616,7 +616,11 @@ contract JBUniswapV4HookForkTest is Test {
         return _measureDriftBpsForTradeOnPool(shallowKey, shallowId, amountIn);
     }
 
-    function _measureDriftBpsForTradeOnPool(PoolKey memory shallowKey, PoolId shallowId, uint256 amountIn)
+    function _measureDriftBpsForTradeOnPool(
+        PoolKey memory shallowKey,
+        PoolId shallowId,
+        uint256 amountIn
+    )
         private
         returns (uint256 driftBps)
     {

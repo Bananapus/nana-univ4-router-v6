@@ -93,11 +93,8 @@ contract RevertingSellPreviewTerminal {
         lastBeneficiary = beneficiary;
 
         uint256 outputAmount = TERMINAL_STORE.currentReclaimableSurplusOf(
-            projectId,
-            1 ether,
-            uint32(uint160(tokenToReclaim)),
-            18
-        ) * cashOutCount / 1 ether;
+                projectId, 1 ether, uint32(uint160(tokenToReclaim)), 18
+            ) * cashOutCount / 1 ether;
         require(outputAmount >= minTokensReclaimed, "Insufficient tokens reclaimed");
 
         if (outputAmount > 0) {
@@ -226,9 +223,7 @@ contract CodexNemesisSellPreviewFallbackTest is Test {
         jbSwapRouter.swap(
             key,
             SwapParams({
-                zeroForOne: false,
-                amountSpecified: -int256(amountIn),
-                sqrtPriceLimitX96: TickMath.MAX_SQRT_PRICE - 1
+                zeroForOne: false, amountSpecified: -int256(amountIn), sqrtPriceLimitX96: TickMath.MAX_SQRT_PRICE - 1
             }),
             0
         );
