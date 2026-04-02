@@ -757,13 +757,17 @@ contract JBUniswapV4Hook is BaseHook {
         // Compare V4 vs Juicebox
         bool buySideAvailable = address(buySideTerminal) != address(0) && address(buySideTerminal).code.length > 0;
         bool sellSideAvailable = address(sellSideTerminal) != address(0) && address(sellSideTerminal).code.length > 0;
+        // When both sides are JB-aware, prefer the side with the strictly better expected Juicebox output.
+        // Ties fall toward the buy side so the router stays deterministic and avoids evaluating both paths twice.
         bool routeViaBuySide =
             buySideAvailable && buySideExpectedOutput >= sellSideExpectedOutput && buySideExpectedOutput > 0;
         bool routeViaSellSide =
             sellSideAvailable && sellSideExpectedOutput > buySideExpectedOutput && sellSideExpectedOutput > 0;
+        // Collapse the selected Juicebox side back into the single route payload consumed by _routeThroughJuicebox.
         uint256 juiceboxExpectedOutput = routeViaSellSide ? sellSideExpectedOutput : buySideExpectedOutput;
         IJBTerminal jbTerminal = routeViaSellSide ? sellSideTerminal : buySideTerminal;
         uint256 projectId = routeViaSellSide ? sellProjectId : buyProjectId;
+        // Only route through Juicebox if the chosen JB side beats the best Uniswap quote.
         bool juiceboxBetterThanV4 =
             (routeViaBuySide || routeViaSellSide) && juiceboxExpectedOutput > uniswapV4ExpectedTokens;
 
