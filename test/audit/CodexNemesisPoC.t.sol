@@ -16,6 +16,7 @@ import {MockERC20} from "../mock/MockERC20.sol";
 import {JuiceboxHookTest} from "../JBUniswapV4Hook.t.sol";
 
 contract NoFeeCashOutTerminal {
+    // forge-lint: disable-next-line(screaming-snake-case-immutable)
     uint256 internal immutable _reclaimAmount;
 
     constructor(uint256 reclaimAmount) {
@@ -41,7 +42,7 @@ contract NoFeeCashOutTerminal {
 contract CodexNemesisPoC is JuiceboxHookTest {
     using PoolIdLibrary for PoolKey;
 
-    function test_PoC_DualJBPoolIgnoresBetterSellSideRoute() public {
+    function test_PoC_DualJBPoolUsesBetterSellSideRoute() public {
         MockERC20 dualToken0 = new MockERC20("DualJB0", "DJB0");
         MockERC20 dualToken1 = new MockERC20("DualJB1", "DJB1");
 
@@ -96,6 +97,7 @@ contract CodexNemesisPoC is JuiceboxHookTest {
         assertEq(buySideQuote, 5000 ether, "buy-side preview sanity");
         assertEq(sellSideQuote, 10_000 ether, "sell-side preview sanity");
         assertLt(v4Quote, buySideQuote, "the hook must prefer a JB route over V4 in this setup");
+        assertGt(sellSideQuote, buySideQuote, "sell-side route should now be strictly better than buy-side");
 
         dualToken0.approve(address(jbSwapRouter), 1 ether);
         uint256 balanceBefore = dualToken1.balanceOf(address(this));
@@ -108,9 +110,9 @@ contract CodexNemesisPoC is JuiceboxHookTest {
 
         uint256 received = dualToken1.balanceOf(address(this)) - balanceBefore;
 
-        assertLt(received, buySideQuote, "execution can underperform even the chosen buy-side estimate");
-        assertLt(received, sellSideQuote, "the ignored sell-side cashout path would have paid materially more");
-        assertEq(mockJBMultiTerminal.lastProjectId(), buyProjectId, "routing hard-prioritizes the buy-side project");
+        assertGe(received, sellSideQuote, "execution should use the better sell-side Juicebox route");
+        assertGt(received, buySideQuote, "sell-side route should outperform the stale buy-side estimate");
+        assertEq(mockJBMultiTerminal.lastProjectId(), sellProjectId, "routing should select the sell-side project");
     }
 
     /// @dev After audit remediation, FEE() is wrapped in try-catch.

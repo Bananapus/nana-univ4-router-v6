@@ -9,7 +9,7 @@
 
 1. A V4 swap involving a Juicebox project token enters the hook.
 2. The hook estimates the V4 path and the Juicebox-native path.
-3. It chooses the better route or falls back to V4 when Juicebox-side estimation fails.
+3. It chooses the better route or falls back to V4 when Juicebox-side estimation fails, when the buy-side terminal cannot be previewed live, when the sell-side preview surface is unavailable, or when the best JB quote cannot fit Uniswap V4's signed delta accounting.
 4. After relevant pool actions, it records observations for future TWAP queries.
 
 ## High-Risk Areas
@@ -17,7 +17,8 @@
 - Route decision logic: buy/sell estimation changes have direct economic impact.
 - Oracle maturity: early pools may lack enough history for strong TWAP protection.
 - Fallback semantics: liveness is intentionally preserved when estimation fails.
-- Hook-data assumptions: swap callers must supply the expected slippage payload.
+- Hook-data assumptions: swap callers must supply `amountOutMin` in the first 32 bytes, but may append extra metadata after that prefix.
+- Quote-model limits: `estimateUniswapOutput()` is a linear quote, not a full execution simulation. Large trades can still see material V4 quote drift on shallow liquidity.
 
 ## Tests To Trust First
 

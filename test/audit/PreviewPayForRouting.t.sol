@@ -411,8 +411,8 @@ contract PreviewPayForRoutingTest is Test {
 // ═══════════════════════════════════════════════════════════════════════
 
 /// @title PreviewPayForFallbackTest
-/// @notice When `previewPayFor` reverts, the hook falls back to
-///         `calculateExpectedTokensWithCurrency` for its JB estimate.
+/// @notice When `previewPayFor` reverts, the hook treats the JB buy path as unavailable
+///         and falls back to V4 instead of using static weight math for live routing.
 contract PreviewPayForFallbackTest is Test {
     // Accept ETH for V4 settlement.
     receive() external payable {}
@@ -488,7 +488,8 @@ contract PreviewPayForFallbackTest is Test {
 
         // Configure the terminal to revert on previewPayFor.
         mockTerminal.setPreviewReverts(true);
-        // Set pay return to match static estimate (1000 * amountIn).
+        // Even if pay would have returned a large amount, live routing should no longer trust
+        // the JB buy path once previewing is unavailable.
         mockTerminal.setPreviewReturn(1000e18);
         mockTerminal.setProjectToken(123, address(projectToken));
 
@@ -525,8 +526,7 @@ contract PreviewPayForFallbackTest is Test {
         // Initialize pool at 1:1 price.
         manager.initialize(key, SQRT_PRICE_1_1);
 
-        // Add very shallow liquidity (V4 gives ~1 token per 1 ETH after fee).
-        // Static JB estimate = 1000e18 >> V4 estimate, so JB route wins.
+        // Add shallow liquidity so the V4 path remains live.
         modifyLiqRouter.modifyLiquidity(
             key,
             ModifyLiquidityParams({tickLower: -6000, tickUpper: 6000, liquidityDelta: 1000 ether, salt: 0}),
@@ -534,31 +534,23 @@ contract PreviewPayForFallbackTest is Test {
         );
     }
 
-    /// @notice When previewPayFor reverts, the hook falls back to static weight estimation.
-    ///         If the static estimate beats V4, the swap still routes through JB.
-    function test_PreviewPayFor_FallbackToStaticEstimate() public {
-        // The static estimate is weight * amount / 1e18 = 1000e18 * 1e18 / 1e18 = 1000e18.
-        // V4 gives approximately 1e18 at 1:1 price with 0.3% fee = ~0.997e18.
-        // JB route should win.
+    /// @notice Preview failure should degrade to the V4 path instead of trusting the static helper.
+    function test_PreviewPayFor_RevertFallsBackToV4() public {
         uint256 staticEstimate = hook.calculateExpectedTokensWithCurrency({
             projectId: 123, paymentToken: address(paymentToken), paymentAmount: 1 ether
         });
-
-        // The static estimate should be ~1000e18.
         assertGt(staticEstimate, 0, "static estimate should be positive");
 
-        // Execute the swap. Despite previewPayFor reverting, the fallback should work.
+        uint256 balanceBefore = projectToken.balanceOf(address(this));
         SwapParams memory params = SwapParams({
             zeroForOne: zeroForOne,
             amountSpecified: -int256(1 ether),
             sqrtPriceLimitX96: zeroForOne ? TickMath.MIN_SQRT_PRICE + 1 : TickMath.MAX_SQRT_PRICE - 1
         });
 
-        // The swap should complete without reverting (fallback to static estimate).
         jbSwapRouter.swap(key, params, 0);
-
-        // Since the static estimate >> V4 estimate, JB route should be selected.
-        assertEq(mockTerminal.lastPayProjectId(), 123, "swap should route through JB after preview fallback");
+        assertEq(mockTerminal.lastPayProjectId(), 0, "preview failure should not route through JB");
+        assertGt(projectToken.balanceOf(address(this)) - balanceBefore, 0, "swap should succeed via the V4 path");
     }
 }
 
@@ -568,9 +560,7 @@ contract PreviewPayForFallbackTest is Test {
 
 /// @title NoTerminalFallbackTest
 /// @notice When `primaryTerminalOf` returns `address(0)` for the payment token,
-///         the hook uses static `calculateExpectedTokensWithCurrency` without
-///         calling `previewPayFor`, and the swap completes via V4 if the
-///         static estimate is lower.
+///         the hook treats the JB buy path as unavailable and swaps through V4.
 contract NoTerminalFallbackTest is Test {
     // Accept ETH for V4 settlement.
     receive() external payable {}
@@ -682,28 +672,21 @@ contract NoTerminalFallbackTest is Test {
         );
     }
 
-    /// @notice When no terminal exists (address(0)), the hook uses static estimation.
-    ///         With a low weight (1e18), the static estimate is 1 token per 1 ETH,
-    ///         which is comparable to V4 at 1:1 price. The swap should complete
-    ///         without reverting regardless of which route is chosen.
-    function test_NoTerminal_UsesStaticEstimation_NoRevert() public {
-        // The static estimate: weight * amount / 1e18 = 1e18 * 1e18 / 1e18 = 1e18.
+    /// @notice When no terminal exists, the router should leave the JB buy path at 0 and use V4.
+    function test_NoTerminal_FallsBackToV4() public {
         uint256 staticEstimate = hook.calculateExpectedTokensWithCurrency({
             projectId: 123, paymentToken: address(paymentToken), paymentAmount: 1 ether
         });
-
-        // Should be approximately 1e18 (no reserved rate).
         assertGt(staticEstimate, 0, "static estimate should be positive without terminal");
 
-        // Execute the swap. The key point: no revert from trying to call previewPayFor
-        // on address(0). The hook gracefully uses static estimation.
+        uint256 balanceBefore = projectToken.balanceOf(address(this));
         SwapParams memory params = SwapParams({
             zeroForOne: zeroForOne,
             amountSpecified: -int256(1 ether),
             sqrtPriceLimitX96: zeroForOne ? TickMath.MIN_SQRT_PRICE + 1 : TickMath.MAX_SQRT_PRICE - 1
         });
 
-        // This must NOT revert — the hook should handle the no-terminal case gracefully.
         jbSwapRouter.swap(key, params, 0);
+        assertGt(projectToken.balanceOf(address(this)) - balanceBefore, 0, "swap should succeed via V4");
     }
 }

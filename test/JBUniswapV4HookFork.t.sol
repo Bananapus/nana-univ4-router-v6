@@ -545,6 +545,139 @@ contract JBUniswapV4HookForkTest is Test {
         return (0, 0);
     }
 
+    function _createShallowForkPool(int24 tickSpacing) private returns (PoolKey memory shallowKey, PoolId shallowId) {
+        if (NANA < WETH) {
+            shallowKey = PoolKey({
+                currency0: Currency.wrap(NANA),
+                currency1: Currency.wrap(WETH),
+                fee: 3000,
+                tickSpacing: tickSpacing,
+                hooks: IHooks(address(hook))
+            });
+        } else {
+            shallowKey = PoolKey({
+                currency0: Currency.wrap(WETH),
+                currency1: Currency.wrap(NANA),
+                fee: 3000,
+                tickSpacing: tickSpacing,
+                hooks: IHooks(address(hook))
+            });
+        }
+
+        shallowId = shallowKey.toId();
+        manager.initialize(shallowKey, SQRT_PRICE_1_1);
+
+        vm.startPrank(testUser);
+        modifyLiquidityRouter.modifyLiquidity(
+            shallowKey,
+            ModifyLiquidityParams({
+                tickLower: -tickSpacing,
+                tickUpper: tickSpacing,
+                liquidityDelta: 10 ether,
+                // Safe: helper only calls this with small positive tickSpacing values (120 and 180).
+                // forge-lint: disable-next-line(unsafe-typecast)
+                salt: bytes32(uint256(uint24(uint24(tickSpacing))))
+            }),
+            ZERO_BYTES
+        );
+        vm.stopPrank();
+    }
+
+    function _actualV4Output(PoolKey memory useKey, uint256 amountIn, bool zeroForOne) private returns (uint256) {
+        address outputToken = zeroForOne ? Currency.unwrap(useKey.currency1) : Currency.unwrap(useKey.currency0);
+        uint256 balanceBefore = IERC20(outputToken).balanceOf(testUser);
+
+        vm.startPrank(testUser);
+        IERC20(NANA).approve(address(swapRouter), type(uint256).max);
+        IERC20(WETH).approve(address(swapRouter), type(uint256).max);
+        swapRouter.swap(
+            useKey,
+            SwapParams({
+                zeroForOne: zeroForOne,
+                // forge-lint: disable-next-line(unsafe-typecast)
+                amountSpecified: -int256(amountIn),
+                sqrtPriceLimitX96: zeroForOne ? TickMath.MIN_SQRT_PRICE + 1 : TickMath.MAX_SQRT_PRICE - 1
+            }),
+            PoolSwapTest.TestSettings(false, false),
+            abi.encode(uint256(0))
+        );
+        vm.stopPrank();
+
+        return IERC20(outputToken).balanceOf(testUser) - balanceBefore;
+    }
+
+    function _quoteDriftBps(uint256 quote, uint256 actual) private pure returns (uint256) {
+        if (quote <= actual) return 0;
+        return ((quote - actual) * 10_000) / quote;
+    }
+
+    function _measureDriftBpsForTrade(int24 tickSpacing, uint256 amountIn) private returns (uint256 driftBps) {
+        (PoolKey memory shallowKey, PoolId shallowId) = _createShallowForkPool(tickSpacing);
+        return _measureDriftBpsForTradeOnPool(shallowKey, shallowId, amountIn);
+    }
+
+    function _measureDriftBpsForTradeOnPool(
+        PoolKey memory shallowKey,
+        PoolId shallowId,
+        uint256 amountIn
+    )
+        private
+        returns (uint256 driftBps)
+    {
+        bool wethToNana = Currency.unwrap(shallowKey.currency0) == WETH;
+
+        uint256 quote = hook.estimateUniswapOutput(shallowId, shallowKey, amountIn, wethToNana);
+        uint256 actual = _actualV4Output(shallowKey, amountIn, wethToNana);
+
+        assertGt(quote, 0, "fork quote should be live");
+        assertGt(actual, 0, "fork execution should be live");
+        return _quoteDriftBps(quote, actual);
+    }
+
+    function testFork_V4LinearQuoteDriftIsSmallForSmallTrades() public {
+        uint256 driftBps = _measureDriftBpsForTrade(120, 0.01 ether);
+        assertLe(driftBps, 500, "small trades should stay within a 5% quote-drift envelope");
+    }
+
+    function testFork_V4LinearQuoteDriftBecomesMaterialForLargeTrades() public {
+        uint256 driftBps = _measureDriftBpsForTrade(180, 5 ether);
+        assertGt(driftBps, 2000, "large trades on shallow liquidity should exceed a 20% quote-drift envelope");
+    }
+
+    function testFork_V4LinearQuoteDriftSweep() public {
+        (PoolKey memory shallowKey, PoolId shallowId) = _createShallowForkPool(120);
+        uint256 snapshot = vm.snapshotState();
+
+        uint256 driftAtPointOne = _measureDriftBpsForTradeOnPool(shallowKey, shallowId, 0.1 ether);
+        vm.revertToState(snapshot);
+        snapshot = vm.snapshotState();
+
+        uint256 driftAtHalf = _measureDriftBpsForTradeOnPool(shallowKey, shallowId, 0.5 ether);
+        vm.revertToState(snapshot);
+        snapshot = vm.snapshotState();
+
+        uint256 driftAtOne = _measureDriftBpsForTradeOnPool(shallowKey, shallowId, 1 ether);
+        vm.revertToState(snapshot);
+        snapshot = vm.snapshotState();
+
+        uint256 driftAtTwo = _measureDriftBpsForTradeOnPool(shallowKey, shallowId, 2 ether);
+        vm.revertToState(snapshot);
+        snapshot = vm.snapshotState();
+
+        uint256 driftAtFive = _measureDriftBpsForTradeOnPool(shallowKey, shallowId, 5 ether);
+
+        emit log_named_uint("drift_bps_at_0.1_eth", driftAtPointOne);
+        emit log_named_uint("drift_bps_at_0.5_eth", driftAtHalf);
+        emit log_named_uint("drift_bps_at_1_eth", driftAtOne);
+        emit log_named_uint("drift_bps_at_2_eth", driftAtTwo);
+        emit log_named_uint("drift_bps_at_5_eth", driftAtFive);
+
+        assertLe(driftAtPointOne, driftAtHalf, "drift should not improve as trade size grows");
+        assertLe(driftAtHalf, driftAtOne, "drift should not improve as trade size grows");
+        assertLe(driftAtOne, driftAtTwo, "drift should not improve as trade size grows");
+        assertLe(driftAtTwo, driftAtFive, "drift should not improve as trade size grows");
+    }
+
     /// @notice Make v4 clearly favorable by pushing price with a NANA->WETH swap, then verify route="v4".
     function testFork_V4BestPriceRoutesToV4_WETHtoNANA() public {
         address user = testUser;
