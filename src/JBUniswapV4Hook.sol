@@ -503,33 +503,7 @@ contract JBUniswapV4Hook is BaseHook {
         view
         returns (int24 arithmeticMeanTick)
     {
-        if (secondsAgo == 0) {
-            revert JBUniswapV4Hook_SecondsAgoCannotBeZero();
-        }
-
-        // Batch both observations into a single call to avoid redundant binary searches.
-        uint32[] memory secondsAgos = new uint32[](2);
-        secondsAgos[0] = 0;
-        secondsAgos[1] = secondsAgo;
-
-        // slither-disable-next-line unused-return
-        (int56[] memory tickCumulatives,) = observations[poolId].observe({
-            time: uint32(block.timestamp),
-            secondsAgos: secondsAgos,
-            tick: tick,
-            index: index,
-            liquidity: liquidity,
-            cardinality: cardinality
-        });
-
-        // Calculate arithmetic mean tick
-        int56 tickCumulativeDelta = tickCumulatives[0] - tickCumulatives[1];
-        // forge-lint: disable-next-line(unsafe-typecast)
-        arithmeticMeanTick = int24(tickCumulativeDelta / int56(uint56(secondsAgo)));
-        // Round toward negative infinity for negative ticks (Solidity truncates toward zero).
-        if (tickCumulativeDelta < 0 && (tickCumulativeDelta % int56(uint56(secondsAgo)) != 0)) {
-            arithmeticMeanTick--;
-        }
+        return _observeTWAP(poolId, secondsAgo, tick, index, liquidity, cardinality);
     }
 
     //*********************************************************************//
@@ -895,6 +869,56 @@ contract JBUniswapV4Hook is BaseHook {
         }
     }
 
+    /// @notice Internal TWAP tick computation, avoiding external self-call overhead.
+    /// @param poolId The pool ID
+    /// @param secondsAgo Seconds in the past to calculate TWAP from
+    /// @param tick Current tick
+    /// @param index Current observation index
+    /// @param liquidity Current liquidity
+    /// @param cardinality Current cardinality
+    /// @return arithmeticMeanTick The time-weighted average tick
+    // forge-lint: disable-next-line(mixed-case-function)
+    function _observeTWAP(
+        PoolId poolId,
+        uint32 secondsAgo,
+        int24 tick,
+        uint16 index,
+        uint128 liquidity,
+        uint16 cardinality
+    )
+        internal
+        view
+        returns (int24 arithmeticMeanTick)
+    {
+        if (secondsAgo == 0) {
+            revert JBUniswapV4Hook_SecondsAgoCannotBeZero();
+        }
+
+        // Batch both observations into a single call to avoid redundant binary searches.
+        uint32[] memory secondsAgos = new uint32[](2);
+        secondsAgos[0] = 0;
+        secondsAgos[1] = secondsAgo;
+
+        // slither-disable-next-line unused-return
+        (int56[] memory tickCumulatives,) = observations[poolId].observe({
+            time: uint32(block.timestamp),
+            secondsAgos: secondsAgos,
+            tick: tick,
+            index: index,
+            liquidity: liquidity,
+            cardinality: cardinality
+        });
+
+        // Calculate arithmetic mean tick
+        int56 tickCumulativeDelta = tickCumulatives[0] - tickCumulatives[1];
+        // forge-lint: disable-next-line(unsafe-typecast)
+        arithmeticMeanTick = int24(tickCumulativeDelta / int56(uint56(secondsAgo)));
+        // Round toward negative infinity for negative ticks (Solidity truncates toward zero).
+        if (tickCumulativeDelta < 0 && (tickCumulativeDelta % int56(uint56(secondsAgo)) != 0)) {
+            arithmeticMeanTick--;
+        }
+    }
+
     /// @notice Get the TWAP sqrt price for a pool
     /// @param poolId The pool ID
     /// @return sqrtPriceX96 The TWAP sqrt price, or 0 if not enough observations
@@ -932,10 +956,10 @@ contract JBUniswapV4Hook is BaseHook {
         }
 
         // Observe the TWAP
-        // this.observeTWAP() is called without try-catch. If the oracle observation fails (e.g.,
+        // _observeTWAP() is called without try-catch. If the oracle observation fails (e.g.,
         // insufficient history), the entire transaction reverts. This is intentional — a failed TWAP observation
         // means no reliable price reference exists, and proceeding without one would expose the swap to manipulation.
-        int24 arithmeticMeanTick = this.observeTWAP({
+        int24 arithmeticMeanTick = _observeTWAP({
             poolId: poolId,
             secondsAgo: TWAP_PERIOD,
             tick: tick,
