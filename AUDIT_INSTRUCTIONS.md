@@ -206,6 +206,7 @@ See [RISKS.md](./RISKS.md) for the complete set of documented risks and trust as
 | `JBUniswapV4Hook_AmountOutMinRequired()` | `hookData` is not exactly 32 bytes in `_beforeSwap`. Callers must encode `uint256 amountOutMin`. |
 | `JBUniswapV4Hook_ExactOutputSwapsNotSupported()` | `params.amountSpecified > 0` in `_beforeSwap`. Only exact-input swaps are supported. |
 | `JBUniswapV4Hook_InsufficientOutput()` | V4 route swap output is below `amountOutMin` in `_afterSwap`. |
+| `JBUniswapV4Hook_InputExceedsV4DeltaLimit(uint256)` | Input amount from a JB route exceeds `type(int128).max` in `_createSwapDelta`, preventing signed overflow in the `BeforeSwapDelta` field. |
 | `JBUniswapV4Hook_ReentrantRouting()` | `_routing` flag is already set when `_beforeSwap` is entered. Prevents recursive routing through JB terminal. |
 | `JBUniswapV4Hook_SecondsAgoCannotBeZero()` | `secondsAgo == 0` in `observeTWAP()`. TWAP requires a non-zero lookback period. |
 | `Oracle_CardinalityCannotBeZero()` | `Oracle.grow()` or `Oracle.observeSingle()` called with `cardinality == 0`. Pool not initialized. |
