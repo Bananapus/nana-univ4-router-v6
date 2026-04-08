@@ -36,12 +36,14 @@ contract RevertingSellPreviewTerminal {
     address public lastToken;
     uint256 public lastAmount;
     address public lastBeneficiary;
+    // forge-lint: disable-next-line(mixed-case-variable)
     MockJBTerminalStore_AuditGaps public TERMINAL_STORE;
 
     function setTerminalStore(address terminalStore) external {
         TERMINAL_STORE = MockJBTerminalStore_AuditGaps(terminalStore);
     }
 
+    // forge-lint: disable-next-line(mixed-case-function)
     function FEE() external pure returns (uint256) {
         return 25;
     }
@@ -93,7 +95,11 @@ contract RevertingSellPreviewTerminal {
         lastBeneficiary = beneficiary;
 
         uint256 outputAmount = TERMINAL_STORE.currentReclaimableSurplusOf(
-                projectId, 1 ether, uint32(uint160(tokenToReclaim)), 18
+                projectId,
+                1 ether,
+                // forge-lint: disable-next-line(unsafe-typecast)
+                uint32(uint160(tokenToReclaim)),
+                18
             ) * cashOutCount / 1 ether;
         require(outputAmount >= minTokensReclaimed, "Insufficient tokens reclaimed");
 
@@ -116,11 +122,16 @@ contract CodexNemesisSellPreviewFallbackTest is Test {
     using PoolIdLibrary for PoolKey;
 
     JBUniswapV4Hook internal hook;
+    // forge-lint: disable-next-line(mixed-case-variable)
     MockJBTokens_AuditGaps internal mockJBTokens;
+    // forge-lint: disable-next-line(mixed-case-variable)
     MockJBDirectory_AuditGaps internal mockJBDirectory;
     RevertingSellPreviewTerminal internal mockTerminal;
+    // forge-lint: disable-next-line(mixed-case-variable)
     MockJBController_AuditGaps internal mockJBController;
+    // forge-lint: disable-next-line(mixed-case-variable)
     MockJBPrices_AuditGaps internal mockJBPrices;
+    // forge-lint: disable-next-line(mixed-case-variable)
     MockJBTerminalStore_AuditGaps internal mockJBTerminalStore;
 
     IPoolManager internal manager;
@@ -223,7 +234,10 @@ contract CodexNemesisSellPreviewFallbackTest is Test {
         jbSwapRouter.swap(
             key,
             SwapParams({
-                zeroForOne: false, amountSpecified: -int256(amountIn), sqrtPriceLimitX96: TickMath.MAX_SQRT_PRICE - 1
+                zeroForOne: false,
+                // forge-lint: disable-next-line(unsafe-typecast)
+                amountSpecified: -int256(amountIn),
+                sqrtPriceLimitX96: TickMath.MAX_SQRT_PRICE - 1
             }),
             0
         );

@@ -78,6 +78,10 @@ contract JBUniswapV4Hook is BaseHook {
     /// @notice Reverts when swap output is below minimum required amount.
     error JBUniswapV4Hook_InsufficientOutput();
 
+    /// @notice Reverts when a Juicebox input cannot fit inside Uniswap V4's signed delta accounting.
+    /// @param amount The oversized input amount.
+    error JBUniswapV4Hook_InputExceedsV4DeltaLimit(uint256 amount);
+
     /// @notice Reverts when a Juicebox output cannot fit inside Uniswap V4's signed delta accounting.
     /// @param amount The oversized output amount.
     error JBUniswapV4Hook_OutputExceedsV4DeltaLimit(uint256 amount);
@@ -349,6 +353,12 @@ contract JBUniswapV4Hook is BaseHook {
 
     /// @notice Estimate expected output tokens from a Uniswap swap using TWAP
     /// @dev Uses time-weighted average price to prevent manipulation
+    /// @dev Price impact warning: This estimate does not account for price impact from liquidity depth. The TWAP
+    /// price is applied uniformly to the entire `amountIn` regardless of available liquidity at the current tick
+    /// range. In shallow pools, large trades will experience significant slippage that this function does not
+    /// reflect. As a result, `estimateUniswapOutput` may overquote the V4 route for large amounts relative to
+    /// pool liquidity, causing `_beforeSwap` to select the V4 path when the Juicebox mint path would yield more
+    /// tokens. Callers processing large amounts relative to pool liquidity should verify the output independently.
     // Pool selection by highest liquidity is a heuristic. A pool with less liquidity but better tick
     // distribution could produce better output for a given swap size. Full simulation of all pools would be
     // gas-prohibitive on-chain. Off-chain routers can provide optimal pool selection via metadata.
@@ -503,33 +513,7 @@ contract JBUniswapV4Hook is BaseHook {
         view
         returns (int24 arithmeticMeanTick)
     {
-        if (secondsAgo == 0) {
-            revert JBUniswapV4Hook_SecondsAgoCannotBeZero();
-        }
-
-        // Batch both observations into a single call to avoid redundant binary searches.
-        uint32[] memory secondsAgos = new uint32[](2);
-        secondsAgos[0] = 0;
-        secondsAgos[1] = secondsAgo;
-
-        // slither-disable-next-line unused-return
-        (int56[] memory tickCumulatives,) = observations[poolId].observe({
-            time: uint32(block.timestamp),
-            secondsAgos: secondsAgos,
-            tick: tick,
-            index: index,
-            liquidity: liquidity,
-            cardinality: cardinality
-        });
-
-        // Calculate arithmetic mean tick
-        int56 tickCumulativeDelta = tickCumulatives[0] - tickCumulatives[1];
-        // forge-lint: disable-next-line(unsafe-typecast)
-        arithmeticMeanTick = int24(tickCumulativeDelta / int56(uint56(secondsAgo)));
-        // Round toward negative infinity for negative ticks (Solidity truncates toward zero).
-        if (tickCumulativeDelta < 0 && (tickCumulativeDelta % int56(uint56(secondsAgo)) != 0)) {
-            arithmeticMeanTick--;
-        }
+        return _observeTWAP(poolId, secondsAgo, tick, index, liquidity, cardinality);
     }
 
     //*********************************************************************//
@@ -856,6 +840,7 @@ contract JBUniswapV4Hook is BaseHook {
     function _createSwapDelta(uint256 amountIn, uint256 amountOut) internal pure returns (BeforeSwapDelta) {
         // The hook takes the input amount and settles the output amount
         // For both buying and selling: take inputCurrency, settle outputCurrency
+        if (amountIn > MAX_V4_DELTA) revert JBUniswapV4Hook_InputExceedsV4DeltaLimit(amountIn);
         if (amountOut > MAX_V4_DELTA) revert JBUniswapV4Hook_OutputExceedsV4DeltaLimit(amountOut);
         return toBeforeSwapDelta({
             // forge-lint: disable-next-line(unsafe-typecast)
@@ -932,10 +917,10 @@ contract JBUniswapV4Hook is BaseHook {
         }
 
         // Observe the TWAP
-        // this.observeTWAP() is called without try-catch. If the oracle observation fails (e.g.,
+        // _observeTWAP() is called without try-catch. If the oracle observation fails (e.g.,
         // insufficient history), the entire transaction reverts. This is intentional — a failed TWAP observation
         // means no reliable price reference exists, and proceeding without one would expose the swap to manipulation.
-        int24 arithmeticMeanTick = this.observeTWAP({
+        int24 arithmeticMeanTick = _observeTWAP({
             poolId: poolId,
             secondsAgo: TWAP_PERIOD,
             tick: tick,
@@ -954,6 +939,56 @@ contract JBUniswapV4Hook is BaseHook {
     /// @return The normalized token address (JB_NATIVE_TOKEN for native ETH, unchanged otherwise)
     function _normalizeToken(address token) internal pure returns (address) {
         return token == UNISWAP_NATIVE_ETH ? JB_NATIVE_TOKEN : token;
+    }
+
+    /// @notice Internal TWAP tick computation, avoiding external self-call overhead.
+    /// @param poolId The pool ID
+    /// @param secondsAgo Seconds in the past to calculate TWAP from
+    /// @param tick Current tick
+    /// @param index Current observation index
+    /// @param liquidity Current liquidity
+    /// @param cardinality Current cardinality
+    /// @return arithmeticMeanTick The time-weighted average tick
+    // forge-lint: disable-next-line(mixed-case-function)
+    function _observeTWAP(
+        PoolId poolId,
+        uint32 secondsAgo,
+        int24 tick,
+        uint16 index,
+        uint128 liquidity,
+        uint16 cardinality
+    )
+        internal
+        view
+        returns (int24 arithmeticMeanTick)
+    {
+        if (secondsAgo == 0) {
+            revert JBUniswapV4Hook_SecondsAgoCannotBeZero();
+        }
+
+        // Batch both observations into a single call to avoid redundant binary searches.
+        uint32[] memory secondsAgos = new uint32[](2);
+        secondsAgos[0] = 0;
+        secondsAgos[1] = secondsAgo;
+
+        // slither-disable-next-line unused-return
+        (int56[] memory tickCumulatives,) = observations[poolId].observe({
+            time: uint32(block.timestamp),
+            secondsAgos: secondsAgos,
+            tick: tick,
+            index: index,
+            liquidity: liquidity,
+            cardinality: cardinality
+        });
+
+        // Calculate arithmetic mean tick
+        int56 tickCumulativeDelta = tickCumulatives[0] - tickCumulatives[1];
+        // forge-lint: disable-next-line(unsafe-typecast)
+        arithmeticMeanTick = int24(tickCumulativeDelta / int56(uint56(secondsAgo)));
+        // Round toward negative infinity for negative ticks (Solidity truncates toward zero).
+        if (tickCumulativeDelta < 0 && (tickCumulativeDelta % int56(uint56(secondsAgo)) != 0)) {
+            arithmeticMeanTick--;
+        }
     }
 
     /// @notice Records an oracle observation and grows cardinality if needed
