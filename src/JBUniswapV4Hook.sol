@@ -78,6 +78,10 @@ contract JBUniswapV4Hook is BaseHook {
     /// @notice Reverts when swap output is below minimum required amount.
     error JBUniswapV4Hook_InsufficientOutput();
 
+    /// @notice Reverts when a Juicebox input cannot fit inside Uniswap V4's signed delta accounting.
+    /// @param amount The oversized input amount.
+    error JBUniswapV4Hook_InputExceedsV4DeltaLimit(uint256 amount);
+
     /// @notice Reverts when a Juicebox output cannot fit inside Uniswap V4's signed delta accounting.
     /// @param amount The oversized output amount.
     error JBUniswapV4Hook_OutputExceedsV4DeltaLimit(uint256 amount);
@@ -349,6 +353,12 @@ contract JBUniswapV4Hook is BaseHook {
 
     /// @notice Estimate expected output tokens from a Uniswap swap using TWAP
     /// @dev Uses time-weighted average price to prevent manipulation
+    /// @dev Price impact warning: This estimate does not account for price impact from liquidity depth. The TWAP
+    /// price is applied uniformly to the entire `amountIn` regardless of available liquidity at the current tick
+    /// range. In shallow pools, large trades will experience significant slippage that this function does not
+    /// reflect. As a result, `estimateUniswapOutput` may overquote the V4 route for large amounts relative to
+    /// pool liquidity, causing `_beforeSwap` to select the V4 path when the Juicebox mint path would yield more
+    /// tokens. Callers processing large amounts relative to pool liquidity should verify the output independently.
     // Pool selection by highest liquidity is a heuristic. A pool with less liquidity but better tick
     // distribution could produce better output for a given swap size. Full simulation of all pools would be
     // gas-prohibitive on-chain. Off-chain routers can provide optimal pool selection via metadata.
@@ -830,6 +840,7 @@ contract JBUniswapV4Hook is BaseHook {
     function _createSwapDelta(uint256 amountIn, uint256 amountOut) internal pure returns (BeforeSwapDelta) {
         // The hook takes the input amount and settles the output amount
         // For both buying and selling: take inputCurrency, settle outputCurrency
+        if (amountIn > MAX_V4_DELTA) revert JBUniswapV4Hook_InputExceedsV4DeltaLimit(amountIn);
         if (amountOut > MAX_V4_DELTA) revert JBUniswapV4Hook_OutputExceedsV4DeltaLimit(amountOut);
         return toBeforeSwapDelta({
             // forge-lint: disable-next-line(unsafe-typecast)
