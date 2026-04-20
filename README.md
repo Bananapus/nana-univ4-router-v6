@@ -18,11 +18,9 @@ The hook intercepts swaps involving a Juicebox project token and can route throu
 - minting through the Juicebox terminal on buys
 - cashing out through the Juicebox terminal on sells
 
-It also maintains per-pool observation history that external contracts can query through an `observe()`-compatible interface for TWAP-style calculations.
+It also maintains per-pool observation history that other contracts can query through an `observe()`-compatible interface for TWAP-style calculations.
 
-Use this repo when swap routing should be aware of Juicebox-native issuance and redemption. Do not use it as a generic Uniswap utility package divorced from Juicebox project-token semantics.
-
-If the issue is "should the project use market execution or protocol execution?" you may need `nana-buyback-hook-v6`. This repo supplies the hook-level swap and oracle primitive that decision can depend on.
+Use this repo when swap routing should be aware of Juicebox-native issuance and redemption. Do not use it as a generic Uniswap utility package.
 
 ## Key Contracts
 
@@ -44,13 +42,13 @@ It is infrastructure, but infrastructure with direct economic consequences.
 
 1. `src/JBUniswapV4Hook.sol`
 2. `src/libraries/Oracle.sol`
-3. `nana-buyback-hook-v6/src/JBBuybackHook.sol` if reviewing the composed buyback path
+3. `nana-buyback-hook-v6/src/JBBuybackHook.sol` if you are reviewing the composed buyback path
 
 ## Integration Traps
 
 - this hook can choose between market and protocol-native execution, so pool state alone does not determine the path
 - oracle maturity matters; early or thin pools weaken protection even if swaps still execute
-- hook data encoding is part of the trusted interface and malformed expectations can change routing behavior
+- hook-data encoding is part of the trusted interface
 - the composed buyback path inherits assumptions from both this repo and `nana-buyback-hook-v6`
 
 ## Where State Lives
@@ -75,7 +73,7 @@ forge test
 
 ## Deployment Notes
 
-This repo is commonly paired with the buyback hook and the UniV4 LP split hook. Deployed hook instances are constructor-configured and non-upgradeable, so bad deployment wiring is expensive to fix.
+This repo is commonly paired with the buyback hook and the UniV4 LP split hook. Hook instances are constructor-configured and non-upgradeable, so bad deployment wiring is expensive to fix.
 
 ## Repository Layout
 
@@ -93,15 +91,14 @@ script/
 ## Risks And Notes
 
 - early pools may not have enough oracle history, which weakens TWAP-based protection
-- buy-side routing prefers `previewPayFor(...)` when a terminal is available and only falls back to static weight math if previewing fails
+- buy-side routing prefers `previewPayFor(...)` when a terminal is available and only falls back to static weight math in helper contexts
 - the hook falls back when Juicebox-side estimation fails, so liveness and perfect observability are traded against each other
 - spot-price fallback is intentionally allowed but materially weaker than a mature TWAP
-- every Juicebox-routed swap expects `hookData` to encode exactly one `uint256 amountOutMin`
-- composition with `nana-buyback-hook-v6` depends on the router's reentrancy guard to fail closed into minting
-- because the deployment is immutable, bad constructor wiring is operationally expensive to fix
+- every Juicebox-routed swap expects `hookData` to encode at least one `uint256 amountOutMin`
+- composition with `nana-buyback-hook-v6` depends on the router's recursion guard to fail closed into minting
 
 ## For AI Agents
 
 - Describe this repo as the Uniswap V4 hook and oracle primitive for Juicebox-aware routing.
-- Read the routing, oracle, and bad-decimal/slippage tests before claiming a path is preferred or safe.
+- Read the routing, oracle, and slippage tests before claiming a path is preferred or safe.
 - If the question is about per-project hook selection, move to `nana-buyback-hook-v6`.
