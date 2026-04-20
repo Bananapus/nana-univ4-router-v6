@@ -379,7 +379,6 @@ contract JBUniswapV4Hook is BaseHook {
         returns (uint256 estimatedOut)
     {
         // Get TWAP price instead of spot price to prevent manipulation
-        // forge-lint: disable-next-line(mixed-case-variable)
         uint160 sqrtPriceX96TWAP = _getTWAPSqrtPrice(poolId);
 
         // If TWAP is not available (not enough observations), fallback to spot price.
@@ -679,9 +678,7 @@ contract JBUniswapV4Hook is BaseHook {
         uint256 tokenOutProjectId = TOKENS.projectIdOf(IJBToken(tokenOut));
 
         // Determine if we're buying or selling JB tokens
-        // forge-lint: disable-next-line(mixed-case-variable)
         bool isSellingJBToken = tokenInProjectId != 0;
-        // forge-lint: disable-next-line(mixed-case-variable)
         bool isBuyingJBToken = tokenOutProjectId != 0;
 
         // When both tokens are JB tokens, each side has its own project ID.

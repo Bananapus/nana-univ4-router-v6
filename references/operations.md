@@ -4,7 +4,7 @@
 
 - [`script/Deploy.s.sol`](../script/Deploy.s.sol) is the first stop for constructor wiring and V4 hook deployment setup.
 - [`src/JBUniswapV4Hook.sol`](../src/JBUniswapV4Hook.sol) defines the hook-data contract that callers must satisfy.
-- [`src/libraries/`](../src/libraries/) contains the observation code that often gets blamed after routing changes.
+- [`src/libraries/Oracle.sol`](../src/libraries/Oracle.sol) contains the observation code that often gets blamed after routing changes.
 
 ## Change Checklist
 
@@ -15,6 +15,7 @@
 - If you touch buy-side routing, verify the preview-unavailable path falls back to V4 instead of reusing static weight estimation.
 - If you touch sell-side routing, verify preview failures still degrade to V4 instead of reviving the older static reclaim estimate.
 - If you edit deployment assumptions, confirm the hook flags and immutable constructor wiring still match V4 expectations.
+- If you edit quote quality claims, re-measure large-trade drift explicitly. The linear V4 estimate is intentionally approximate.
 
 ## Common Failure Modes
 
@@ -25,5 +26,6 @@
 
 ## Useful Proof Points
 
-- [`test/regression/`](../test/regression/) for pinned routing edge cases.
-- [`script/helpers/`](../script/helpers/) when deployment or setup logic is the real issue.
+- [`test/TestAuditGaps.sol`](../test/TestAuditGaps.sol), [`test/TestStructuralArbitrage.t.sol`](../test/TestStructuralArbitrage.t.sol), and [`test/StressAndOrderOfMagnitude.t.sol`](../test/StressAndOrderOfMagnitude.t.sol) for pinned routing edge cases.
+- [`test/audit/PreviewPayForRouting.t.sol`](../test/audit/PreviewPayForRouting.t.sol), [`test/audit/CodexHookDataLength.t.sol`](../test/audit/CodexHookDataLength.t.sol), and [`test/audit/CodexNemesisLargeTradeMisroute.t.sol`](../test/audit/CodexNemesisLargeTradeMisroute.t.sol) for preview routing, hook-data, and large-trade degradation.
+- [`script/Deploy.s.sol`](../script/Deploy.s.sol) when deployment or setup logic is the real issue.

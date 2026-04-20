@@ -19,6 +19,7 @@
 - Fallback semantics: liveness is intentionally preserved when estimation fails.
 - Hook-data assumptions: swap callers must supply `amountOutMin` in the first 32 bytes, but may append extra metadata after that prefix.
 - Quote-model limits: `estimateUniswapOutput()` is a linear quote, not a full execution simulation. Large trades can still see material V4 quote drift on shallow liquidity.
+- Signed-delta capacity: even when Juicebox would return more, V4 settlement still has `int128` output limits. The hook must degrade rather than overflowing that boundary.
 
 ## Tests To Trust First
 
@@ -26,3 +27,4 @@
 - [`test/SlippageTolerance.t.sol`](../test/SlippageTolerance.t.sol) for execution protection.
 - [`test/ThreeWayRouting.t.sol`](../test/ThreeWayRouting.t.sol) for route-selection behavior.
 - [`test/TestObserve.t.sol`](../test/TestObserve.t.sol) and [`test/OracleDeepTest.t.sol`](../test/OracleDeepTest.t.sol) for observation logic.
+- [`test/audit/PreviewPayForRouting.t.sol`](../test/audit/PreviewPayForRouting.t.sol), [`test/audit/CodexHookDataLength.t.sol`](../test/audit/CodexHookDataLength.t.sol), [`test/audit/CodexNemesisSellPreviewFallback.t.sol`](../test/audit/CodexNemesisSellPreviewFallback.t.sol), and [`test/audit/CodexNemesisLargeTradeMisroute.t.sol`](../test/audit/CodexNemesisLargeTradeMisroute.t.sol) for the failure modes most likely to misroute production swaps.
