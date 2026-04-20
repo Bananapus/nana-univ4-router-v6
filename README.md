@@ -2,18 +2,23 @@
 
 `@bananapus/univ4-router-v6` provides the Uniswap V4 hook and oracle surface used to compare market execution with Juicebox-native execution. It is a routing primitive for projects that want protocol-aware swaps instead of blind pool usage.
 
-Docs: <https://docs.juicebox.money>
-Architecture: [ARCHITECTURE.md](./ARCHITECTURE.md)
+Docs: <https://docs.juicebox.money>  
+Architecture: [ARCHITECTURE.md](./ARCHITECTURE.md)  
+User journeys: [USER_JOURNEYS.md](./USER_JOURNEYS.md)  
+Skills: [SKILLS.md](./SKILLS.md)  
+Risks: [RISKS.md](./RISKS.md)  
+Administration: [ADMINISTRATION.md](./ADMINISTRATION.md)  
+Audit instructions: [AUDIT_INSTRUCTIONS.md](./AUDIT_INSTRUCTIONS.md)
 
 ## Overview
 
-The hook intercepts swaps involving a Juicebox project token and decides whether the better path is:
+The hook intercepts swaps involving a Juicebox project token and can route through:
 
 - the current Uniswap V4 pool
 - minting through the Juicebox terminal on buys
 - cashing out through the Juicebox terminal on sells
 
-It also maintains a per-pool TWAP oracle that other contracts can query through an `observe()`-style interface.
+It also maintains per-pool observation history that external contracts can query through an `observe()`-compatible interface for TWAP-style calculations.
 
 Use this repo when swap routing should be aware of Juicebox-native issuance and redemption. Do not use it as a generic Uniswap utility package divorced from Juicebox project-token semantics.
 
@@ -41,6 +46,19 @@ It is infrastructure, but infrastructure with direct economic consequences.
 2. `src/libraries/Oracle.sol`
 3. `nana-buyback-hook-v6/src/JBBuybackHook.sol` if reviewing the composed buyback path
 
+## Integration Traps
+
+- this hook can choose between market and protocol-native execution, so pool state alone does not determine the path
+- oracle maturity matters; early or thin pools weaken protection even if swaps still execute
+- hook data encoding is part of the trusted interface and malformed expectations can change routing behavior
+- the composed buyback path inherits assumptions from both this repo and `nana-buyback-hook-v6`
+
+## Where State Lives
+
+- routing and swap decision logic live in `JBUniswapV4Hook`
+- observation history and TWAP support live in `Oracle`
+- composed buyback selection state lives outside this repo in `nana-buyback-hook-v6`
+
 ## Install
 
 ```bash
@@ -57,7 +75,7 @@ forge test
 
 ## Deployment Notes
 
-This repo is commonly paired with the buyback hook and the UniV4 LP split hook. It is immutable after deployment, so constructor configuration should be treated as final.
+This repo is commonly paired with the buyback hook and the UniV4 LP split hook. Deployed hook instances are constructor-configured and non-upgradeable, so bad deployment wiring is expensive to fix.
 
 ## Repository Layout
 
@@ -81,3 +99,9 @@ script/
 - every Juicebox-routed swap expects `hookData` to encode exactly one `uint256 amountOutMin`
 - composition with `nana-buyback-hook-v6` depends on the router's reentrancy guard to fail closed into minting
 - because the deployment is immutable, bad constructor wiring is operationally expensive to fix
+
+## For AI Agents
+
+- Describe this repo as the Uniswap V4 hook and oracle primitive for Juicebox-aware routing.
+- Read the routing, oracle, and bad-decimal/slippage tests before claiming a path is preferred or safe.
+- If the question is about per-project hook selection, move to `nana-buyback-hook-v6`.

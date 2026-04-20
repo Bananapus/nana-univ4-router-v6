@@ -1,59 +1,122 @@
 # User Journeys
 
-## Who This Repo Serves
+## Repo Purpose
+
+This repo is the UniV4 hook and oracle primitive for Juicebox-aware swaps.
+It owns hook-level best-execution decisions and observation history for project-token pools. It does not own project
+governance over whether a project should use market-aware routing in the first place.
+
+## Primary Actors
 
 - projects that want UniV4 swaps to respect Juicebox mint and cash-out economics
 - traders whose best route may be the pool or the protocol depending on direction and price
-- integrators reading the per-pool TWAP oracle this hook maintains
+- integrators reading the per-pool oracle this hook maintains
+- auditors reviewing oracle maturity, reentrancy, and path-selection assumptions
+
+## Key Surfaces
+
+- `JBUniswapV4Hook`: hook-level routing and oracle observation recording
+- `Oracle`: observation ring and TWAP lookup logic
+- `observe(...)`: time-weighted observation surface
+- `estimateUniswapOutput(...)`: estimation path used during route comparison
+- buy-versus-mint and sell-versus-cash-out routing inside the hook's swap callbacks
 
 ## Journey 1: Deploy The V4 Routing Hook For A Juicebox-Aware Pool
 
-**Starting state:** a project token is expected to trade against some paired asset in UniV4.
+**Actor:** deployer or operator.
 
-**Success:** the pool uses `JBUniswapV4Hook` so buy and sell routing can compare market execution with protocol execution.
+**Intent:** create a Juicebox-aware UniV4 pool with the correct constructor assumptions.
 
-**Flow**
-1. Deploy the hook with the project-token and terminal assumptions it needs.
-2. Create or attach the relevant UniV4 pool using that hook.
-3. Confirm the hook can reach the Juicebox terminal and accounting context required for buy-versus-mint and sell-versus-cash-out decisions.
+**Preconditions**
+- a project token is expected to trade against some paired asset
+- the deployer knows the terminal and accounting assumptions the hook must call back into
+
+**Main Flow**
+1. Deploy `JBUniswapV4Hook` with the intended project-token and terminal assumptions.
+2. Create or attach the target UniV4 pool using that hook.
+3. Confirm the hook can reach the Juicebox surfaces needed for buy-versus-mint and sell-versus-cash-out logic.
+
+**Failure Modes**
+- constructor wiring is wrong and expensive to recover because the deployment is immutable
+- the pool exists but cannot query the intended Juicebox surfaces correctly
+
+**Postconditions**
+- a Juicebox-aware V4 hook and pool exist with the intended constructor assumptions
 
 ## Journey 2: Let Traders Swap Through The Better Route
 
-**Starting state:** a trade is about to cross the pool and the hook must decide whether the market or the protocol offers the better outcome.
+**Actor:** trader or integrator routing a trade.
 
-**Success:** the user gets the better execution path without being forced through the pool by default.
+**Intent:** get best execution between the pool and Juicebox-native alternatives.
 
-**Flow**
-1. On buys, compare the current pool trade against minting through the Juicebox terminal.
+**Preconditions**
+- the pool is live
+- the hook has enough information to compare the pool route with the Juicebox route
+- `hookData` is shaped as the hook expects
+
+**Main Flow**
+1. On buys, compare the pool trade against terminal minting.
 2. On sells, compare the pool trade against the project's cash-out path.
-3. Route through the better option while preserving the slippage and reentrancy protections the hook expects.
+3. Route through the better option while preserving the hook's slippage and reentrancy protections.
 
-**Failure cases that matter:** dust swaps, dynamic pool or protocol fees, sign-convention errors around slippage, and reentrancy on the sell path.
+**Failure Modes**
+- dust swaps or dynamic fee behavior distort route comparison
+- sign-convention mistakes around slippage
+- reentrancy on the sell path changes assumptions
+- callers encode malformed `hookData`
+
+**Postconditions**
+- the trade uses whichever route the hook judges superior under current pool and Juicebox conditions
 
 ## Journey 3: Provide Oracle Data To Other Protocol Components
 
-**Starting state:** another contract needs a TWAP-style view of pool behavior rather than a one-shot spot price.
+**Actor:** downstream contract or integrator.
 
-**Success:** the contract can read observations from the hook's oracle layer instead of maintaining its own pool-history logic.
+**Intent:** query time-weighted pool data instead of relying on a spot quote.
 
-**Flow**
-1. Let `JBUniswapV4Hook` record the observations relevant to the pool.
-2. Query the `Oracle` library through the hook's `observe()`-style surface.
-3. Use that output for routing, safety checks, or external integrations that need time-weighted data.
+**Preconditions**
+- the hook has already been recording observations for the pool
+
+**Main Flow**
+1. Let `JBUniswapV4Hook` record observations over live trading activity.
+2. Query `observe(...)` through the hook.
+3. Use the result for routing or safety checks that need time-weighted data.
+
+**Failure Modes**
+- downstream systems treat `observe(...)` as mature protection before the pool has enough history
+- integrators confuse the hook's oracle with an external trust-minimized price source
+
+**Postconditions**
+- downstream components can read the hook's time-weighted observation history instead of relying on spot only
 
 ## Journey 4: Warm Up The Oracle Before Trusting It For Safety-Critical Routing
 
-**Starting state:** the pool and hook were just initialized or have too little recent history for a meaningful TWAP.
+**Actor:** operator or auditor.
 
-**Success:** operators and integrators know when the system is still relying on spot-like behavior and wait for enough history before treating the oracle as protective.
+**Intent:** understand when the hook still behaves like spot routing rather than mature TWAP routing.
 
-**Flow**
-1. Initialize the pool and begin recording observations through live activity over time.
-2. Treat the earliest period as oracle warmup, not as fully mature TWAP protection.
-3. Expect `estimateUniswapOutput(...)` to fall back to spot pricing until there are at least two observations and the oldest one is old enough for the 30-minute lookback.
-4. Only rely on the hook's time-weighted routing assumptions once the pool has accumulated enough history for the configured lookback window.
+**Preconditions**
+- the pool and hook were recently initialized or have limited recent observation history
 
-**Failure cases that matter:** single-block or short-window spot manipulation during warmup, assuming cardinality alone means the oracle is mature, and building downstream safety assumptions that ignore the hook's fallback behavior.
+**Main Flow**
+1. Initialize the pool and let observations accumulate through real activity.
+2. Treat the early period as warmup, not fully mature protection.
+3. Expect `estimateUniswapOutput(...)` to fall back to spot pricing until enough history exists for the configured lookback.
+4. Only treat the oracle as protective once the lookback window is genuinely populated.
+
+**Failure Modes**
+- single-block or short-window manipulation during warmup
+- observers assume cardinality alone means the oracle is mature
+- downstream safety checks ignore fallback-to-spot behavior
+
+**Postconditions**
+- operators know whether the oracle is still in warmup or can be trusted for the configured lookback window
+
+## Trust Boundaries
+
+- this repo trusts Juicebox terminal previews and cash-out semantics for protocol-side comparison
+- this repo is itself part of the market-side trust surface for buyback and LP integrations
+- immutable constructor wiring makes deployment correctness operationally critical
 
 ## Hand-Offs
 

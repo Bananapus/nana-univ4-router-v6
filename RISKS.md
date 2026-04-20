@@ -33,6 +33,7 @@ Forward-looking risk analysis of `JBUniswapV4Hook` and its `Oracle` library. Thi
 - Spot price is trivially manipulable within a single block. During warmup, an attacker can sandwich the routing decision to force a suboptimal path.
 - The exact boundary: TWAP activates when `block.timestamp - TWAP_PERIOD >= oldestObservation.blockTimestamp`. At `TWAP_PERIOD - 1` seconds, spot fallback is still used; at `TWAP_PERIOD` seconds, TWAP activates. Transition is smooth (<5% estimate difference per `test_SpotFallback_WarmupBoundary`).
 - Low-activity pools may remain in spot-price fallback indefinitely if no swap/liquidity event triggers observation writes.
+- Once `_getTWAPSqrtPrice` decides the pool is old enough for TWAP, it calls `_observeTWAP()` directly. If that observation fails anyway (for example because the retained history is inconsistent or the target predates the oldest retained sample), the swap reverts instead of degrading back to V4. This is an intentional fail-closed choice.
 - Mitigation: `amountOutMin` in hookData provides a hard floor on output regardless of routing path.
 
 ### 2.2 Observation cardinality limits
@@ -52,7 +53,7 @@ Forward-looking risk analysis of `JBUniswapV4Hook` and its `Oracle` library. Thi
 
 ### 3.1 Three-way routing logic
 
-- `_beforeSwap` evaluates two routes: V4 pool (via TWAP-based `estimateUniswapOutput`) and Juicebox (via `previewPayFor` for buying, falling back to `calculateExpectedTokensWithCurrency` if the preview reverts or no terminal exists; or `calculateExpectedOutputFromSelling` for selling). Picks the one with higher estimated output.
+- `_beforeSwap` evaluates two routes: V4 pool (via TWAP-based `estimateUniswapOutput`) and Juicebox (via `previewPayFor` for buying, or `calculateExpectedOutputFromSelling` for selling). Picks the one with higher estimated output.
 - Buy-side routing only trusts `previewPayFor`. If previewing is unavailable, reverts, or no primary terminal exists, the hook leaves the JB buy quote at `0` and falls back to V4.
 - If neither token is a JB project token (`TOKENS.projectIdOf` returns 0 for both), routing skips JB comparison entirely and passes through to V4 (`ZERO_DELTA`).
 - When both tokens are JB project tokens, the hook evaluates both the buy-side and sell-side Juicebox paths and chooses the better one.
@@ -64,6 +65,8 @@ Forward-looking risk analysis of `JBUniswapV4Hook` and its `Oracle` library. Thi
 - **Hook level (`_afterSwap`)**: V4 routes validate actual delta output against `amountOutMin`. Uses absolute value of negative delta (V4 convention: output amounts are negative). Fixed from a prior bug where `outputAmount > 0` was never true for V4's negative convention.
 - **JuiceboxSwapRouter (test utility)**: Additional slippage check in `unlockCallback` after adjusting for pre-deposited amounts.
 - `hookData` now accepts any payload with at least the first 32 bytes reserved for `amountOutMin`. Pure V4 callers may append extra metadata without being rejected by `_beforeSwap`.
+- **Exact-output swaps are unsupported.** `_beforeSwap` reverts `JBUniswapV4Hook_ExactOutputSwapsNotSupported()` when `params.amountSpecified >= 0`. Integrators must route exact-input flows only when this hook is attached.
+- **`amountOutMin` is mandatory whenever the hook participates.** `_beforeSwap` reverts `JBUniswapV4Hook_AmountOutMinRequired()` if `hookData.length < 32`. Even callers who intend to use pure V4 execution must provide at least the first 32 bytes for slippage protection.
 
 ### 3.3 estimateUniswapOutput accuracy
 
@@ -116,11 +119,11 @@ Forward-looking risk analysis of `JBUniswapV4Hook` and its `Oracle` library. Thi
 
 When `JBUniswapV4Hook` is composed with `JBBuybackHook` (or any data hook) on the same project, the routing estimate can diverge from actual execution:
 
-1. **`_beforeSwap` buy-side estimation** now prefers `previewPayFor` on the project's primary terminal, which can incorporate data-hook effects (e.g., `JBBuybackHook` weight overrides) into the estimate. If `previewPayFor` reverts or the terminal does not exist, the hook falls back to `calculateExpectedTokensWithCurrency`, which reads the ruleset's **static weight** (`ruleset.weight`). This two-tier approach reduces the divergence between estimation and execution for data-hooked projects.
-2. If `previewPayFor` is available, the estimate closely tracks actual `terminal.pay()` behavior. If only the static fallback is used and the project's data hook **overrides weight at payment time**, the actual tokens minted will differ from the static estimate.
-3. **Consequences when only the static fallback is active**:
-   - The hook may route through JB when V4 would have been better (static weight overestimates issuance, but the data hook reduces it at execution time).
-   - The hook may route through V4 when JB would have been better (static weight underestimates issuance because the data hook increases it).
+1. **`_beforeSwap` buy-side estimation** trusts `previewPayFor` on the project's primary terminal, which can incorporate data-hook effects (e.g., `JBBuybackHook` weight overrides) into the estimate.
+2. If `previewPayFor` is available, the estimate closely tracks actual `terminal.pay()` behavior. If `previewPayFor` reverts or the terminal does not exist, the hook does not resurrect the older static-weight estimate for live routing; it leaves the JB buy path ineligible and lets V4 handle the swap.
+3. **Consequences of that design**:
+   - The hook may route through V4 when JB would have been better if the destination terminal's preview surface is unavailable, broken, or intentionally unsupported.
+   - Offchain consumers of `calculateExpectedTokensWithCurrency` can still see a stale static-weight estimate, because that helper remains a reference surface rather than the live routing path.
    - In the worst case, the JB route is selected but `terminal.pay()` returns fewer tokens than estimated, and the user receives a suboptimal rate. The `amountOutMin` parameter in hookData provides a safety floor against excessive slippage.
 4. **Sell-side estimation is only as strong as the store preview surface**: `calculateExpectedOutputFromSelling`
    now prefers `previewCashOutFrom`, which is materially better for cash-out-hooked projects because it can simulate
@@ -129,10 +132,10 @@ When `JBUniswapV4Hook` is composed with `JBBuybackHook` (or any data hook) on th
    estimate.
 
 **Deployer requirement**: When composing this hook with a project that has an active data hook, treat buy-side and
-sell-side differently. Buy-side routing still assumes static issuance weight, so deployers must verify that pay-side
-overrides do not make the estimate dangerously stale. Sell-side routing is stronger than before because it prefers
-`previewCashOutFrom`, but it intentionally treats preview failure as JB-route ineligibility rather than falling back
-to a stale static reclaim estimate.
+sell-side differently. Buy-side routing now depends on a working `previewPayFor` surface on the destination terminal;
+without it, the hook conservatively declines JB buy routing instead of trusting static issuance math. Sell-side
+routing is stronger than before because it prefers `previewCashOutFrom`, but it intentionally treats preview failure
+as JB-route ineligibility rather than falling back to a stale static reclaim estimate.
 
 This is documented inline in `src/JBUniswapV4Hook.sol` as `COMPOSITION WARNING` (near the contract header) and a related `WARNING` note in `_beforeSwap`.
 
@@ -149,6 +152,7 @@ This is documented inline in `src/JBUniswapV4Hook.sol` as `COMPOSITION WARNING` 
 - `_afterSwap` records oracle observations AND validates V4 slippage. If `_afterSwap` fails to execute (wrong address flags), neither protection operates.
 - `_afterInitialize` bootstraps the oracle with the first observation. Without it, `states[poolId]` remains zero-initialized, and all TWAP queries revert with `Oracle_CardinalityCannotBeZero`.
 - `_afterAddLiquidity` and `_afterRemoveLiquidity` also write observations. These provide additional TWAP data points between swaps, improving oracle accuracy for pools with frequent liquidity changes but infrequent swaps.
+- Mature-oracle read failures are hard failures. The hook only falls back to spot price while the oldest retained observation is still too recent. After that threshold, a broken observation path is treated as unsafe and the swap reverts.
 
 ### 7.3 Cross-pool interactions
 
@@ -169,7 +173,7 @@ This is documented inline in `src/JBUniswapV4Hook.sol` as `COMPOSITION WARNING` 
 - **Oracle observation monotonicity** -- `blockTimestamp` in observations increases monotonically (modulo uint32 wraparound). Same-block writes are no-ops (`Oracle.write` returns early when `last.blockTimestamp == blockTimestamp`). Verified in `test_OracleWrite_SameBlock_NoOp`.
 - **Flash-accounting conservation** -- For every `poolManager.take()`, a corresponding `_settleOutput()` must execute within the same `unlock()` call, or PoolManager reverts. The hook never holds tokens across transactions.
 - **Cardinality cap** -- `cardinalityNext` never exceeds `MAX_TWAP_CARDINALITY` (1024). Growth logic doubles until the cap. Verified in `test_OracleCardinality_CapsAtConfiguredMaximum`.
-- **Routing never blocks V4 swaps** -- All JB protocol calls in the routing path (`currentRulesetOf`, `currentReclaimableSurplusOf`, `pricePerUnitOf`, `primaryTerminalOf`) are try-catch wrapped. A revert in any JB contract results in V4 fallback, not a failed swap.
+- **External JB call failures usually degrade to V4, but mature-oracle failures do not.** The external JB protocol calls in the routing path (`currentRulesetOf`, `currentReclaimableSurplusOf`, `pricePerUnitOf`, `primaryTerminalOf`, `previewPayFor`) are try-catch wrapped, so those failures usually make the JB route ineligible and let V4 proceed. The exception is the hook's own mature TWAP observation path: once the hook decides TWAP should be available, `_observeTWAP()` is fail-closed and can still revert the swap.
 
 ## 9. Accepted Behaviors
 
