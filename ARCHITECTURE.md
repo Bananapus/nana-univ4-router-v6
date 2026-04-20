@@ -2,7 +2,7 @@
 
 ## Purpose
 
-`univ4-router-v6` is a Uniswap V4 hook that compares live pool execution against Juicebox-native mint or cash-out routes whenever a project token is traded. It also maintains the TWAP oracle surface other repos, especially `nana-buyback-hook-v6`, rely on.
+`univ4-router-v6` is a Uniswap V4 hook that compares live pool execution against Juicebox-native mint or cash-out routes whenever a project token is traded. It also maintains the TWAP oracle surface that other repos, especially `nana-buyback-hook-v6`, rely on.
 
 ## System Overview
 
@@ -10,10 +10,10 @@
 
 ## Core Invariants
 
-- The oracle must remain queryable and sufficiently manipulation-resistant for routing decisions.
-- Routing recursion with buyback integrations must stay impossible; the routing guard is part of the design.
+- The oracle must stay queryable and sufficiently manipulation-resistant for routing decisions.
+- Routing recursion with buyback integrations must stay impossible.
 - If Juicebox estimation fails, the hook should degrade predictably instead of inventing new semantics.
-- Sell-side Juicebox estimates are intentionally conservative and may return ineligible `0` rather than fall back to stale static reclaim math.
+- Sell-side Juicebox estimates are intentionally conservative and may return `0` rather than trust stale static math.
 - Exposed V4 hook permissions must match actual implemented behavior.
 
 ## Modules
@@ -47,26 +47,26 @@ swap involving a project token
 
 This repo does not own the canonical treasury ledger. It owns route comparison and oracle observation state.
 
-Its route comparison is intentionally asymmetric: buy-side helper surfaces can be more permissive for offchain inspection, while live routing trusts stricter preview surfaces to avoid stale hook-dependent estimates.
+Its route comparison is intentionally asymmetric: helper surfaces can be more permissive for offchain inspection, while live routing trusts stricter preview surfaces.
 
 ## Security Model
 
 - Oracle upkeep and routing are tightly coupled.
 - Warmup behavior matters because low-history pools fall back toward spot pricing.
 - Buy and sell estimation rely on `previewPayFor(...)` and `previewCashOutFrom(...)` behavior in core.
-- Conservative underestimation is part of the safety model. The hook may bias away from Juicebox routing rather than risk selecting it from stale or hook-incompatible estimates.
+- Conservative underestimation is part of the safety model. The hook may prefer V4 over a risky Juicebox route.
 - Because the deployment is immutable, constructor mistakes are expensive to fix.
 
 ## Safe Change Guide
 
 - Treat routing and oracle logic as one system.
 - Review changes under standalone swaps, buyback-hook integration, and low-history warmup conditions.
-- If estimation logic changes, keep the distinction between offchain/reference helpers and live-routing trust surfaces explicit.
-- Resist mutable-config creep; constructor-configured and predictable behavior is the design goal.
+- If estimation logic changes, keep the distinction between offchain helpers and live-routing trust surfaces explicit.
+- Resist mutable-config creep. Constructor-configured behavior is the design goal.
 
 ## Canonical Checks
 
-- oracle observation depth and TWAP interpolation behavior:
+- oracle observation depth and TWAP interpolation:
   `test/OracleDeepTest.t.sol`
 - preview-to-live routing alignment on buy paths:
   `test/audit/PreviewPayForRouting.t.sol`

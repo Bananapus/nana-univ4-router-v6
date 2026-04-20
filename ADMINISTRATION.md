@@ -11,7 +11,7 @@
 
 ## Purpose
 
-`univ4-router-v6` is intentionally almost adminless. The important thing to document is not who owns it, but that nobody can retune or pause it after deployment and that pool creators permanently opt into it when they initialize hooked pools.
+`univ4-router-v6` is intentionally almost adminless. The important fact is not who owns it, but that nobody can retune or pause it after deployment and that pool creators permanently opt into it when they initialize hooked pools.
 
 ## Control Model
 
@@ -45,16 +45,16 @@ The only effectively privileged runtime paths are the Uniswap V4 hook callbacks,
 ## Operational Notes
 
 - Validate constructor wiring before deployment because there is no later patch surface.
-- Validate `hookData` expectations in integrators because callers supply the swap-level minimum output encoding.
-- Treat pool initialization as the real "administrative" commitment for using this hook.
-- Be explicit about quote quality for newly initialized or shallow pools; some preview paths fall back to spot-price assumptions when TWAP history is not yet available.
+- Validate `hookData` expectations in integrators because callers supply the swap-level minimum-output encoding.
+- Treat pool initialization as the real administrative commitment for using this hook.
+- Be explicit about quote quality for newly initialized or shallow pools.
 
 ## Machine Notes
 
 - Do not search for owner or governance roles; there are none.
 - Treat constructor args and PoolManager-only callback guards as the full control model.
 - If a pool was initialized with the wrong hook expectations, recovery means new pools, not admin intervention.
-- If TWAP history is insufficient, do not overstate oracle robustness for that pool yet; the hook can fall back to spot-style behavior in some quote paths.
+- If TWAP history is insufficient, do not overstate oracle robustness for that pool.
 
 ## Recovery
 

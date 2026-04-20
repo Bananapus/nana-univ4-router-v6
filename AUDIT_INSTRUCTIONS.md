@@ -5,6 +5,7 @@ This repo is the Uniswap V4 hook that compares V4 execution against Juicebox exe
 ## Audit Objective
 
 Find issues that:
+
 - mis-estimate V4 or Juicebox outputs
 - choose the wrong path and lose user value
 - break swap settlement through sign, delta, or slippage mistakes
@@ -14,11 +15,13 @@ Find issues that:
 ## Scope
 
 In scope:
+
 - `src/JBUniswapV4Hook.sol`
 - `src/libraries/Oracle.sol`
 - deployment scripts in `script/`
 
 Key dependencies:
+
 - `nana-core-v6`
 - Uniswap V4
 - consumers such as `nana-buyback-hook-v6` and `univ4-lp-split-hook-v6`
@@ -32,12 +35,14 @@ Key dependencies:
 ## Security Model
 
 On swaps involving a Juicebox project token, the hook:
+
 - estimates the V4 path
 - estimates the Juicebox path
 - routes through the better option
 - records observations for future TWAP queries
 
 It is also an oracle surface:
+
 - pools using it depend on its observation ring buffer
 - other repos may call `observe()` and trust its output as a pricing guardrail
 
@@ -59,36 +64,25 @@ It is also an oracle surface:
 
 ## Critical Invariants
 
-1. Route selection is honest
-The hook must compare like-for-like outputs and not mix preview semantics or fee conventions across routes.
-
-2. Settlement deltas are signed correctly
-Any override path must satisfy Uniswap’s delta conventions and the user’s minimum-out expectation.
-
-3. Oracle writes remain usable
-Observation growth, lookup, and fallback-to-spot behavior must not silently degrade into unsafe values for downstream consumers.
-
-4. Reentrancy guard is effective
-Recursive routing through the buyback hook or terminal calls must degrade safely rather than spin or corrupt state.
+1. Route selection is honest. The hook must compare like-for-like outputs.
+2. Settlement deltas are signed correctly. Override paths must satisfy Uniswap delta conventions and the user's minimum-out expectation.
+3. Oracle writes remain usable. Observation history must stay queryable for downstream TWAP readers.
+4. Warmup behavior stays explicit. Spot fallback must remain distinguishable from mature TWAP behavior.
+5. Composition with the buyback hook remains recursion-safe.
 
 ## Attack Surfaces
 
-- `beforeSwap` and any override-delta return path
-- output estimation helpers for both routes
-- `afterSwap`, `afterAddLiquidity`, and `afterRemoveLiquidity` oracle writes
-- ring-buffer growth and historical lookup in `Oracle.sol`
-- recursion guard behavior when composed with buyback logic
-
-Replay these checks:
-1. compare buy-side and sell-side route selection against actual execution
-2. inspect slippage enforcement on both Juicebox-routed and pure V4-routed swaps
-3. review native-token normalization across V4 and Juicebox conventions
-4. inspect low-history oracle behavior and spot fallback during warmup
-5. inspect recursive composition with `nana-buyback-hook-v6`
+- TWAP warmup and spot fallback
+- route-comparison math
+- exact-input slippage checks
+- signed delta handling in V4 callbacks
+- recursive composition with buyback routing
+- hook-address mining and permission-bit deployment
 
 ## Accepted Risks Or Behaviors
 
-- Low-history oracle behavior intentionally prefers safety or explicit failure over optimistic routing.
+- Some quote paths intentionally degrade to V4 rather than block trading when Juicebox-side estimation fails.
+- Warmup-period spot fallback is an accepted but weaker safety window.
 
 ## Verification
 
