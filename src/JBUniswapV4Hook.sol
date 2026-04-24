@@ -1087,6 +1087,7 @@ contract JBUniswapV4Hook is BaseHook {
             // Buying JB tokens: Pay to Juicebox and receive JB tokens
             // Normalize native ETH to JB_NATIVE_TOKEN for terminal interaction
             uint256 payValue = inputCurrency.isAddressZero() ? amountIn : 0;
+            // slither-disable-next-line unused-return
             terminal.pay{value: payValue}({
                 projectId: projectId,
                 token: normalizedTokenIn, // Native ETH → JB_NATIVE_TOKEN
@@ -1101,6 +1102,7 @@ contract JBUniswapV4Hook is BaseHook {
             // Only normalize native ETH to JB_NATIVE_TOKEN (WETH only appears when routing through v3)
             address normalizedTokenOut = _normalizeToken(tokenOut);
             // Call the terminal's cash out function to get the output tokens
+            // slither-disable-next-line unused-return
             IJBMultiTerminal(address(terminal))
                 .cashOutTokensOf({
                     holder: address(this), // holder (hook owns the JB tokens)
