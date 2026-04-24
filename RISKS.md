@@ -80,3 +80,65 @@ The hook routes sell-side cash outs through itself so it can settle back into Po
 ### 8.4 Zero-tax sell-path routing can keep favoring Juicebox
 
 For zero-tax projects, repeated sell-side JB routing may remain structurally preferable because the per-token reclaim value does not decay through tax retention. That is an economic property of the configured project, not a routing bug.
+
+### 8.5 Price impact ignorance in large V4 trades
+
+`estimateUniswapOutput()` uses a linear TWAP quote without liquidity-depth simulation. For large trades in shallow pools, the actual V4 execution price may be worse than the Juicebox issuance path. The v4 geomean hook is used when applicable to improve estimates. A full liquidity-depth check was deemed too complex for the routing hot path. `amountOutMin` slippage protection prevents worst-case execution.
+
+### 8.6 TWAP warmup spot-price fallback
+
+When the TWAP oracle has insufficient observation history (newly created pools, first ~30 minutes), `estimateUniswapOutput` falls back to the manipulable spot price. During this window, routing decisions may be suboptimal. Slippage protection (`amountOutMin`) prevents worst-case execution. This is documented in code and is a bounded startup condition.
+
+---
+
+## 9. Accepted Findings
+
+The following findings were reviewed and accepted.
+
+### Oracle Findings
+
+#### Post-action oracle observation backfills TWAP with post-swap tick *(Major)*
+
+`Oracle.transform` records the post-swap tick as `tickCumulative` for the entire elapsed time since the last observation, retroactively projecting the post-swap price backwards in time. This corrupts TWAP for large swaps with infrequent observations.
+
+**Accepted.** Same behavior as Uniswap V3's native oracle. Splitting observations would double gas cost and deviate from V3 semantics. JBRouterTerminal uses independent TWAP quoting with hardened slippage.
+
+#### Single observation returns spot tick as TWAP *(Minor)*
+
+When the oracle has < 2 observations, `observeTWAP` returns the current spot tick as TWAP.
+
+**Accepted.** Internal routing mitigated by 15% fixed slippage when no TWAP available. External callers should check observation count before trusting the value.
+
+#### Insufficient TWAP falls back to manipulable spot price *(Medium)*
+
+When insufficient observations exist, the oracle returns spot price which is manipulable via JIT liquidity.
+
+**Accepted.** Mitigated by 15% fixed slippage tolerance. External consumers should verify TWAP quality.
+
+#### Synchronous TWAP observation growth enables gas-griefing *(Medium)*
+
+`increaseOracleCardinalityNext` initializes oracle slots synchronously. Growing by large amounts costs significant gas.
+
+**Accepted.** Bounded by `MAX_TWAP_CARDINALITY = 1024` and idempotent — once grown, cannot be re-griefed at the same size. One-time cost.
+
+### Swap Routing Findings
+
+#### `_beforeSwap` ignores caller's `sqrtPriceLimitX96` *(Minor)*
+
+The hook's `_beforeSwap` doesn't use the caller's `sqrtPriceLimitX96` when routing through Juicebox because no AMM ticks are crossed. For V4-path swaps, the PoolManager applies the limit normally.
+
+**Accepted.** The hook has independent slippage protection via `amountOutMin`.
+
+#### Unchecked terminal fee arithmetic can cause sell-side DoS *(Medium)*
+
+Fee computation in `_settleOutput` can revert on unexpected values.
+
+**Accepted.** The code wraps terminal calls in try-catch; on failure, fee defaults to 0 and the transaction proceeds. No persistent DoS possible.
+
+### Minor Findings
+
+#### Buy helper truncates currency IDs to `uint32` *(Minor)*
+
+`_getBuyHelper` uses `uint32(uint160(paymentToken))` for currency comparison. Collision probability (~0.001% with ~10k active tokens) is negligible.
+
+**Accepted.** Even a collision only affects the view-only preview estimation, not actual swap execution.
