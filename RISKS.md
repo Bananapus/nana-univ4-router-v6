@@ -129,11 +129,11 @@ The hook's `_beforeSwap` doesn't use the caller's `sqrtPriceLimitX96` when routi
 
 **Accepted.** The hook has independent slippage protection via `amountOutMin`.
 
-#### Unchecked terminal fee arithmetic can cause sell-side DoS *(Medium)*
+#### Terminal fee exceeding MAX_FEE could underflow sell-side estimate *(Medium)*
 
-Fee computation in `_settleOutput` can revert on unexpected values.
+Fee computation in `calculateExpectedOutputFromSelling` could underflow when the terminal reports a fee exceeding `JBConstants.MAX_FEE`, making the JB sell path revert instead of falling back to V4.
 
-**Accepted.** The code wraps terminal calls in try-catch; on failure, fee defaults to 0 and the transaction proceeds. No persistent DoS possible.
+**Fixed.** `calculateExpectedOutputFromSelling` now returns 0 when the fee exceeds `MAX_FEE`, treating the JB sell path as ineligible so the swap degrades to V4. The `_settleOutput` path already wraps terminal calls in try-catch; this fix closes the estimation counterpart.
 
 ### Minor Findings
 
