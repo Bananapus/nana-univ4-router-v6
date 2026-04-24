@@ -1068,6 +1068,12 @@ contract JBUniswapV4Hook is BaseHook {
         // Normalize token for Juicebox terminal interaction
         address normalizedTokenIn = _normalizeToken(tokenIn);
 
+        // Measure actual balance before terminal interaction.
+        // Protects against fee-on-transfer tokens where the terminal's return value
+        // may exceed the actual tokens received by this contract.
+        uint256 balanceBefore =
+            outputCurrency.isAddressZero() ? address(this).balance : IERC20(tokenOut).balanceOf(address(this));
+
         if (isBuying) {
             // Approve the terminal to spend the input tokens for payment.
             // Use forceApprove to set an exact allowance, avoiding accumulation from safeIncreaseAllowance
@@ -1081,7 +1087,8 @@ contract JBUniswapV4Hook is BaseHook {
             // Buying JB tokens: Pay to Juicebox and receive JB tokens
             // Normalize native ETH to JB_NATIVE_TOKEN for terminal interaction
             uint256 payValue = inputCurrency.isAddressZero() ? amountIn : 0;
-            outputReceived = terminal.pay{value: payValue}({
+            // slither-disable-next-line unused-return
+            terminal.pay{value: payValue}({
                 projectId: projectId,
                 token: normalizedTokenIn, // Native ETH → JB_NATIVE_TOKEN
                 amount: amountIn,
@@ -1095,7 +1102,8 @@ contract JBUniswapV4Hook is BaseHook {
             // Only normalize native ETH to JB_NATIVE_TOKEN (WETH only appears when routing through v3)
             address normalizedTokenOut = _normalizeToken(tokenOut);
             // Call the terminal's cash out function to get the output tokens
-            outputReceived = IJBMultiTerminal(address(terminal))
+            // slither-disable-next-line unused-return
+            IJBMultiTerminal(address(terminal))
                 .cashOutTokensOf({
                     holder: address(this), // holder (hook owns the JB tokens)
                     projectId: projectId,
@@ -1106,6 +1114,11 @@ contract JBUniswapV4Hook is BaseHook {
                     metadata: bytes("") // Empty metadata
                 });
         }
+
+        // Use actual balance delta instead of trusting terminal return value.
+        uint256 balanceAfter =
+            outputCurrency.isAddressZero() ? address(this).balance : IERC20(tokenOut).balanceOf(address(this));
+        outputReceived = balanceAfter - balanceBefore;
 
         // Settle output back to PoolManager.
         _settleOutput({outputCurrency: outputCurrency, amount: outputReceived});
