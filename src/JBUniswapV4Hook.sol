@@ -1071,9 +1071,8 @@ contract JBUniswapV4Hook is BaseHook {
         // Measure actual balance before terminal interaction.
         // Protects against fee-on-transfer tokens where the terminal's return value
         // may exceed the actual tokens received by this contract.
-        uint256 balanceBefore = outputCurrency.isAddressZero()
-            ? address(this).balance
-            : IERC20(tokenOut).balanceOf(address(this));
+        uint256 balanceBefore =
+            outputCurrency.isAddressZero() ? address(this).balance : IERC20(tokenOut).balanceOf(address(this));
 
         if (isBuying) {
             // Approve the terminal to spend the input tokens for payment.
@@ -1115,9 +1114,8 @@ contract JBUniswapV4Hook is BaseHook {
         }
 
         // Use actual balance delta instead of trusting terminal return value.
-        uint256 balanceAfter = outputCurrency.isAddressZero()
-            ? address(this).balance
-            : IERC20(tokenOut).balanceOf(address(this));
+        uint256 balanceAfter =
+            outputCurrency.isAddressZero() ? address(this).balance : IERC20(tokenOut).balanceOf(address(this));
         outputReceived = balanceAfter - balanceBefore;
 
         // Settle output back to PoolManager.

@@ -35,7 +35,6 @@ import {IJBRulesetApprovalHook} from "@bananapus/core-v6/src/interfaces/IJBRules
 import {JBPayHookSpecification} from "@bananapus/core-v6/src/structs/JBPayHookSpecification.sol";
 import {JBCashOutHookSpecification} from "@bananapus/core-v6/src/structs/JBCashOutHookSpecification.sol";
 
-
 // ═══════════════════════════════════════════════════════════════════════
 // Mock contracts — scoped to this test file
 // ═══════════════════════════════════════════════════════════════════════
