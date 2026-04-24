@@ -248,6 +248,10 @@ contract JBUniswapV4Hook is BaseHook {
             } catch {
                 fee = 0;
             }
+
+            // If the terminal reports a fee exceeding the protocol maximum, treat the JB sell path as ineligible.
+            if (fee > JBConstants.MAX_FEE) return 0;
+
             return grossReclaim - FullMath.mulDiv({a: grossReclaim, b: fee, denominator: JBConstants.MAX_FEE});
         } catch {
             // Conservative degrade rule: if the live preview surface is unavailable, do not resurrect the older
