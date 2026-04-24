@@ -27,3 +27,4 @@ This repo was not part of the deployed v5 ecosystem that the top-level changelog
 - Buy-side live routing now trusts `previewPayFor()` only. Preview failures, missing buy terminals, and extreme token-decimal metadata all degrade to a `0` JB quote so V4 stays live.
 - Sell-side live routing now treats `previewCashOutFrom()` as authoritative. If that preview surface is unavailable or reverts, the JB sell quote intentionally degrades to `0` so the router does not rely on a stale static reclaim estimate.
 - Large-trade V4 quote drift remains a documented limitation of the current linear estimator; fork tests pin sample small-trade and large-trade drift envelopes for operators.
+- `calculateExpectedOutputFromSelling` now returns 0 when the terminal fee exceeds `JBConstants.MAX_FEE`, so the swap degrades to V4 instead of reverting on an arithmetic underflow.
