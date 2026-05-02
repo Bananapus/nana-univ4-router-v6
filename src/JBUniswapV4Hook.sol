@@ -25,6 +25,7 @@ import {SwapParams, ModifyLiquidityParams} from "@uniswap/v4-core/src/types/Pool
 import {BaseHook} from "@uniswap/v4-periphery/src/utils/BaseHook.sol";
 import {IJBController} from "@bananapus/core-v6/src/interfaces/IJBController.sol";
 import {IJBDirectory} from "@bananapus/core-v6/src/interfaces/IJBDirectory.sol";
+import {IJBFeelessAddresses} from "@bananapus/core-v6/src/interfaces/IJBFeelessAddresses.sol";
 import {IJBFeeTerminal} from "@bananapus/core-v6/src/interfaces/IJBFeeTerminal.sol";
 import {IJBCashOutTerminal} from "@bananapus/core-v6/src/interfaces/IJBCashOutTerminal.sol";
 import {IJBMultiTerminal} from "@bananapus/core-v6/src/interfaces/IJBMultiTerminal.sol";
@@ -77,6 +78,12 @@ contract JBUniswapV4Hook is BaseHook {
 
     /// @notice Reverts when swap output is below minimum required amount.
     error JBUniswapV4Hook_InsufficientOutput();
+
+    /// @notice Reverts when a nonzero Juicebox sell cash-out delivers no reclaim token.
+    error JBUniswapV4Hook_JuiceboxSellDidNotDeliver(address inputToken, address outputToken, uint256 amountIn);
+
+    /// @notice Reverts when a temporary terminal allowance was not fully consumed.
+    error JBUniswapV4Hook_TemporaryAllowanceNotConsumed(address token, address spender, uint256 allowance);
 
     /// @notice Reverts when a Juicebox input cannot fit inside Uniswap V4's signed delta accounting.
     /// @param amount The oversized input amount.
@@ -206,9 +213,9 @@ contract JBUniswapV4Hook is BaseHook {
     /// If previewing is unavailable or reverts, this helper intentionally returns `0` and makes the JB sell route
     /// ineligible. That conservative degrade rule avoids routing through JB on a stale static reclaim estimate that
     /// may disagree with the terminal's live cash-out path.
-    /// The estimate also conservatively deducts fees even for feeless addresses, which may underestimate output.
-    /// @dev NOTE: The `FEE()` call casts the terminal to `IJBFeeTerminal` inside a try-catch. If the terminal
-    /// does not implement `IJBFeeTerminal`, the fee defaults to 0 (no fee deduction in the estimate).
+    /// Buyback-hook metadata-only swap previews are already expressed as executable minimums.
+    /// @dev NOTE: Fee and feeless-registry calls are best-effort. If the terminal does not expose them, the estimate
+    /// falls back to the raw preview.
     /// @param projectId The Juicebox project ID
     /// @param tokenAmountIn The amount of JB tokens being sold
     /// @param outputToken The token to receive (e.g., ETH, USDC)
@@ -231,17 +238,24 @@ contract JBUniswapV4Hook is BaseHook {
         // slither-disable-next-line unused-return
         try IJBCashOutTerminal(address(terminal))
             .previewCashOutFrom({
-                holder: address(this),
-                projectId: projectId,
-                cashOutCount: tokenAmountIn,
-                tokenToReclaim: outputToken,
-                beneficiary: payable(address(this)),
-                metadata: bytes("")
-            }) returns (
-            JBRuleset memory, uint256 grossReclaim, uint256, JBCashOutHookSpecification[] memory
+            holder: address(this),
+            projectId: projectId,
+            cashOutCount: tokenAmountIn,
+            tokenToReclaim: outputToken,
+            beneficiary: payable(address(this)),
+            metadata: bytes("")
+        }) returns (
+            JBRuleset memory, uint256 grossReclaim, uint256, JBCashOutHookSpecification[] memory hookSpecifications
         ) {
-            // Deduct JB protocol fee. Conservative: assumes fee even for feeless addresses, which may
-            // underestimate output and bias toward pool swaps. Intentional trade-off.
+            uint256 effectiveReclaim =
+                _effectivePreviewCashOutAmount({reclaimAmount: grossReclaim, hookSpecifications: hookSpecifications});
+            if (effectiveReclaim == 0) return 0;
+
+            // Buyback hook metadata reports the executable swap floor directly. Do not apply the terminal fee
+            // haircut to that already-routed amount.
+            if (grossReclaim == 0) return effectiveReclaim;
+
+            // Deduct the JB protocol fee only when the hook is not fee-exempt as the cash-out beneficiary.
             uint256 fee;
             try IJBFeeTerminal(address(terminal)).FEE() returns (uint256 _fee) {
                 fee = _fee;
@@ -249,16 +263,32 @@ contract JBUniswapV4Hook is BaseHook {
                 fee = 0;
             }
 
+            if (fee == 0 || _isCashOutPreviewBeneficiaryFeeless(terminal)) return effectiveReclaim;
+
             // If the terminal reports a fee exceeding the protocol maximum, treat the JB sell path as ineligible.
             if (fee > JBConstants.MAX_FEE) return 0;
 
-            return grossReclaim - FullMath.mulDiv({a: grossReclaim, b: fee, denominator: JBConstants.MAX_FEE});
+            return effectiveReclaim - FullMath.mulDiv({a: effectiveReclaim, b: fee, denominator: JBConstants.MAX_FEE});
         } catch {
             // Conservative degrade rule: if the live preview surface is unavailable, do not resurrect the older
             // static reclaim estimate. Cash-out data hooks and terminal-specific logic can make that estimate stale,
             // so the router treats the JB sell path as ineligible and leaves execution to V4 instead.
             return 0;
         }
+    }
+
+    /// @notice Check whether this hook would be fee-exempt as the cash-out beneficiary of `terminal`.
+    function _isCashOutPreviewBeneficiaryFeeless(IJBTerminal terminal) internal view returns (bool isFeeless) {
+        (bool success, bytes memory data) =
+            address(terminal).staticcall(abi.encodeCall(IJBFeeTerminal.FEELESS_ADDRESSES, ()));
+        if (!success || data.length < 32) return false;
+
+        IJBFeelessAddresses feelessAddresses = abi.decode(data, (IJBFeelessAddresses));
+        if (address(feelessAddresses).code.length == 0) return false;
+
+        (success, data) =
+            address(feelessAddresses).staticcall(abi.encodeCall(IJBFeelessAddresses.isFeeless, (address(this))));
+        if (success && data.length >= 32) isFeeless = abi.decode(data, (bool));
     }
 
     /// @notice Calculate expected tokens for a given payment amount in any currency
@@ -712,9 +742,14 @@ contract JBUniswapV4Hook is BaseHook {
                     beneficiary: address(this),
                     metadata: bytes("")
                 }) returns (
-                    JBRuleset memory, uint256 beneficiaryTokenCount, uint256, JBPayHookSpecification[] memory
+                    JBRuleset memory,
+                    uint256 beneficiaryTokenCount,
+                    uint256,
+                    JBPayHookSpecification[] memory hookSpecifications
                 ) {
-                    buySideExpectedOutput = beneficiaryTokenCount;
+                    buySideExpectedOutput = _effectivePreviewPayBeneficiaryTokenCount({
+                        beneficiaryTokenCount: beneficiaryTokenCount, hookSpecifications: hookSpecifications
+                    });
                 } catch {
                     // Preview failure means the live JB buy path is not trustworthy enough for best execution.
                     // Leave the quote at 0 so V4 remains available.
@@ -831,6 +866,88 @@ contract JBUniswapV4Hook is BaseHook {
             // Two-step calculation: first multiply by weight, then apply price conversion
             uint256 intermediate = FullMath.mulDiv({a: tokensPerBaseCurrency, b: paymentAmount18, denominator: 1e18});
             expectedTokens = FullMath.mulDiv({a: intermediate, b: baseCurrencyPerPaymentToken, denominator: 1e18});
+        }
+    }
+
+    /// @notice Normalize metadata-only buyback pay previews into the beneficiary token count used for routing.
+    function _effectivePreviewPayBeneficiaryTokenCount(
+        uint256 beneficiaryTokenCount,
+        JBPayHookSpecification[] memory hookSpecifications
+    )
+        internal
+        pure
+        returns (uint256 effectiveBeneficiaryTokenCount)
+    {
+        effectiveBeneficiaryTokenCount = beneficiaryTokenCount;
+        if (beneficiaryTokenCount != 0) return effectiveBeneficiaryTokenCount;
+
+        for (uint256 i; i < hookSpecifications.length;) {
+            JBPayHookSpecification memory specification = hookSpecifications[i];
+            if (specification.noop || specification.metadata.length != 13 * 32) {
+                unchecked {
+                    ++i;
+                }
+                continue;
+            }
+
+            (,,,,,,,,,, uint256 minimumBeneficiaryTokenCount,,) = abi.decode(
+                specification.metadata,
+                (
+                    bool,
+                    uint256,
+                    uint256,
+                    bool,
+                    address,
+                    uint256,
+                    uint256,
+                    int24,
+                    uint128,
+                    bytes32,
+                    uint256,
+                    uint256,
+                    uint256
+                )
+            );
+
+            if (minimumBeneficiaryTokenCount > effectiveBeneficiaryTokenCount) {
+                effectiveBeneficiaryTokenCount = minimumBeneficiaryTokenCount;
+            }
+
+            unchecked {
+                ++i;
+            }
+        }
+    }
+
+    /// @notice Normalize metadata-only buyback cash-out previews into the reclaim amount used for routing.
+    function _effectivePreviewCashOutAmount(
+        uint256 reclaimAmount,
+        JBCashOutHookSpecification[] memory hookSpecifications
+    )
+        internal
+        pure
+        returns (uint256 effectiveReclaimAmount)
+    {
+        effectiveReclaimAmount = reclaimAmount;
+        if (reclaimAmount != 0) return effectiveReclaimAmount;
+
+        for (uint256 i; i < hookSpecifications.length;) {
+            JBCashOutHookSpecification memory specification = hookSpecifications[i];
+            if (specification.noop || specification.metadata.length != 7 * 32) {
+                unchecked {
+                    ++i;
+                }
+                continue;
+            }
+
+            (uint256 minimumSwapAmountOut,,,,,,) =
+                abi.decode(specification.metadata, (uint256, uint256, uint256, int24, uint128, bytes32, uint256));
+
+            if (minimumSwapAmountOut > effectiveReclaimAmount) effectiveReclaimAmount = minimumSwapAmountOut;
+
+            unchecked {
+                ++i;
+            }
         }
     }
 
@@ -1101,6 +1218,10 @@ contract JBUniswapV4Hook is BaseHook {
                 memo: "", // Empty memo
                 metadata: bytes("") // Empty metadata
             });
+
+            if (!inputCurrency.isAddressZero()) {
+                _requireTemporaryAllowanceConsumed({token: tokenIn, spender: address(terminal)});
+            }
         } else {
             // Selling JB tokens: Cash out JB tokens and receive output currency
             // Only normalize native ETH to JB_NATIVE_TOKEN (WETH only appears when routing through v3)
@@ -1109,20 +1230,26 @@ contract JBUniswapV4Hook is BaseHook {
             // slither-disable-next-line unused-return
             IJBMultiTerminal(address(terminal))
                 .cashOutTokensOf({
-                    holder: address(this), // holder (hook owns the JB tokens)
-                    projectId: projectId,
-                    cashOutCount: amountIn, // Amount of JB tokens to cash out
-                    tokenToReclaim: normalizedTokenOut, // Native ETH → JB_NATIVE_TOKEN
-                    minTokensReclaimed: amountOutMin, // Minimum tokens required (enforced by JB terminal)
-                    beneficiary: payable(address(this)), // beneficiary (hook)
-                    metadata: bytes("") // Empty metadata
-                });
+                holder: address(this), // holder (hook owns the JB tokens)
+                projectId: projectId,
+                cashOutCount: amountIn, // Amount of JB tokens to cash out
+                tokenToReclaim: normalizedTokenOut, // Native ETH → JB_NATIVE_TOKEN
+                minTokensReclaimed: amountOutMin, // Minimum tokens required (enforced by JB terminal)
+                beneficiary: payable(address(this)), // beneficiary (hook)
+                metadata: bytes("") // Empty metadata
+            });
         }
 
         // Use actual balance delta instead of trusting terminal return value.
         uint256 balanceAfter =
             outputCurrency.isAddressZero() ? address(this).balance : IERC20(tokenOut).balanceOf(address(this));
         outputReceived = balanceAfter - balanceBefore;
+        if (!isBuying && amountIn != 0 && outputReceived == 0) {
+            revert JBUniswapV4Hook_JuiceboxSellDidNotDeliver({
+                inputToken: tokenIn, outputToken: tokenOut, amountIn: amountIn
+            });
+        }
+        if (outputReceived < amountOutMin) revert JBUniswapV4Hook_InsufficientOutput();
 
         // Settle output back to PoolManager.
         _settleOutput({outputCurrency: outputCurrency, amount: outputReceived});
@@ -1131,6 +1258,12 @@ contract JBUniswapV4Hook is BaseHook {
         _routing = false;
 
         return outputReceived;
+    }
+
+    /// @dev Reverts if a terminal kept any portion of a temporary ERC-20 allowance.
+    function _requireTemporaryAllowanceConsumed(address token, address spender) internal view {
+        uint256 allowance = IERC20(token).allowance({owner: address(this), spender: spender});
+        if (allowance != 0) revert JBUniswapV4Hook_TemporaryAllowanceNotConsumed(token, spender, allowance);
     }
 
     /// @notice Settles output tokens back to PoolManager
