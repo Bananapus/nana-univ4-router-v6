@@ -58,7 +58,15 @@ contract FeelessSellPreviewTerminal {
         return (ruleset, beneficiaryTokenCount, 0, new JBPayHookSpecification[](0));
     }
 
-    function pay(uint256, address, uint256, address, uint256, string calldata, bytes calldata)
+    function pay(
+        uint256,
+        address,
+        uint256,
+        address,
+        uint256,
+        string calldata,
+        bytes calldata
+    )
         external
         payable
         returns (uint256)
@@ -128,8 +136,9 @@ contract FeelessSellQuoteUnderranksJBTest is JuiceboxHookTest {
         mockJBDirectory.setMockTerminal(address(feelessTerminal));
         token0.approve(address(jbSwapRouter), amountIn);
 
-        uint256 feeAwareQuote =
-            hook.calculateExpectedOutputFromSelling(123, amountIn, address(token1), IJBTerminal(address(feelessTerminal)));
+        uint256 feeAwareQuote = hook.calculateExpectedOutputFromSelling(
+            123, amountIn, address(token1), IJBTerminal(address(feelessTerminal))
+        );
         assertEq(feeAwareQuote, liveCashOutAmount, "feeless quote should not deduct the terminal fee");
         assertGt(liveCashOutAmount, v4Estimate, "live JB sell path should still beat V4");
 

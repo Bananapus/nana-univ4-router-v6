@@ -42,7 +42,15 @@ contract MetadataOnlySellPreviewTerminal {
         return (ruleset, beneficiaryTokenCount, 0, bytes(""));
     }
 
-    function pay(uint256, address, uint256, address, uint256, string calldata, bytes calldata)
+    function pay(
+        uint256,
+        address,
+        uint256,
+        address,
+        uint256,
+        string calldata,
+        bytes calldata
+    )
         external
         payable
         returns (uint256)
@@ -176,13 +184,7 @@ contract BuybackCashOutMetadataIgnoredTest is JuiceboxHookTest {
         _installMetadataOnlySellTerminal(2 ether);
 
         uint256 reclaimed = metadataOnlySellTerminal.cashOutTokensOf(
-            address(this),
-            123,
-            1 ether,
-            address(token1),
-            1.5 ether,
-            payable(address(this)),
-            bytes("")
+            address(this), 123, 1 ether, address(token1), 1.5 ether, payable(address(this)), bytes("")
         );
 
         assertEq(reclaimed, 2 ether, "terminal itself can satisfy the minimum");
