@@ -1262,6 +1262,7 @@ contract JBUniswapV4Hook is BaseHook {
 
         // A nonzero sell that delivers no reclaim token is not a valid JB route. Revert instead of settling a
         // zero-output swap that appeared executable during preview.
+        // slither-disable-next-line incorrect-equality
         if (!isBuying && amountIn != 0 && outputReceived == 0) {
             revert JBUniswapV4Hook_JuiceboxSellDidNotDeliver({
                 inputToken: tokenIn, outputToken: tokenOut, amountIn: amountIn
