@@ -68,7 +68,12 @@ contract MetadataOnlySellPreviewTerminal {
     )
         external
         view
-        returns (JBRuleset memory ruleset, uint256 reclaimAmount, uint256, JBCashOutHookSpecification[] memory specs)
+        returns (
+            JBRuleset memory ruleset,
+            uint256 reclaimAmount,
+            uint256 hookAdjustedReclaimAmount,
+            JBCashOutHookSpecification[] memory specs
+        )
     {
         ruleset = JBRuleset({
             cycleNumber: 1,
@@ -99,6 +104,7 @@ contract MetadataOnlySellPreviewTerminal {
         });
 
         reclaimAmount = 0;
+        hookAdjustedReclaimAmount = 0;
     }
 
     function cashOutTokensOf(

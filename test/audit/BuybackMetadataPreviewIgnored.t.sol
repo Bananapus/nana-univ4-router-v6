@@ -102,7 +102,7 @@ contract MetadataOnlyPreviewTerminal {
         beneficiaryTokenCount = actualPayAmount;
 
         if (msg.value == 0 && token.code.length != 0) {
-            IERC20(token).transferFrom(msg.sender, address(this), amount);
+            require(IERC20(token).transferFrom(msg.sender, address(this), amount), "TRANSFER_FROM_FAILED");
         }
 
         address projectToken = projectTokens[projectId];

@@ -347,10 +347,13 @@ contract CodexNemesisLargeTradeMisrouteExecutor {
         uint256 v4Quote = hook.estimateUniswapOutput(key.toId(), key, amountIn, false);
 
         uint256 balanceBefore = projectToken.balanceOf(address(this));
+        // The audit script amount is deliberately small and cannot exceed `int256.max`.
+        // forge-lint: disable-next-line(unsafe-typecast)
+        int256 exactInputAmount = -int256(amountIn);
         jbSwapRouter.swap(
             key,
             SwapParams({
-                zeroForOne: false, amountSpecified: -int256(amountIn), sqrtPriceLimitX96: TickMath.MAX_SQRT_PRICE - 1
+                zeroForOne: false, amountSpecified: exactInputAmount, sqrtPriceLimitX96: TickMath.MAX_SQRT_PRICE - 1
             }),
             0
         );

@@ -85,20 +85,35 @@ contract UncheckedJuiceboxSwapRouter {
         int256 delta0 = delta.amount0();
         int256 delta1 = delta.amount1();
 
-        if (data.params.zeroForOne) delta0 += int256(inputAmount);
-        else delta1 += int256(inputAmount);
+        if (data.params.zeroForOne) {
+            // The mock router is only fed small test amounts, so this cannot exceed `int256.max`.
+            // forge-lint: disable-next-line(unsafe-typecast)
+            delta0 += int256(inputAmount);
+        } else {
+            // The mock router is only fed small test amounts, so this cannot exceed `int256.max`.
+            // forge-lint: disable-next-line(unsafe-typecast)
+            delta1 += int256(inputAmount);
+        }
 
         if (delta0 < 0) {
+            // The branch proves `-delta0` is non-negative and fits the pool manager settlement amount.
+            // forge-lint: disable-next-line(unsafe-typecast)
             data.key.currency0.settle(poolManager, data.sender, uint256(-delta0), false);
         }
         if (delta1 < 0) {
+            // The branch proves `-delta1` is non-negative and fits the pool manager settlement amount.
+            // forge-lint: disable-next-line(unsafe-typecast)
             data.key.currency1.settle(poolManager, data.sender, uint256(-delta1), false);
         }
 
         if (delta0 > 0) {
+            // The branch proves `delta0` is non-negative and fits the pool manager withdrawal amount.
+            // forge-lint: disable-next-line(unsafe-typecast)
             data.key.currency0.take(poolManager, data.sender, uint256(delta0), false);
         }
         if (delta1 > 0) {
+            // The branch proves `delta1` is non-negative and fits the pool manager withdrawal amount.
+            // forge-lint: disable-next-line(unsafe-typecast)
             data.key.currency1.take(poolManager, data.sender, uint256(delta1), false);
         }
 
@@ -163,7 +178,7 @@ contract MockTerminalIgnoringMin {
         beneficiaryTokenCount = actualPayAmount;
 
         if (token != address(0) && amount != 0) {
-            MockERC20(token).transferFrom(msg.sender, address(this), amount);
+            require(MockERC20(token).transferFrom(msg.sender, address(this), amount), "TRANSFER_FROM_FAILED");
         }
 
         address projectToken = projectTokens[projectId];

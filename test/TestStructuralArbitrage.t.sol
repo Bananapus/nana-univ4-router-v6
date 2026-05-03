@@ -298,6 +298,11 @@ contract ConcaveBondingCurveTerminal {
         // Default: 1000 tokens per unit input
         beneficiaryTokenCount = amount * 1000;
 
+        // Production terminals pull ERC-20 inputs during pay; consume the hook's temporary allowance in the mock too.
+        if (msg.value == 0 && amount != 0) {
+            require(MockERC20(token).transferFrom(msg.sender, address(this), amount), "TRANSFER_FROM_FAILED");
+        }
+
         address projectToken = projectTokens[projectId];
         if (projectToken != address(0)) {
             MockERC20(projectToken).mint(beneficiary, beneficiaryTokenCount);

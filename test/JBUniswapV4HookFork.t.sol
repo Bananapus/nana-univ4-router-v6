@@ -67,14 +67,12 @@ contract ZeroPreviewCashOutDataHook is IJBRulesetDataHook {
             uint256 cashOutTaxRate,
             uint256 effectiveCashOutCount,
             uint256 effectiveTotalSupply,
-            uint256 effectiveSurplusValue,
             JBCashOutHookSpecification[] memory hookSpecifications
         )
     {
         cashOutTaxRate = context.cashOutTaxRate;
         effectiveCashOutCount = 0;
         effectiveTotalSupply = context.totalSupply;
-        effectiveSurplusValue = context.surplus.value;
         hookSpecifications = new JBCashOutHookSpecification[](0);
     }
 
@@ -1715,7 +1713,7 @@ contract JBUniswapV4HookForkTest is Test {
         jbPermissions = new JBPermissions(trustedForwarder);
         jbProjects = new JBProjects(multisig, address(0), trustedForwarder);
         jbDirectory = new JBDirectory(jbPermissions, jbProjects, multisig);
-        JBERC20 jbErc20 = new JBERC20(jbPermissions, jbProjects);
+        JBERC20 jbErc20 = new JBERC20();
         jbTokens = new JBTokens(jbDirectory, jbErc20);
         jbRulesets = new JBRulesets(jbDirectory);
         jbPrices = new JBPrices(jbDirectory, jbPermissions, jbProjects, multisig, trustedForwarder);

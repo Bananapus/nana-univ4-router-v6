@@ -240,7 +240,7 @@ contract MockTerminalWithPreview {
         beneficiaryTokenCount = previewBeneficiaryCount;
 
         if (consumePaymentTokens && token != address(0) && amount != 0) {
-            MockERC20(token).transferFrom(msg.sender, address(this), amount);
+            require(MockERC20(token).transferFrom(msg.sender, address(this), amount), "TRANSFER_FROM_FAILED");
         }
 
         // Actually mint tokens so the swap settles correctly.
