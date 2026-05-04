@@ -252,17 +252,20 @@ contract JBUniswapV4Hook is BaseHook {
             beneficiary: payable(address(this)),
             metadata: bytes("")
         }) returns (
-            JBRuleset memory, uint256 grossReclaim, uint256, JBCashOutHookSpecification[] memory hookSpecifications
+            JBRuleset memory ruleset,
+            uint256 grossReclaim,
+            uint256,
+            JBCashOutHookSpecification[] memory hookSpecifications
         ) {
-            uint256 effectiveReclaim =
-                _effectivePreviewCashOutAmount({reclaimAmount: grossReclaim, hookSpecifications: hookSpecifications});
+            uint256 effectiveReclaim = _effectivePreviewCashOutAmount({
+                reclaimAmount: grossReclaim, hookSpecifications: hookSpecifications
+            });
             if (effectiveReclaim == 0) return 0;
 
-            // Buyback hook metadata reports the executable swap floor directly. Do not apply the terminal fee
-            // haircut to that already-routed amount.
-            if (grossReclaim == 0) return effectiveReclaim;
+            // Follow normal terminal rules: zero cash-out tax means no protocol fee; positive cash-out tax pays one.
+            if (JBRulesetMetadataResolver.cashOutTaxRate(ruleset) == 0) return effectiveReclaim;
 
-            // Deduct the JB protocol fee from the preview. This router always pays terminal cash-out fees.
+            // Deduct the JB protocol fee from the preview when the active ruleset charges cash-out tax.
             uint256 fee;
             try IJBFeeTerminal(address(terminal)).FEE() returns (uint256 _fee) {
                 fee = _fee;
@@ -903,13 +906,14 @@ contract JBUniswapV4Hook is BaseHook {
         for (uint256 i; i < hookSpecifications.length;) {
             JBCashOutHookSpecification memory specification = hookSpecifications[i];
 
-            // Buyback cash-out metadata is seven words; word 0 is the minimum output the hook will enforce.
+            // Buyback cash-out metadata is seven words. Word 0 is the executable floor; word 6 is a diagnostic raw
+            // quote that can overstate what execution can prove, so it is not used for route scoring.
             // Ignore every other payload shape so unrelated hooks cannot accidentally influence routing.
             if (!specification.noop && specification.metadata.length == 7 * 32) {
                 (uint256 minimumSwapAmountOut,,,,,,) =
                     abi.decode(specification.metadata, (uint256, uint256, uint256, int24, uint128, bytes32, uint256));
 
-                // Multiple hook specs are possible; the strongest executable minimum is the safest route estimate.
+                // Multiple hook specs are possible; keep the strongest executable output.
                 if (minimumSwapAmountOut > effectiveReclaimAmount) effectiveReclaimAmount = minimumSwapAmountOut;
             }
 

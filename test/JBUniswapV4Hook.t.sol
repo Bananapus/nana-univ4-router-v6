@@ -470,11 +470,37 @@ contract MockJBTerminalStore {
                 weight: 0,
                 weightCutPercent: 0,
                 approvalHook: IJBRulesetApprovalHook(address(0)),
-                metadata: 0
+                metadata: _cashOutTaxedRulesetMetadata()
             }),
             reclaimAmount,
             0,
             new JBCashOutHookSpecification[](0)
+        );
+    }
+
+    function _cashOutTaxedRulesetMetadata() private pure returns (uint256) {
+        return JBRulesetMetadataResolver.packRulesetMetadata(
+            JBRulesetMetadata({
+                reservedPercent: 0,
+                cashOutTaxRate: 1,
+                baseCurrency: 1,
+                pausePay: false,
+                pauseCreditTransfers: false,
+                allowOwnerMinting: false,
+                allowSetCustomToken: false,
+                allowTerminalMigration: false,
+                allowSetTerminals: false,
+                allowSetController: false,
+                allowAddAccountingContext: false,
+                allowAddPriceFeed: false,
+                ownerMustSendPayouts: false,
+                holdFees: false,
+                useTotalSurplusForCashOuts: false,
+                useDataHookForPay: false,
+                useDataHookForCashOut: false,
+                dataHook: address(0),
+                metadata: 0
+            })
         );
     }
 }
