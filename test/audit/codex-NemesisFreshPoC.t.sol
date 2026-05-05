@@ -99,8 +99,11 @@ contract CodexNemesisFreshPoC is JuiceboxHookTest {
         token1.mint(address(this), amountIn);
         token1.approve(address(jbSwapRouter), amountIn);
 
+        // The PoC amount is deliberately small and cannot exceed `int256.max`.
+        // forge-lint: disable-next-line(unsafe-typecast)
+        int256 exactBuyAmount = -int256(amountIn);
         SwapParams memory params = SwapParams({
-            zeroForOne: false, amountSpecified: -int256(amountIn), sqrtPriceLimitX96: TickMath.MAX_SQRT_PRICE - 1
+            zeroForOne: false, amountSpecified: exactBuyAmount, sqrtPriceLimitX96: TickMath.MAX_SQRT_PRICE - 1
         });
 
         jbSwapRouter.swap(key, params, 0);
@@ -125,8 +128,11 @@ contract CodexNemesisFreshPoC is JuiceboxHookTest {
         uint256 initialToken1Balance = token1.balanceOf(address(this));
         token0.approve(address(jbSwapRouter), amountIn);
 
+        // The PoC amount is deliberately small and cannot exceed `int256.max`.
+        // forge-lint: disable-next-line(unsafe-typecast)
+        int256 exactSellAmount = -int256(amountIn);
         SwapParams memory params = SwapParams({
-            zeroForOne: true, amountSpecified: -int256(amountIn), sqrtPriceLimitX96: TickMath.MIN_SQRT_PRICE + 1
+            zeroForOne: true, amountSpecified: exactSellAmount, sqrtPriceLimitX96: TickMath.MIN_SQRT_PRICE + 1
         });
 
         jbSwapRouter.swap(key, params, 0);

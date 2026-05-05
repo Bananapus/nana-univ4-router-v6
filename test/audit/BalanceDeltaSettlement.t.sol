@@ -188,8 +188,8 @@ contract FeeOnTransferTerminal {
     /// @notice Accepts payment, returns reportedAmount but only mints actualAmount.
     function pay(
         uint256 projectId,
-        address,
-        uint256,
+        address token,
+        uint256 amount,
         address beneficiary,
         uint256,
         string calldata,
@@ -204,6 +204,11 @@ contract FeeOnTransferTerminal {
 
         // Return the inflated amount (what the old code would trust).
         beneficiaryTokenCount = reportedAmount;
+
+        // Production terminals pull ERC-20 inputs during pay; consume the hook's temporary allowance in the mock too.
+        if (msg.value == 0 && amount != 0) {
+            require(MockERC20(token).transferFrom(msg.sender, address(this), amount), "TRANSFER_FROM_FAILED");
+        }
 
         // But only actually mint the reduced amount (simulating a fee-on-transfer).
         address projectToken = projectTokens[projectId];

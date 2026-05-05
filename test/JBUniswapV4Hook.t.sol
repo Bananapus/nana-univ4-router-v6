@@ -223,6 +223,11 @@ contract MockJBMultiTerminal {
         // Enforce minReturnedTokens (JB terminal behavior)
         require(beneficiaryTokenCount >= minReturnedTokens, "Insufficient tokens returned");
 
+        // Production terminals pull ERC-20 inputs during pay; consume the hook's temporary allowance in the mock too.
+        if (msg.value == 0 && amount != 0) {
+            require(MockERC20(token).transferFrom(msg.sender, address(this), amount), "TRANSFER_FROM_FAILED");
+        }
+
         // Actually mint the project tokens to the beneficiary
         address projectToken = projectTokens[projectId];
         if (projectToken != address(0)) {
@@ -465,11 +470,37 @@ contract MockJBTerminalStore {
                 weight: 0,
                 weightCutPercent: 0,
                 approvalHook: IJBRulesetApprovalHook(address(0)),
-                metadata: 0
+                metadata: _cashOutTaxedRulesetMetadata()
             }),
             reclaimAmount,
             0,
             new JBCashOutHookSpecification[](0)
+        );
+    }
+
+    function _cashOutTaxedRulesetMetadata() private pure returns (uint256) {
+        return JBRulesetMetadataResolver.packRulesetMetadata(
+            JBRulesetMetadata({
+                reservedPercent: 0,
+                cashOutTaxRate: 1,
+                baseCurrency: 1,
+                pausePay: false,
+                pauseCreditTransfers: false,
+                allowOwnerMinting: false,
+                allowSetCustomToken: false,
+                allowTerminalMigration: false,
+                allowSetTerminals: false,
+                allowSetController: false,
+                allowAddAccountingContext: false,
+                allowAddPriceFeed: false,
+                ownerMustSendPayouts: false,
+                holdFees: false,
+                useTotalSurplusForCashOuts: false,
+                useDataHookForPay: false,
+                useDataHookForCashOut: false,
+                dataHook: address(0),
+                metadata: 0
+            })
         );
     }
 }

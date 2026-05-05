@@ -83,7 +83,7 @@ For zero-tax projects, repeated sell-side JB routing may remain structurally pre
 
 ### 8.5 Price impact ignorance in large V4 trades
 
-`estimateUniswapOutput()` uses a linear TWAP quote without liquidity-depth simulation. For large trades in shallow pools, the actual V4 execution price may be worse than the Juicebox issuance path. The v4 geomean hook is used when applicable to improve estimates. A full liquidity-depth check was deemed too complex for the routing hot path. `amountOutMin` slippage protection prevents worst-case execution.
+`estimateUniswapOutput()` uses a linear TWAP quote without liquidity-depth simulation. For large trades in shallow pools, the actual V4 execution price may be worse than the Juicebox issuance path. A full liquidity-depth check was deemed too complex for the routing hot path. `amountOutMin` slippage protection prevents worst-case execution.
 
 ### 8.6 TWAP warmup spot-price fallback
 
@@ -101,7 +101,7 @@ The following findings were reviewed and accepted.
 
 `Oracle.transform` records the post-swap tick as `tickCumulative` for the entire elapsed time since the last observation, retroactively projecting the post-swap price backwards in time. This corrupts TWAP for large swaps with infrequent observations.
 
-**Accepted.** Same behavior as Uniswap V3's native oracle. Splitting observations would double gas cost and deviate from V3 semantics. JBRouterTerminal uses independent TWAP quoting with hardened slippage.
+**Accepted.** Same behavior as Uniswap V3's native oracle. Splitting observations would double gas cost and deviate from V3 semantics. Downstream consumers should apply their own slippage and oracle-quality checks.
 
 #### Single observation returns spot tick as TWAP *(Minor)*
 

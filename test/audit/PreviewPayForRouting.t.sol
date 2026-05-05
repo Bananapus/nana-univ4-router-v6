@@ -172,6 +172,9 @@ contract MockTerminalWithPreview {
     // Track last pay call for assertions.
     uint256 public lastPayProjectId;
 
+    // Whether `pay` pulls the approved payment tokens, matching a real terminal.
+    bool public consumePaymentTokens = true;
+
     /// @notice Set the project token used for minting in `pay`.
     function setProjectToken(uint256 projectId, address token) external {
         projectTokens[projectId] = token;
@@ -185,6 +188,11 @@ contract MockTerminalWithPreview {
     /// @notice Toggle whether `previewPayFor` reverts.
     function setPreviewReverts(bool flag) external {
         previewReverts = flag;
+    }
+
+    /// @notice Toggle whether `pay` consumes the temporary token allowance.
+    function setConsumePaymentTokens(bool flag) external {
+        consumePaymentTokens = flag;
     }
 
     /// @notice Simulates paying a project. Returns a configurable token count.
@@ -214,8 +222,8 @@ contract MockTerminalWithPreview {
     /// @notice Accept payments and mint project tokens to the beneficiary.
     function pay(
         uint256 projectId,
-        address,
-        uint256,
+        address token,
+        uint256 amount,
         address beneficiary,
         uint256,
         string calldata,
@@ -230,6 +238,10 @@ contract MockTerminalWithPreview {
 
         // Return the same count as the preview (consistent behaviour).
         beneficiaryTokenCount = previewBeneficiaryCount;
+
+        if (consumePaymentTokens && token != address(0) && amount != 0) {
+            require(MockERC20(token).transferFrom(msg.sender, address(this), amount), "TRANSFER_FROM_FAILED");
+        }
 
         // Actually mint tokens so the swap settles correctly.
         address projectToken = projectTokens[projectId];
