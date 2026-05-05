@@ -214,8 +214,8 @@ contract JBUniswapV4Hook is BaseHook {
     // ------------------------- public views ---------------------------- //
     //*********************************************************************//
 
-    /// @notice Estimates how many output tokens (e.g. ETH or USDC) a user would receive by cashing out JB project
-    /// tokens through the Juicebox terminal.
+    /// @notice Calculates how many payment tokens (e.g. ETH or USDC) you'd receive from selling project tokens via
+    /// the Juicebox terminal's cash out mechanism.
     /// @dev Prefers the terminal store's `previewCashOutFrom` simulation so sell-side estimates can incorporate
     /// cash-out data-hook effects when the underlying store supports that surface.
     /// If previewing is unavailable or reverts, this helper intentionally returns `0` and makes the JB sell route
@@ -225,7 +225,7 @@ contract JBUniswapV4Hook is BaseHook {
     /// @dev NOTE: Fee calls are best-effort. If the terminal does not expose `FEE()`, the estimate falls back to the
     /// raw preview.
     /// @param projectId The Juicebox project ID
-    /// @param tokenAmountIn The amount of JB tokens being sold
+    /// @param tokenAmountIn The amount of JB tokens to sell
     /// @param outputToken The token to receive (e.g., ETH, USDC)
     /// @param terminal The terminal from which the selling is happening.
     /// @return expectedOutput The expected amount of output tokens received
@@ -295,8 +295,8 @@ contract JBUniswapV4Hook is BaseHook {
     /// @dev This helper is intentionally more permissive than live routing. `_beforeSwap()` only trusts
     /// `previewPayFor()` for buy-side best-execution decisions and uses this helper as an offchain/reference surface.
     /// @param projectId The Juicebox project ID
-    /// @param paymentToken The token being used for payment
-    /// @param paymentAmount The amount being paid (in the token's native decimals)
+    /// @param paymentToken The token to pay with
+    /// @param paymentAmount The amount to pay (in the token's native decimals)
     /// @return expectedTokens The expected number of tokens to be received
     function calculateExpectedTokensWithCurrency(
         uint256 projectId,
@@ -526,7 +526,7 @@ contract JBUniswapV4Hook is BaseHook {
         });
     }
 
-    /// @notice Computes the arithmetic-mean tick over the specified lookback window for the given pool.
+    /// @notice Observe the time-weighted average price (TWAP) tick over the specified lookback window for a pool.
     /// @dev External-facing wrapper around `_observeTWAP` for contracts that need the time-weighted average tick.
     /// @param poolId The pool ID
     /// @param secondsAgo Seconds in the past to calculate TWAP from

@@ -1,6 +1,6 @@
 {
   "name": "@bananapus/univ4-router-v6",
-  "version": "0.0.23",
+  "version": "0.0.24",
   "license": "MIT",
   "repository": {
     "type": "git",
@@ -32,6 +32,7 @@
     "solmate": "6.8.0"
   },
   "devDependencies": {
+    "@sphinx-labs/contracts": "^0.23.1",
     "@sphinx-labs/plugins": "0.33.3"
   }
 }
