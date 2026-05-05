@@ -214,8 +214,8 @@ contract JBUniswapV4Hook is BaseHook {
     // ------------------------- public views ---------------------------- //
     //*********************************************************************//
 
-    /// @notice Estimates how many output tokens (e.g. ETH or USDC) a user would receive by cashing out JB project
-    /// tokens through the Juicebox terminal.
+    /// @notice Calculates how many payment tokens (e.g. ETH or USDC) you'd receive from selling project tokens via
+    /// the Juicebox terminal's cash out mechanism.
     /// @dev Prefers the terminal store's `previewCashOutFrom` simulation so sell-side estimates can incorporate
     /// cash-out data-hook effects when the underlying store supports that surface.
     /// If previewing is unavailable or reverts, this helper intentionally returns `0` and makes the JB sell route
@@ -526,7 +526,7 @@ contract JBUniswapV4Hook is BaseHook {
         });
     }
 
-    /// @notice Computes the arithmetic-mean tick over the specified lookback window for the given pool.
+    /// @notice Observe the time-weighted average price (TWAP) tick over the specified lookback window for a pool.
     /// @dev External-facing wrapper around `_observeTWAP` for contracts that need the time-weighted average tick.
     /// @param poolId The pool ID
     /// @param secondsAgo Seconds in the past to calculate TWAP from
