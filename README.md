@@ -67,8 +67,8 @@ npm install @bananapus/univ4-router-v6
 
 ```bash
 npm install
-forge build
-forge test
+forge build --deny notes
+forge test --deny notes
 ```
 
 ## Deployment Notes

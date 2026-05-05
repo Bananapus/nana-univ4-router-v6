@@ -6,6 +6,15 @@
     "type": "git",
     "url": "git+https://github.com/Bananapus/nana-univ4-router-v6"
   },
+  "files": [
+    "CHANGELOG.md",
+    "foundry.toml",
+    "references/",
+    "remappings.txt",
+    "script/Deploy.s.sol",
+    "script/helpers/",
+    "src/"
+  ],
   "engines": {
     "node": ">=20.0.0"
   },
@@ -14,18 +23,15 @@
     "coverage": "forge coverage --match-path \"./src/*.sol\" --report lcov --report summary"
   },
   "dependencies": {
-    "@bananapus/core-v6": "^0.0.36",
-    "@bananapus/permission-ids-v6": "^0.0.19",
-    "@openzeppelin/contracts": "^5.6.1",
-    "@openzeppelin/uniswap-hooks": "^1.1.1",
-    "@prb/math": "^4.1.0",
-    "@uniswap/v3-core": "github:Uniswap/v3-core#0.8",
-    "@uniswap/v3-periphery": "github:Uniswap/v3-periphery#0.8",
-    "@uniswap/v4-core": "^1.0.2",
-    "@uniswap/v4-periphery": "^1.0.3",
-    "solmate": "^6.8.0"
+    "@bananapus/core-v6": "0.0.39",
+    "@openzeppelin/contracts": "5.6.1",
+    "@openzeppelin/uniswap-hooks": "1.1.1",
+    "@prb/math": "4.1.1",
+    "@uniswap/v4-core": "1.0.2",
+    "@uniswap/v4-periphery": "1.0.3",
+    "solmate": "6.8.0"
   },
   "devDependencies": {
-    "@sphinx-labs/plugins": "^0.33.3"
+    "@sphinx-labs/plugins": "0.33.3"
   }
 }

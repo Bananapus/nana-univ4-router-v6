@@ -1,6 +1,22 @@
 // SPDX-License-Identifier: MIT
 pragma solidity 0.8.28;
 
+import {IJBCashOutTerminal} from "@bananapus/core-v6/src/interfaces/IJBCashOutTerminal.sol";
+import {IJBController} from "@bananapus/core-v6/src/interfaces/IJBController.sol";
+import {IJBDirectory} from "@bananapus/core-v6/src/interfaces/IJBDirectory.sol";
+import {IJBFeeTerminal} from "@bananapus/core-v6/src/interfaces/IJBFeeTerminal.sol";
+import {IJBMultiTerminal} from "@bananapus/core-v6/src/interfaces/IJBMultiTerminal.sol";
+import {IJBPrices} from "@bananapus/core-v6/src/interfaces/IJBPrices.sol";
+import {IJBTerminal} from "@bananapus/core-v6/src/interfaces/IJBTerminal.sol";
+import {IJBToken} from "@bananapus/core-v6/src/interfaces/IJBToken.sol";
+import {IJBTokens} from "@bananapus/core-v6/src/interfaces/IJBTokens.sol";
+import {JBConstants} from "@bananapus/core-v6/src/libraries/JBConstants.sol";
+import {JBRulesetMetadataResolver} from "@bananapus/core-v6/src/libraries/JBRulesetMetadataResolver.sol";
+
+import {JBCashOutHookSpecification} from "@bananapus/core-v6/src/structs/JBCashOutHookSpecification.sol";
+import {JBPayHookSpecification} from "@bananapus/core-v6/src/structs/JBPayHookSpecification.sol";
+import {JBRuleset} from "@bananapus/core-v6/src/structs/JBRuleset.sol";
+import {JBRulesetMetadata} from "@bananapus/core-v6/src/structs/JBRulesetMetadata.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {IERC20Metadata} from "@openzeppelin/contracts/token/ERC20/extensions/IERC20Metadata.sol";
 import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
@@ -23,22 +39,6 @@ import {PoolKey} from "@uniswap/v4-core/src/types/PoolKey.sol";
 import {PoolId, PoolIdLibrary} from "@uniswap/v4-core/src/types/PoolId.sol";
 import {SwapParams, ModifyLiquidityParams} from "@uniswap/v4-core/src/types/PoolOperation.sol";
 import {BaseHook} from "@uniswap/v4-periphery/src/utils/BaseHook.sol";
-import {IJBCashOutTerminal} from "@bananapus/core-v6/src/interfaces/IJBCashOutTerminal.sol";
-import {IJBController} from "@bananapus/core-v6/src/interfaces/IJBController.sol";
-import {IJBDirectory} from "@bananapus/core-v6/src/interfaces/IJBDirectory.sol";
-import {IJBFeeTerminal} from "@bananapus/core-v6/src/interfaces/IJBFeeTerminal.sol";
-import {IJBMultiTerminal} from "@bananapus/core-v6/src/interfaces/IJBMultiTerminal.sol";
-import {IJBPrices} from "@bananapus/core-v6/src/interfaces/IJBPrices.sol";
-import {IJBTerminal} from "@bananapus/core-v6/src/interfaces/IJBTerminal.sol";
-import {IJBToken} from "@bananapus/core-v6/src/interfaces/IJBToken.sol";
-import {IJBTokens} from "@bananapus/core-v6/src/interfaces/IJBTokens.sol";
-import {JBConstants} from "@bananapus/core-v6/src/libraries/JBConstants.sol";
-import {JBRulesetMetadataResolver} from "@bananapus/core-v6/src/libraries/JBRulesetMetadataResolver.sol";
-
-import {JBCashOutHookSpecification} from "@bananapus/core-v6/src/structs/JBCashOutHookSpecification.sol";
-import {JBPayHookSpecification} from "@bananapus/core-v6/src/structs/JBPayHookSpecification.sol";
-import {JBRuleset} from "@bananapus/core-v6/src/structs/JBRuleset.sol";
-import {JBRulesetMetadata} from "@bananapus/core-v6/src/structs/JBRulesetMetadata.sol";
 
 import {Oracle} from "./libraries/Oracle.sol";
 
@@ -57,12 +57,12 @@ import {Oracle} from "./libraries/Oracle.sol";
 /// disabled for projects whose data hooks override cash-out economics. Deployers MUST keep those composition limits
 /// in mind when choosing this hook for best-execution routing.
 contract JBUniswapV4Hook is BaseHook {
+    using Oracle for Oracle.Observation[65_535];
     using PoolIdLibrary for PoolKey;
     using ProtocolFeeLibrary for uint16;
     using ProtocolFeeLibrary for uint24;
-    using StateLibrary for IPoolManager;
     using SafeERC20 for IERC20;
-    using Oracle for Oracle.Observation[65_535];
+    using StateLibrary for IPoolManager;
 
     //*********************************************************************//
     // --------------------------- custom errors ------------------------- //
@@ -116,17 +116,8 @@ contract JBUniswapV4Hook is BaseHook {
     // ------------------------- public constants ------------------------ //
     //*********************************************************************//
 
-    /// @notice Native ETH address representation
-    address public constant UNISWAP_NATIVE_ETH = address(0);
-
     /// @notice Juicebox native token address
     address public constant JB_NATIVE_TOKEN = address(0x000000000000000000000000000000000000EEEe);
-
-    /// @notice TWAP period in seconds (30 minutes by default)
-    uint32 public constant TWAP_PERIOD = 1800;
-
-    /// @notice The denominator used when calculating TWAP slippage percent values.
-    uint256 public constant TWAP_SLIPPAGE_DENOMINATOR = 10_000;
 
     /// @notice Maximum retained observation cardinality for a pool oracle.
     /// @dev 1024 observations cover just over 34 minutes at 2-second block times, keeping a 30-minute TWAP
@@ -137,18 +128,27 @@ contract JBUniswapV4Hook is BaseHook {
     /// @dev PoolManager settles against signed `int128` deltas, so larger JB outputs must fall back to V4.
     uint256 public constant MAX_V4_DELTA = uint256(uint128(type(int128).max));
 
+    /// @notice TWAP period in seconds (30 minutes by default)
+    uint32 public constant TWAP_PERIOD = 1800;
+
+    /// @notice The denominator used when calculating TWAP slippage percent values.
+    uint256 public constant TWAP_SLIPPAGE_DENOMINATOR = 10_000;
+
+    /// @notice Native ETH address representation
+    address public constant UNISWAP_NATIVE_ETH = address(0);
+
     //*********************************************************************//
     // --------------- public immutable stored properties ---------------- //
     //*********************************************************************//
-
-    /// @notice The Juicebox tokens contract for project token lookup
-    IJBTokens public immutable TOKENS;
 
     /// @notice The Juicebox directory for terminal lookup
     IJBDirectory public immutable DIRECTORY;
 
     /// @notice The Juicebox prices contract for currency conversion
     IJBPrices public immutable PRICES;
+
+    /// @notice The Juicebox tokens contract for project token lookup
+    IJBTokens public immutable TOKENS;
 
     //*********************************************************************//
     // --------------------- public stored properties -------------------- //
@@ -196,9 +196,9 @@ contract JBUniswapV4Hook is BaseHook {
     )
         BaseHook(poolManager)
     {
-        TOKENS = tokens;
         DIRECTORY = directory;
         PRICES = prices;
+        TOKENS = tokens;
     }
 
     //*********************************************************************//

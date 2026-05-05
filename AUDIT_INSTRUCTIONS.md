@@ -87,5 +87,5 @@ It is also an oracle surface:
 ## Verification
 
 - `npm install`
-- `forge build`
-- `forge test`
+- `forge build --deny notes`
+- `forge test --deny notes`
