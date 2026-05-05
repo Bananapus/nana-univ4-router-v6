@@ -6,8 +6,6 @@ libs = ["node_modules", "lib"]
 fs_permissions = [{ access = "read-write", path = "./"}]
 via_ir = true
 
-[profile.ci_sizes]
-
 [fuzz]
 runs = 4096
 
