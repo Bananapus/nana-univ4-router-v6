@@ -2,12 +2,11 @@
 pragma solidity 0.8.28;
 
 /// @title Oracle
-/// @notice Provides price and liquidity data useful for a wide variety of system designs
-/// @dev Instances of stored oracle data, "observations", are collected in the oracle array
-/// Every pool is initialized with an oracle array length of 1. Anyone can pay the SSTOREs to increase the
-/// maximum length of the oracle array. New slots will be added when the array is fully populated.
-/// Observations are overwritten when the full length of the oracle array is populated.
-/// The most recent observation is available, independent of the length of the oracle array, by passing 0 to observe()
+/// @notice A circular-buffer oracle that stores tick and liquidity snapshots over time, enabling time-weighted average
+/// price (TWAP) queries. Each pool maintains its own observation array that grows on demand up to 65,535 slots.
+/// @dev Observations are written at most once per block and overwrite the oldest entry when full. The array starts at
+/// length 1 and can be expanded by calling `grow()`. Pass 0 seconds to `observe()` to get the current cumulative
+/// values.
 library Oracle {
     /// @notice Thrown when trying to interact with an Oracle of a non-initialized pool
     error Oracle_CardinalityCannotBeZero();
@@ -31,8 +30,9 @@ library Oracle {
     }
 
     /// @notice Transforms a previous observation into a new observation, given the passage of time and the current tick
-    /// and liquidity values @dev blockTimestamp _must_ be chronologically equal to or greater than last.blockTimestamp,
-    /// safe for 0 or 1 overflows
+    /// and liquidity values.
+    /// @dev blockTimestamp _must_ be chronologically equal to or greater than last.blockTimestamp. Safe for 0 or 1
+    /// overflows.
     /// @param last The specified observation to be transformed
     /// @param blockTimestamp The timestamp of the new observation
     /// @param tick The active tick at the time of the new observation
@@ -62,7 +62,8 @@ library Oracle {
     }
 
     /// @notice Initialize the oracle array by writing the first slot. Called once for the lifecycle of the observations
-    /// array @param self The stored oracle array
+    /// array.
+    /// @param self The stored oracle array
     /// @param time The time of the oracle initialization, via block.timestamp truncated to uint32
     /// @return cardinality The number of populated elements in the oracle array
     /// @return cardinalityNext The new length of the oracle array, independent of population
@@ -212,7 +213,8 @@ library Oracle {
     }
 
     /// @notice Fetches the observations beforeOrAt and atOrAfter a given target, i.e. where [beforeOrAt, atOrAfter] is
-    /// satisfied @dev Assumes there is at least 1 initialized observation.
+    /// satisfied.
+    /// @dev Assumes there is at least 1 initialized observation.
     /// Used by observeSingle() to compute the counterfactual accumulator values as of a given block timestamp.
     /// @param self The stored oracle array
     /// @param time The current block.timestamp
@@ -268,8 +270,9 @@ library Oracle {
         }
     }
 
+    /// @notice Returns the cumulative tick and seconds-per-liquidity values at a single point in the past.
     /// @dev Reverts if an observation at or before the desired observation timestamp does not exist.
-    /// 0 may be passed as `secondsAgo' to return the current cumulative values.
+    /// 0 may be passed as `secondsAgo` to return the current cumulative values.
     /// If called with a timestamp falling between two observations, returns the counterfactual accumulator values
     /// at exactly the timestamp between the two observations.
     /// @param self The stored oracle array
@@ -350,7 +353,8 @@ library Oracle {
     }
 
     /// @notice Returns the accumulator values as of each time seconds ago from the given time in the array of
-    /// `secondsAgos` @dev Reverts if `secondsAgos` > oldest observation
+    /// `secondsAgos`.
+    /// @dev Reverts if `secondsAgos` > oldest observation
     /// @param self The stored oracle array
     /// @param time The current block.timestamp
     /// @param secondsAgos Each amount of time to look back, in seconds, at which point to return an observation

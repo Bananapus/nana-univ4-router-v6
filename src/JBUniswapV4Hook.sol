@@ -43,10 +43,10 @@ import {BaseHook} from "@uniswap/v4-periphery/src/utils/BaseHook.sol";
 import {Oracle} from "./libraries/Oracle.sol";
 
 /// @title JBUniswapV4Hook
-/// @notice Official Juicebox integration for Uniswap v4 that provides intelligent price comparison and optimal routing
-/// @dev This hook compares prices between Uniswap V4 pools and Juicebox projects, then routes to the option that gives
-/// users the most tokens. It uses TWAP (Time-Weighted Average Price) oracles to protect against manipulation.
-///      Provides IGeomeanOracle-compatible `observe()` for TWAP queries by external contracts.
+/// @notice A Uniswap V4 hook that automatically routes swaps to whichever venue (V4 pool or Juicebox project) gives
+/// the user more tokens. Uses a 30-minute TWAP oracle to resist price manipulation when comparing routes.
+/// @dev Compares V4 TWAP-based estimates against Juicebox terminal previews for both buy-side (pay) and sell-side
+/// (cash out) swaps. Provides IGeomeanOracle-compatible `observe()` for TWAP queries by external contracts.
 /// @dev COMPOSITION WARNING — This hook is designed to serve as the ORACLE_HOOK for JBBuybackHook on the same V4
 /// pool.
 /// When the buyback hook attempts a swap, it flows through this hook's `_beforeSwap` routing logic. If the routing
@@ -214,7 +214,8 @@ contract JBUniswapV4Hook is BaseHook {
     // ------------------------- public views ---------------------------- //
     //*********************************************************************//
 
-    /// @notice Calculate expected output from selling JB tokens
+    /// @notice Estimates how many output tokens (e.g. ETH or USDC) a user would receive by cashing out JB project
+    /// tokens through the Juicebox terminal.
     /// @dev Prefers the terminal store's `previewCashOutFrom` simulation so sell-side estimates can incorporate
     /// cash-out data-hook effects when the underlying store supports that surface.
     /// If previewing is unavailable or reverts, this helper intentionally returns `0` and makes the JB sell route
@@ -287,7 +288,7 @@ contract JBUniswapV4Hook is BaseHook {
         }
     }
 
-    /// @notice Calculate expected tokens for a given payment amount in any currency
+    /// @notice Estimates how many JB project tokens a user would receive by paying a given amount into the project.
     /// @dev WARNING: This estimate uses the ruleset's static weight. If the project has a data hook (such as a
     /// buyback hook) that overrides the weight at payment time, the actual token issuance may differ from this
     /// estimate, causing the swap-vs-mint routing decision to diverge. Deployers must ensure weight compatibility.
@@ -381,7 +382,8 @@ contract JBUniswapV4Hook is BaseHook {
         }
     }
 
-    /// @notice Estimate expected output tokens from a Uniswap swap using TWAP
+    /// @notice Estimates how many output tokens a swap through the Uniswap V4 pool would produce, based on the
+    /// 30-minute TWAP price (or spot price if insufficient oracle history).
     /// @dev Uses time-weighted average price to prevent manipulation
     /// @dev Price impact warning: This estimate does not account for price impact from liquidity depth. The TWAP
     /// price is applied uniformly to the entire `amountIn` regardless of available liquidity at the current tick
@@ -470,7 +472,8 @@ contract JBUniswapV4Hook is BaseHook {
         return estimatedOut;
     }
 
-    /// @notice Get the hook permissions for Uniswap v4
+    /// @notice Declares which Uniswap V4 lifecycle callbacks this hook uses (afterInitialize, afterSwap,
+    /// beforeSwap, etc.).
     /// @return permissions The hook permissions struct
     function getHookPermissions() public pure override returns (Hooks.Permissions memory) {
         return Hooks.Permissions({
@@ -491,7 +494,9 @@ contract JBUniswapV4Hook is BaseHook {
         });
     }
 
-    /// @notice Returns TWAP tick and liquidity data for specified time periods (IGeomeanOracle-compatible)
+    /// @notice Returns cumulative tick and liquidity-time data for specified lookback periods.
+    /// @dev Implements the IGeomeanOracle interface so external contracts (e.g. buyback hooks) can query this pool's
+    /// TWAP without maintaining their own oracle.
     /// @param key The pool key
     /// @param secondsAgos Array of time periods (in seconds) to look back
     /// @return tickCumulatives Cumulative tick values at each time period
@@ -521,7 +526,8 @@ contract JBUniswapV4Hook is BaseHook {
         });
     }
 
-    /// @notice Observe TWAP tick
+    /// @notice Computes the arithmetic-mean tick over the specified lookback window for the given pool.
+    /// @dev External-facing wrapper around `_observeTWAP` for contracts that need the time-weighted average tick.
     /// @param poolId The pool ID
     /// @param secondsAgo Seconds in the past to calculate TWAP from
     /// @param tick Current tick
@@ -549,10 +555,10 @@ contract JBUniswapV4Hook is BaseHook {
     // ---------------------- internal functions ---------------------- //
     //*********************************************************************//
 
-    /// @notice Hook called after liquidity is added to record price observations
+    /// @notice Records a price observation after liquidity is added so the TWAP oracle stays up-to-date.
     /// @param key The pool key
     /// @return selector The function selector
-    /// @return delta The delta to return (zero in our case)
+    /// @return delta The delta to return (zero — no balance impact)
     function _afterAddLiquidity(
         address,
         PoolKey calldata key,
@@ -569,7 +575,7 @@ contract JBUniswapV4Hook is BaseHook {
         return (BaseHook.afterAddLiquidity.selector, BalanceDelta.wrap(0));
     }
 
-    /// @notice Hook called after pool initialization to set up oracle
+    /// @notice Initializes the TWAP oracle array when a new pool is created with this hook attached.
     /// @param key The pool key
     /// @return selector The function selector
     function _afterInitialize(address, PoolKey calldata key, uint160, int24) internal override returns (bytes4) {
@@ -583,10 +589,10 @@ contract JBUniswapV4Hook is BaseHook {
         return BaseHook.afterInitialize.selector;
     }
 
-    /// @notice Hook called after liquidity is removed to record price observations
+    /// @notice Records a price observation after liquidity is removed so the TWAP oracle stays up-to-date.
     /// @param key The pool key
     /// @return selector The function selector
-    /// @return delta The delta to return (zero in our case)
+    /// @return delta The delta to return (zero — no balance impact)
     function _afterRemoveLiquidity(
         address,
         PoolKey calldata key,
@@ -603,7 +609,7 @@ contract JBUniswapV4Hook is BaseHook {
         return (BaseHook.afterRemoveLiquidity.selector, BalanceDelta.wrap(0));
     }
 
-    /// @notice Hook called after swap to record price observations and validate slippage for V4 swaps
+    /// @notice Records a price observation after a swap completes and enforces slippage protection for V4-routed swaps.
     /// @param key The pool key
     /// @param params The swap parameters
     /// @param delta The swap delta (represents actual V4 swap output for normal swaps)
@@ -654,7 +660,8 @@ contract JBUniswapV4Hook is BaseHook {
         return (BaseHook.afterSwap.selector, 0);
     }
 
-    /// @notice Routes swaps to the best option among V4, V3, and Juicebox
+    /// @notice The main routing engine: compares expected output from V4 and Juicebox, then routes to whichever gives
+    /// more tokens. If no JB token is involved, the swap proceeds through V4 normally.
     /// @dev Compares expected outputs and routes to the option with highest output
     /// @param key The pool key identifying the V4 pool
     /// @param params The swap parameters (direction, amount, price limit)
@@ -833,7 +840,8 @@ contract JBUniswapV4Hook is BaseHook {
         return (BaseHook.beforeSwap.selector, BeforeSwapDeltaLibrary.ZERO_DELTA, 0);
     }
 
-    /// @notice Calculates expected tokens with currency conversion
+    /// @notice Converts a payment amount (in any token decimals) into the expected number of project tokens using the
+    /// ruleset weight and a price-oracle conversion factor.
     /// @dev Normalizes payment amount to 18 decimals, then calculates tokens based on weight and price conversion
     /// @param tokensPerBaseCurrency The project's weight (tokens per base currency unit)
     /// @param paymentAmount The payment amount in the token's native decimals
@@ -865,7 +873,9 @@ contract JBUniswapV4Hook is BaseHook {
         }
     }
 
-    /// @notice Creates a BeforeSwapDelta from input and output amounts
+    /// @notice Packs the input/output amounts into the BeforeSwapDelta format that tells PoolManager how this hook has
+    /// already settled the swap (input taken, output provided).
+    /// @dev Used when routing through Juicebox to inform PoolManager that no further AMM execution is needed.
     /// @param amountIn The input amount
     /// @param amountOut The output amount
     /// @return delta The BeforeSwapDelta representing the swap
@@ -979,7 +989,8 @@ contract JBUniswapV4Hook is BaseHook {
         }
     }
 
-    /// @notice Gets the primary terminal for a project and token
+    /// @notice Looks up the Juicebox terminal that handles a specific token for a project. Returns address(0) if the
+    /// project has no terminal configured for that token.
     /// @param projectId The project ID
     /// @param token The token address
     /// @return terminal The primary terminal, or address(0) if not found
@@ -1008,7 +1019,8 @@ contract JBUniswapV4Hook is BaseHook {
         }
     }
 
-    /// @notice Get the TWAP sqrt price for a pool
+    /// @notice Computes the TWAP sqrt price over the configured lookback window. Returns 0 if the pool lacks
+    /// sufficient observation history (fewer than 2 observations or none old enough).
     /// @param poolId The pool ID
     /// @return sqrtPriceX96 The TWAP sqrt price, or 0 if not enough observations
     // forge-lint: disable-next-line(mixed-case-function)
@@ -1119,7 +1131,8 @@ contract JBUniswapV4Hook is BaseHook {
         }
     }
 
-    /// @notice Records an oracle observation and grows cardinality if needed
+    /// @notice Writes a new tick/liquidity observation to the oracle array. Automatically doubles the array capacity
+    /// (up to MAX_TWAP_CARDINALITY) when the buffer is full so the TWAP window can grow over time.
     /// @param poolId The pool ID
     function _recordObservation(PoolId poolId) internal {
         // Get current pool state
@@ -1173,7 +1186,8 @@ contract JBUniswapV4Hook is BaseHook {
         }
     }
 
-    /// @notice Routes a swap through Juicebox terminal instead of Uniswap
+    /// @notice Executes a swap by paying into (buy) or cashing out of (sell) a Juicebox project terminal, bypassing the
+    /// V4 AMM entirely. The input is taken from PoolManager and the output is settled back to PoolManager.
     /// @param projectId The Juicebox project ID
     /// @param inputCurrency The input currency (native ETH or ERC20)
     /// @param outputCurrency The output currency (native ETH or ERC20)
@@ -1286,11 +1300,12 @@ contract JBUniswapV4Hook is BaseHook {
         return outputReceived;
     }
 
-    /// @notice Settles output tokens back to PoolManager
+    /// @notice Transfers the Juicebox-received output tokens into PoolManager's flash-accounting system, completing the
+    /// hook's side of the swap settlement.
     /// @param outputCurrency The output currency to settle
     /// @param amount The amount to settle
-    /// @dev Uses OpenZeppelin's CurrencySettler library to ensure correct settlement order
-    /// @dev This handles sync -> transfer -> settle in the correct order for flash-accounting safety
+    /// @dev Uses OpenZeppelin's CurrencySettler library to ensure correct settlement order (sync -> transfer ->
+    /// settle).
     function _settleOutput(Currency outputCurrency, uint256 amount) internal {
         // PoolManager settlement is expressed through signed `int128` deltas, so oversized JB outputs must stop here.
         if (amount > MAX_V4_DELTA) revert JBUniswapV4Hook_OutputExceedsV4DeltaLimit(amount);
