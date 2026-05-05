@@ -225,7 +225,7 @@ contract JBUniswapV4Hook is BaseHook {
     /// @dev NOTE: Fee calls are best-effort. If the terminal does not expose `FEE()`, the estimate falls back to the
     /// raw preview.
     /// @param projectId The Juicebox project ID
-    /// @param tokenAmountIn The amount of JB tokens being sold
+    /// @param tokenAmountIn The amount of JB tokens to sell
     /// @param outputToken The token to receive (e.g., ETH, USDC)
     /// @param terminal The terminal from which the selling is happening.
     /// @return expectedOutput The expected amount of output tokens received
@@ -295,8 +295,8 @@ contract JBUniswapV4Hook is BaseHook {
     /// @dev This helper is intentionally more permissive than live routing. `_beforeSwap()` only trusts
     /// `previewPayFor()` for buy-side best-execution decisions and uses this helper as an offchain/reference surface.
     /// @param projectId The Juicebox project ID
-    /// @param paymentToken The token being used for payment
-    /// @param paymentAmount The amount being paid (in the token's native decimals)
+    /// @param paymentToken The token to pay with
+    /// @param paymentAmount The amount to pay (in the token's native decimals)
     /// @return expectedTokens The expected number of tokens to be received
     function calculateExpectedTokensWithCurrency(
         uint256 projectId,
