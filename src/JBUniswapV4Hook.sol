@@ -253,20 +253,14 @@ contract JBUniswapV4Hook is BaseHook {
             beneficiary: payable(address(this)),
             metadata: bytes("")
         }) returns (
-            JBRuleset memory ruleset,
-            uint256 grossReclaim,
-            uint256,
-            JBCashOutHookSpecification[] memory hookSpecifications
+            JBRuleset memory, uint256 grossReclaim, uint256, JBCashOutHookSpecification[] memory hookSpecifications
         ) {
-            uint256 effectiveReclaim = _effectivePreviewCashOutAmount({
-                reclaimAmount: grossReclaim, hookSpecifications: hookSpecifications
-            });
+            uint256 effectiveReclaim =
+                _effectivePreviewCashOutAmount({reclaimAmount: grossReclaim, hookSpecifications: hookSpecifications});
             if (effectiveReclaim == 0) return 0;
 
-            // Follow normal terminal rules: zero cash-out tax means no protocol fee; positive cash-out tax pays one.
-            if (JBRulesetMetadataResolver.cashOutTaxRate(ruleset) == 0) return effectiveReclaim;
-
-            // Deduct the JB protocol fee from the preview when the active ruleset charges cash-out tax.
+            // Deduct the protocol fee regardless of cash-out tax rate. Even at zero tax, the live terminal
+            // charges fees on fee-free surplus, so the preview must account for that to stay consistent.
             uint256 fee;
             try IJBFeeTerminal(address(terminal)).FEE() returns (uint256 _fee) {
                 fee = _fee;
