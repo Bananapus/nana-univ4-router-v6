@@ -50,7 +50,7 @@ contract StubJBPrices {
     }
 }
 
-/// @notice Regression test for M-10: estimateUniswapOutput must not revert on dynamic fee pools.
+/// @notice Regression test for estimateUniswapOutput must not revert on dynamic fee pools.
 /// @dev Before the fix, key.fee == DYNAMIC_FEE_FLAG (0x800000) was used as a literal fee in
 ///      FullMath.mulDiv(estimatedOut, 0x800000, 1_000_000), producing ~8.39x the input and causing
 ///      an arithmetic underflow on subtraction.

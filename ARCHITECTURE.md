@@ -69,7 +69,7 @@ Its route comparison is intentionally asymmetric: helper surfaces can be more pe
 - oracle observation depth and TWAP interpolation:
   `test/OracleDeepTest.t.sol`
 - preview-to-live routing alignment on buy paths:
-  `test/audit/PreviewPayForRouting.t.sol`
+  `test/regression/PreviewPayForRouting.t.sol`
 - sell-path safety under hostile callback conditions:
   `test/regression/SellPathReentrancy.t.sol`
 
@@ -78,5 +78,5 @@ Its route comparison is intentionally asymmetric: helper surfaces can be more pe
 - `src/JBUniswapV4Hook.sol`
 - `src/libraries/Oracle.sol`
 - `test/OracleDeepTest.t.sol`
-- `test/audit/PreviewPayForRouting.t.sol`
+- `test/regression/PreviewPayForRouting.t.sol`
 - `test/regression/SellPathReentrancy.t.sol`

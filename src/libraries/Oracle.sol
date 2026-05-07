@@ -9,7 +9,8 @@ pragma solidity 0.8.28;
 /// values.
 library Oracle {
     /// @notice Thrown when trying to interact with an Oracle of a non-initialized pool
-    error Oracle_CardinalityCannotBeZero();
+    /// @param cardinality The invalid observation cardinality.
+    error Oracle_CardinalityCannotBeZero(uint16 cardinality);
 
     /// @notice Thrown when trying to observe a price that is older than the oldest recorded price
     /// @param oldestTimestamp Timestamp of the oldest remaining observation
@@ -132,7 +133,7 @@ library Oracle {
     /// @return next The next cardinality which will be populated in the oracle array
     function grow(Observation[65_535] storage self, uint16 current, uint16 next) internal returns (uint16) {
         unchecked {
-            if (current == 0) revert Oracle_CardinalityCannotBeZero();
+            if (current == 0) revert Oracle_CardinalityCannotBeZero(current);
             // no-op if the passed next value isn't greater than the current next value
             if (next <= current) return current;
             // store in each slot to prevent fresh SSTOREs in swaps
@@ -285,7 +286,6 @@ library Oracle {
     /// @return tickCumulative The tick * time elapsed since the pool was first initialized, as of `secondsAgo`
     /// @return secondsPerLiquidityCumulativeX128 The time elapsed / max(1, liquidity) since the pool was first
     /// initialized, as of `secondsAgo`
-    // slither-disable-next-line divide-before-multiply
     function observeSingle(
         Observation[65_535] storage self,
         uint32 time,
@@ -379,7 +379,7 @@ library Oracle {
         returns (int56[] memory tickCumulatives, uint160[] memory secondsPerLiquidityCumulativeX128s)
     {
         unchecked {
-            if (cardinality == 0) revert Oracle_CardinalityCannotBeZero();
+            if (cardinality == 0) revert Oracle_CardinalityCannotBeZero(cardinality);
 
             tickCumulatives = new int56[](secondsAgos.length);
             secondsPerLiquidityCumulativeX128s = new uint160[](secondsAgos.length);

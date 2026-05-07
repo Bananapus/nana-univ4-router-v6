@@ -19,28 +19,28 @@ import {IJBToken} from "@bananapus/core-v6/src/interfaces/IJBToken.sol";
 
 import {JBUniswapV4Hook} from "../../src/JBUniswapV4Hook.sol";
 
-contract MockTokensCodex {
+contract MockTokensRegression {
     function projectIdOf(IJBToken) external pure returns (uint256) {
         return 0;
     }
 }
 
-contract DummyCodex {}
+contract DummyRegression {}
 
-contract CodexHookDataLengthTest is Test {
+contract RegressionHookDataLengthTest is Test {
     address internal constant POOL_MANAGER = address(0xBEEF);
 
     JBUniswapV4Hook internal hook;
     PoolKey internal key;
     SwapParams internal params;
-    MockTokensCodex internal tokens;
-    DummyCodex internal directory;
-    DummyCodex internal prices;
+    MockTokensRegression internal tokens;
+    DummyRegression internal directory;
+    DummyRegression internal prices;
 
     function setUp() public {
-        tokens = new MockTokensCodex();
-        directory = new DummyCodex();
-        prices = new DummyCodex();
+        tokens = new MockTokensRegression();
+        directory = new DummyRegression();
+        prices = new DummyRegression();
 
         bytes memory constructorArgs = abi.encode(
             IPoolManager(POOL_MANAGER),

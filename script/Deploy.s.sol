@@ -20,7 +20,9 @@ contract DeployScript is Script {
 
         // Get the core deployment addresses.
         core = CoreDeploymentLib.getDeployment(
-            vm.envOr("NANA_CORE_DEPLOYMENT_PATH", string("node_modules/@bananapus/core-v6/deployments/"))
+            vm.envOr({
+                name: "NANA_CORE_DEPLOYMENT_PATH", defaultValue: string("node_modules/@bananapus/core-v6/deployments/")
+            })
         );
 
         uint256 deployerPrivateKey = vm.envUint("PRIVATE_KEY");
@@ -44,7 +46,7 @@ contract DeployScript is Script {
             constructorArgs: constructorArgs
         });
 
-        console2.log("Deploying JBUniswapV4Hook to:", hookAddress);
+        console2.log({p0: "Deploying JBUniswapV4Hook to:", p1: hookAddress});
 
         vm.startBroadcast(deployerPrivateKey);
 
@@ -52,7 +54,7 @@ contract DeployScript is Script {
             poolManager: IPoolManager(poolManager), tokens: core.tokens, directory: core.directory, prices: core.prices
         });
 
-        console2.log("JBUniswapV4Hook deployed at:", address(hook));
+        console2.log({p0: "JBUniswapV4Hook deployed at:", p1: address(hook)});
 
         vm.stopBroadcast();
     }

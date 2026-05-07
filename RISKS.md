@@ -91,11 +91,11 @@ When the TWAP oracle has insufficient observation history (newly created pools, 
 
 ---
 
-## 9. Accepted Findings
+## 9. Accepted Notes
 
-The following findings were reviewed and accepted.
+The following notes were reviewed and accepted.
 
-### Oracle Findings
+### Oracle Notes
 
 #### Post-action oracle observation backfills TWAP with post-swap tick *(Major)*
 
@@ -121,7 +121,7 @@ When insufficient observations exist, the oracle returns spot price which is man
 
 **Accepted.** Bounded by `MAX_TWAP_CARDINALITY = 1024` and idempotent — once grown, cannot be re-griefed at the same size. One-time cost.
 
-### Swap Routing Findings
+### Swap Routing Notes
 
 #### `_beforeSwap` ignores caller's `sqrtPriceLimitX96` *(Minor)*
 
@@ -135,7 +135,7 @@ Fee computation in `calculateExpectedOutputFromSelling` could underflow when the
 
 **Fixed.** `calculateExpectedOutputFromSelling` now returns 0 when the fee exceeds `MAX_FEE`, treating the JB sell path as ineligible so the swap degrades to V4. The `_settleOutput` path already wraps terminal calls in try-catch; this fix closes the estimation counterpart.
 
-### Minor Findings
+### Minor Notes
 
 #### Buy helper truncates currency IDs to `uint32` *(Minor)*
 

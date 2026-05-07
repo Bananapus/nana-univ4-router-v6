@@ -29,7 +29,7 @@ import {JBRulesetMetadata} from "@bananapus/core-v6/src/structs/JBRulesetMetadat
 import {JBRulesetMetadataResolver} from "@bananapus/core-v6/src/libraries/JBRulesetMetadataResolver.sol";
 import {IJBTerminalStore} from "@bananapus/core-v6/src/interfaces/IJBTerminalStore.sol";
 
-contract MockJBTokensCodexNemesis {
+contract MockJBTokensRegression {
     mapping(address => uint256) public projectIdOf;
 
     function setProjectId(address token, uint256 projectId) external {
@@ -37,7 +37,7 @@ contract MockJBTokensCodexNemesis {
     }
 }
 
-contract MockJBDirectoryCodexNemesis {
+contract MockJBDirectoryRegression {
     address public mockTerminal;
     address public mockController;
 
@@ -58,7 +58,7 @@ contract MockJBDirectoryCodexNemesis {
     }
 }
 
-contract MockJBPricesCodexNemesis {
+contract MockJBPricesRegression {
     mapping(uint256 => mapping(uint256 => mapping(uint256 => uint256))) public prices;
 
     function pricePerUnitOf(
@@ -87,7 +87,7 @@ contract MockJBPricesCodexNemesis {
     }
 }
 
-contract MockJBControllerCodexNemesis {
+contract MockJBControllerRegression {
     mapping(uint256 => uint256) public weights;
     mapping(uint256 => uint16) public reservedPercents;
 
@@ -136,7 +136,7 @@ contract MockJBControllerCodexNemesis {
     }
 }
 
-contract MockJBTerminalStoreCodexNemesis {
+contract MockJBTerminalStoreRegression {
     function previewCashOutFrom(
         address,
         address,
@@ -160,17 +160,17 @@ contract MockJBTerminalStoreCodexNemesis {
     }
 }
 
-contract MockJBMultiTerminalCodexNemesis {
+contract MockJBMultiTerminalRegression {
     uint256 public overridePayReturnAmount;
     bool public useOverridePayReturn;
     uint256 public lastProjectId;
 
     mapping(uint256 => address) public projectTokens;
-    MockJBTerminalStoreCodexNemesis public terminalStore;
+    MockJBTerminalStoreRegression public terminalStore;
     mapping(uint256 => JBAccountingContext[]) internal _accountingContextsOf;
 
     function setTerminalStore(address terminalStore_) external {
-        terminalStore = MockJBTerminalStoreCodexNemesis(terminalStore_);
+        terminalStore = MockJBTerminalStoreRegression(terminalStore_);
     }
 
     function setProjectToken(uint256 projectId, address projectToken) external {
@@ -212,7 +212,7 @@ contract MockJBMultiTerminalCodexNemesis {
         lastProjectId = projectId;
         beneficiaryTokenCount = useOverridePayReturn ? overridePayReturnAmount : amount;
         require(beneficiaryTokenCount >= minReturnedTokens, "min returned");
-        MockERC20(projectTokens[projectId]).mint(beneficiary, beneficiaryTokenCount);
+        MockERC20(projectTokens[projectId]).mint({to: beneficiary, amount: beneficiaryTokenCount});
         return beneficiaryTokenCount;
     }
 
@@ -267,7 +267,7 @@ contract MockJBMultiTerminalCodexNemesis {
     }
 }
 
-contract CodexNemesisLargeTradeMisrouteExecutor {
+contract RegressionLargeTradeMisrouteExecutor {
     using PoolIdLibrary for PoolKey;
     using CurrencyLibrary for Currency;
 
@@ -278,12 +278,12 @@ contract CodexNemesisLargeTradeMisrouteExecutor {
         PoolModifyLiquidityTest modifyLiquidityRouter = new PoolModifyLiquidityTest(manager);
         JuiceboxSwapRouter jbSwapRouter = new JuiceboxSwapRouter(manager);
 
-        MockJBTokensCodexNemesis tokens = new MockJBTokensCodexNemesis();
-        MockJBDirectoryCodexNemesis directory = new MockJBDirectoryCodexNemesis();
-        MockJBPricesCodexNemesis prices = new MockJBPricesCodexNemesis();
-        MockJBControllerCodexNemesis controller = new MockJBControllerCodexNemesis();
-        MockJBTerminalStoreCodexNemesis terminalStore = new MockJBTerminalStoreCodexNemesis();
-        MockJBMultiTerminalCodexNemesis terminal = new MockJBMultiTerminalCodexNemesis();
+        MockJBTokensRegression tokens = new MockJBTokensRegression();
+        MockJBDirectoryRegression directory = new MockJBDirectoryRegression();
+        MockJBPricesRegression prices = new MockJBPricesRegression();
+        MockJBControllerRegression controller = new MockJBControllerRegression();
+        MockJBTerminalStoreRegression terminalStore = new MockJBTerminalStoreRegression();
+        MockJBMultiTerminalRegression terminal = new MockJBMultiTerminalRegression();
 
         directory.setMockController(address(controller));
         directory.setMockTerminal(address(terminal));
@@ -299,7 +299,12 @@ contract CodexNemesisLargeTradeMisrouteExecutor {
             manager, IJBTokens(address(tokens)), IJBDirectory(address(directory)), IJBPrices(address(prices))
         );
 
-        (, bytes32 salt) = HookMiner.find(address(this), flags, type(JBUniswapV4Hook).creationCode, constructorArgs);
+        (, bytes32 salt) = HookMiner.find({
+            deployer: address(this),
+            flags: flags,
+            creationCode: type(JBUniswapV4Hook).creationCode,
+            constructorArgs: constructorArgs
+        });
 
         JBUniswapV4Hook hook = new JBUniswapV4Hook{salt: salt}(
             manager, IJBTokens(address(tokens)), IJBDirectory(address(directory)), IJBPrices(address(prices))
@@ -311,12 +316,12 @@ contract CodexNemesisLargeTradeMisrouteExecutor {
             (projectToken, paymentToken) = (paymentToken, projectToken);
         }
 
-        tokens.setProjectId(address(projectToken), 123);
-        controller.setWeight(123, 1e18);
-        terminal.setProjectToken(123, address(projectToken));
+        tokens.setProjectId({token: address(projectToken), projectId: 123});
+        controller.setWeight({projectId: 123, weight: 1e18});
+        terminal.setProjectToken({projectId: 123, projectToken: address(projectToken)});
 
         uint32 paymentCurrencyId = uint32(uint160(address(paymentToken)));
-        prices.setPricePerUnitOf(123, paymentCurrencyId, 1, 1e18);
+        prices.setPricePerUnitOf({projectId: 123, pricingCurrency: paymentCurrencyId, unitCurrency: 1, price: 1e18});
 
         PoolKey memory key = PoolKey({
             currency0: Currency.wrap(address(projectToken)),
@@ -326,43 +331,44 @@ contract CodexNemesisLargeTradeMisrouteExecutor {
             hooks: IHooks(address(hook))
         });
 
-        manager.initialize(key, SQRT_PRICE_1_1);
+        manager.initialize({key: key, sqrtPriceX96: SQRT_PRICE_1_1});
 
-        projectToken.mint(address(this), 20 ether);
-        paymentToken.mint(address(this), 40 ether);
-        projectToken.approve(address(modifyLiquidityRouter), type(uint256).max);
-        paymentToken.approve(address(modifyLiquidityRouter), type(uint256).max);
-        paymentToken.approve(address(jbSwapRouter), type(uint256).max);
+        projectToken.mint({to: address(this), amount: 20 ether});
+        paymentToken.mint({to: address(this), amount: 40 ether});
+        projectToken.approve({spender: address(modifyLiquidityRouter), value: type(uint256).max});
+        paymentToken.approve({spender: address(modifyLiquidityRouter), value: type(uint256).max});
+        paymentToken.approve({spender: address(jbSwapRouter), value: type(uint256).max});
 
-        modifyLiquidityRouter.modifyLiquidity(
-            key,
-            ModifyLiquidityParams({tickLower: -60, tickUpper: 60, liquidityDelta: 10 ether, salt: bytes32(0)}),
-            bytes("")
-        );
+        modifyLiquidityRouter.modifyLiquidity({
+            key: key,
+            params: ModifyLiquidityParams({tickLower: -60, tickUpper: 60, liquidityDelta: 10 ether, salt: bytes32(0)}),
+            hookData: bytes("")
+        });
 
         uint256 amountIn = 8 ether;
         uint256 jbQuote = 6 ether;
         terminal.setPayReturnAmount(jbQuote);
 
-        uint256 v4Quote = hook.estimateUniswapOutput(key.toId(), key, amountIn, false);
+        uint256 v4Quote =
+            hook.estimateUniswapOutput({poolId: key.toId(), key: key, amountIn: amountIn, zeroForOne: false});
 
         uint256 balanceBefore = projectToken.balanceOf(address(this));
-        // The audit script amount is deliberately small and cannot exceed `int256.max`.
+        // The regression script amount is deliberately small and cannot exceed `int256.max`.
         // forge-lint: disable-next-line(unsafe-typecast)
         int256 exactInputAmount = -int256(amountIn);
-        jbSwapRouter.swap(
-            key,
-            SwapParams({
+        jbSwapRouter.swap({
+            key: key,
+            params: SwapParams({
                 zeroForOne: false, amountSpecified: exactInputAmount, sqrtPriceLimitX96: TickMath.MAX_SQRT_PRICE - 1
             }),
-            0
-        );
+            amountOutMin: 0
+        });
         uint256 actualOut = projectToken.balanceOf(address(this)) - balanceBefore;
 
-        console2.log("JB quote", jbQuote);
-        console2.log("V4 quoted out", v4Quote);
-        console2.log("Actual V4 out", actualOut);
-        console2.log("Terminal used projectId", terminal.lastProjectId());
+        console2.log({p0: "JB quote", p1: jbQuote});
+        console2.log({p0: "V4 quoted out", p1: v4Quote});
+        console2.log({p0: "Actual V4 out", p1: actualOut});
+        console2.log({p0: "Terminal used projectId", p1: terminal.lastProjectId()});
 
         require(v4Quote > jbQuote, "setup failed: V4 quote must beat JB quote");
         require(actualOut < jbQuote, "setup failed: actual V4 output must underperform JB route");
@@ -370,9 +376,9 @@ contract CodexNemesisLargeTradeMisrouteExecutor {
     }
 }
 
-contract CodexNemesisLargeTradeMisrouteScript is Script {
+contract RegressionLargeTradeMisrouteScript is Script {
     function run() external {
-        CodexNemesisLargeTradeMisrouteExecutor executor = new CodexNemesisLargeTradeMisrouteExecutor();
+        RegressionLargeTradeMisrouteExecutor executor = new RegressionLargeTradeMisrouteExecutor();
         executor.execute();
     }
 }

@@ -26,6 +26,6 @@
 
 ## Useful Proof Points
 
-- [`test/TestAuditGaps.sol`](../test/TestAuditGaps.sol), [`test/TestStructuralArbitrage.t.sol`](../test/TestStructuralArbitrage.t.sol), and [`test/StressAndOrderOfMagnitude.t.sol`](../test/StressAndOrderOfMagnitude.t.sol) for pinned routing edge cases.
-- [`test/audit/PreviewPayForRouting.t.sol`](../test/audit/PreviewPayForRouting.t.sol), [`test/audit/CodexHookDataLength.t.sol`](../test/audit/CodexHookDataLength.t.sol), and [`test/audit/CodexNemesisLargeTradeMisroute.t.sol`](../test/audit/CodexNemesisLargeTradeMisroute.t.sol) for preview routing, hook-data, and large-trade degradation.
+- [`test/TestRegressionGaps.sol`](../test/TestRegressionGaps.sol), [`test/TestStructuralArbitrage.t.sol`](../test/TestStructuralArbitrage.t.sol), and [`test/StressAndOrderOfMagnitude.t.sol`](../test/StressAndOrderOfMagnitude.t.sol) for pinned routing edge cases.
+- [`test/regression/PreviewPayForRouting.t.sol`](../test/regression/PreviewPayForRouting.t.sol), [`test/regression/RegressionHookDataLength.t.sol`](../test/regression/RegressionHookDataLength.t.sol), and [`test/regression/RegressionLargeTradeMisroute.t.sol`](../test/regression/RegressionLargeTradeMisroute.t.sol) for preview routing, hook-data, and large-trade degradation.
 - [`script/Deploy.s.sol`](../script/Deploy.s.sol) when deployment or setup logic is the real issue.

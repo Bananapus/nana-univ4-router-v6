@@ -22,7 +22,7 @@ import {IJBTokens, IJBPrices, IJBDirectory} from "../../src/JBUniswapV4Hook.sol"
 import {JBCashOutHookSpecification} from "@bananapus/core-v6/src/structs/JBCashOutHookSpecification.sol";
 import {JBRuleset} from "@bananapus/core-v6/src/structs/JBRuleset.sol";
 
-contract MockJBTokensCodexNemesisInvalidFee {
+contract MockJBTokensRegressionInvalidFee {
     mapping(address => uint256) public projectIdOf;
 
     function setProjectId(address token, uint256 projectId) external {
@@ -30,7 +30,7 @@ contract MockJBTokensCodexNemesisInvalidFee {
     }
 }
 
-contract MockJBDirectoryCodexNemesisInvalidFee {
+contract MockJBDirectoryRegressionInvalidFee {
     address public mockTerminal;
 
     function setMockTerminal(address terminal) external {
@@ -46,13 +46,13 @@ contract MockJBDirectoryCodexNemesisInvalidFee {
     }
 }
 
-contract MockJBPricesCodexNemesisInvalidFee {
+contract MockJBPricesRegressionInvalidFee {
     function pricePerUnitOf(uint256, uint256, uint256, uint256) external pure returns (uint256) {
         return 1e18;
     }
 }
 
-contract InvalidFeeTerminalCodexNemesis {
+contract InvalidFeeTerminalRegression {
     uint256 internal immutable _grossReclaim;
 
     constructor(uint256 grossReclaim) {
@@ -79,7 +79,7 @@ contract InvalidFeeTerminalCodexNemesis {
     }
 }
 
-contract CodexNemesisInvalidFeeSellDoSExecutor {
+contract RegressionInvalidFeeSellDoSExecutor {
     using PoolIdLibrary for PoolKey;
 
     uint160 internal constant SQRT_PRICE_1_1 = 79_228_162_514_264_337_593_543_950_336;
@@ -89,10 +89,10 @@ contract CodexNemesisInvalidFeeSellDoSExecutor {
         PoolModifyLiquidityTest modifyLiquidityRouter = new PoolModifyLiquidityTest(manager);
         JuiceboxSwapRouter jbSwapRouter = new JuiceboxSwapRouter(manager);
 
-        MockJBTokensCodexNemesisInvalidFee tokens = new MockJBTokensCodexNemesisInvalidFee();
-        MockJBDirectoryCodexNemesisInvalidFee directory = new MockJBDirectoryCodexNemesisInvalidFee();
-        MockJBPricesCodexNemesisInvalidFee prices = new MockJBPricesCodexNemesisInvalidFee();
-        InvalidFeeTerminalCodexNemesis invalidFeeTerminal = new InvalidFeeTerminalCodexNemesis(1 ether);
+        MockJBTokensRegressionInvalidFee tokens = new MockJBTokensRegressionInvalidFee();
+        MockJBDirectoryRegressionInvalidFee directory = new MockJBDirectoryRegressionInvalidFee();
+        MockJBPricesRegressionInvalidFee prices = new MockJBPricesRegressionInvalidFee();
+        InvalidFeeTerminalRegression invalidFeeTerminal = new InvalidFeeTerminalRegression(1 ether);
         directory.setMockTerminal(address(invalidFeeTerminal));
 
         uint160 flags = uint160(
@@ -104,7 +104,12 @@ contract CodexNemesisInvalidFeeSellDoSExecutor {
         bytes memory constructorArgs = abi.encode(
             manager, IJBTokens(address(tokens)), IJBDirectory(address(directory)), IJBPrices(address(prices))
         );
-        (, bytes32 salt) = HookMiner.find(address(this), flags, type(JBUniswapV4Hook).creationCode, constructorArgs);
+        (, bytes32 salt) = HookMiner.find({
+            deployer: address(this),
+            flags: flags,
+            creationCode: type(JBUniswapV4Hook).creationCode,
+            constructorArgs: constructorArgs
+        });
 
         JBUniswapV4Hook hook = new JBUniswapV4Hook{salt: salt}(
             manager, IJBTokens(address(tokens)), IJBDirectory(address(directory)), IJBPrices(address(prices))
@@ -116,7 +121,7 @@ contract CodexNemesisInvalidFeeSellDoSExecutor {
             (projectToken, paymentToken) = (paymentToken, projectToken);
         }
 
-        tokens.setProjectId(address(projectToken), 123);
+        tokens.setProjectId({token: address(projectToken), projectId: 123});
 
         PoolKey memory key = PoolKey({
             currency0: Currency.wrap(address(projectToken)),
@@ -126,30 +131,33 @@ contract CodexNemesisInvalidFeeSellDoSExecutor {
             hooks: IHooks(address(hook))
         });
 
-        manager.initialize(key, SQRT_PRICE_1_1);
+        manager.initialize({key: key, sqrtPriceX96: SQRT_PRICE_1_1});
 
-        projectToken.mint(address(this), 20 ether);
-        paymentToken.mint(address(this), 20 ether);
-        projectToken.approve(address(modifyLiquidityRouter), type(uint256).max);
-        paymentToken.approve(address(modifyLiquidityRouter), type(uint256).max);
-        projectToken.approve(address(jbSwapRouter), type(uint256).max);
+        projectToken.mint({to: address(this), amount: 20 ether});
+        paymentToken.mint({to: address(this), amount: 20 ether});
+        projectToken.approve({spender: address(modifyLiquidityRouter), value: type(uint256).max});
+        paymentToken.approve({spender: address(modifyLiquidityRouter), value: type(uint256).max});
+        projectToken.approve({spender: address(jbSwapRouter), value: type(uint256).max});
 
-        modifyLiquidityRouter.modifyLiquidity(
-            key,
-            ModifyLiquidityParams({tickLower: -60, tickUpper: 60, liquidityDelta: 10 ether, salt: bytes32(0)}),
-            bytes("")
-        );
+        modifyLiquidityRouter.modifyLiquidity({
+            key: key,
+            params: ModifyLiquidityParams({tickLower: -60, tickUpper: 60, liquidityDelta: 10 ether, salt: bytes32(0)}),
+            hookData: bytes("")
+        });
 
-        uint256 v4Quote = hook.estimateUniswapOutput(key.toId(), key, 1 ether, true);
+        uint256 v4Quote =
+            hook.estimateUniswapOutput({poolId: key.toId(), key: key, amountIn: 1 ether, zeroForOne: true});
         require(v4Quote > 0, "setup failed: V4 quote must be live");
 
-        console2.log("V4 quote before revert path", v4Quote);
+        console2.log({p0: "V4 quote before revert path", p1: v4Quote});
 
-        try jbSwapRouter.swap(
-            key,
-            SwapParams({zeroForOne: true, amountSpecified: -1 ether, sqrtPriceLimitX96: TickMath.MIN_SQRT_PRICE + 1}),
-            0
-        ) {
+        try jbSwapRouter.swap({
+            key: key,
+            params: SwapParams({
+                zeroForOne: true, amountSpecified: -1 ether, sqrtPriceLimitX96: TickMath.MIN_SQRT_PRICE + 1
+            }),
+            amountOutMin: 0
+        }) {
             revert("expected swap to revert");
         } catch {
             console2.log("swap reverted before fallback, demonstrating invalid-fee sell-side DoS");
@@ -157,9 +165,9 @@ contract CodexNemesisInvalidFeeSellDoSExecutor {
     }
 }
 
-contract CodexNemesisInvalidFeeSellDoSScript is Script {
+contract RegressionInvalidFeeSellDoSScript is Script {
     function run() external {
-        CodexNemesisInvalidFeeSellDoSExecutor executor = new CodexNemesisInvalidFeeSellDoSExecutor();
+        RegressionInvalidFeeSellDoSExecutor executor = new RegressionInvalidFeeSellDoSExecutor();
         executor.execute();
     }
 }

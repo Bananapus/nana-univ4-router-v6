@@ -6,7 +6,7 @@ import {SwapParams} from "@uniswap/v4-core/src/types/PoolOperation.sol";
 
 import {JuiceboxHookTest} from "../JBUniswapV4Hook.t.sol";
 
-contract CodexNemesisDeltaEncoding is JuiceboxHookTest {
+contract RegressionDeltaEncoding is JuiceboxHookTest {
     function test_jbRouteOutputAboveInt128FallsBackToV4() public {
         uint256 amountIn = 35_000 ether;
 
