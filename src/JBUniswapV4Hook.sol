@@ -690,7 +690,7 @@ contract JBUniswapV4Hook is BaseHook {
         if (hookData.length >= 32) {
             amountOutMin = abi.decode(hookData[:32], (uint256));
         } else {
-            revert JBUniswapV4Hook_AmountOutMinRequired(hookData.length);
+            revert JBUniswapV4Hook_AmountOutMinRequired({hookDataLength: hookData.length});
         }
         PoolId poolId = key.toId();
 
@@ -698,7 +698,7 @@ contract JBUniswapV4Hook is BaseHook {
         // Exact-output swaps (amountSpecified > 0) are not supported as they require
         // different handling of specified/unspecified tokens and delta signs
         if (params.amountSpecified > 0) {
-            revert JBUniswapV4Hook_ExactOutputSwapsNotSupported(params.amountSpecified);
+            revert JBUniswapV4Hook_ExactOutputSwapsNotSupported({amountSpecified: params.amountSpecified});
         }
 
         // Determine input and output currencies based on swap direction
@@ -781,7 +781,7 @@ contract JBUniswapV4Hook is BaseHook {
 
         if (!isBuyingJBToken && !isSellingJBToken) {
             // No JB token involved, proceed with normal Uniswap swap
-            emit RouteSelected(poolId, false, 0, msg.sender);
+            emit RouteSelected({poolId: poolId, useJuicebox: false, expectedTokens: 0, caller: msg.sender});
             return (BaseHook.beforeSwap.selector, BeforeSwapDeltaLibrary.ZERO_DELTA, 0);
         }
 
@@ -810,16 +810,18 @@ contract JBUniswapV4Hook is BaseHook {
         bool juiceboxBetterThanV4 = (routeViaBuySide || routeViaSellSide) && juiceboxFitsV4Delta
             && juiceboxExpectedOutput > uniswapV4ExpectedTokens;
 
-        emit BestRouteSelected(
-            poolId,
-            juiceboxBetterThanV4 ? 1 : 0,
-            juiceboxBetterThanV4 ? juiceboxExpectedOutput : uniswapV4ExpectedTokens,
-            msg.sender
-        );
+        emit BestRouteSelected({
+            poolId: poolId,
+            routeType: juiceboxBetterThanV4 ? 1 : 0,
+            expectedTokens: juiceboxBetterThanV4 ? juiceboxExpectedOutput : uniswapV4ExpectedTokens,
+            caller: msg.sender
+        });
 
         // If Juicebox gives better output, route through Juicebox
         if (juiceboxBetterThanV4) {
-            emit RouteSelected(poolId, true, juiceboxExpectedOutput, msg.sender);
+            emit RouteSelected({
+                poolId: poolId, useJuicebox: true, expectedTokens: juiceboxExpectedOutput, caller: msg.sender
+            });
 
             uint256 outputReceived = _routeThroughJuicebox({
                 projectId: projectId,
@@ -836,7 +838,9 @@ contract JBUniswapV4Hook is BaseHook {
 
         // Proceed with normal v4 swap
         // Note: Slippage protection for V4 swaps is enforced in _afterSwap hook
-        emit RouteSelected(poolId, false, uniswapV4ExpectedTokens, msg.sender);
+        emit RouteSelected({
+            poolId: poolId, useJuicebox: false, expectedTokens: uniswapV4ExpectedTokens, caller: msg.sender
+        });
         return (BaseHook.beforeSwap.selector, BeforeSwapDeltaLibrary.ZERO_DELTA, 0);
     }
 
@@ -1101,7 +1105,7 @@ contract JBUniswapV4Hook is BaseHook {
         returns (int24 arithmeticMeanTick)
     {
         if (secondsAgo == 0) {
-            revert JBUniswapV4Hook_SecondsAgoCannotBeZero(secondsAgo);
+            revert JBUniswapV4Hook_SecondsAgoCannotBeZero({secondsAgo: secondsAgo});
         }
 
         // Batch both observations into a single call to avoid redundant binary searches.

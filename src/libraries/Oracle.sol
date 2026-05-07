@@ -263,7 +263,9 @@ library Oracle {
 
             // ensure that the target is chronologically at or after the oldest observation
             if (!lte({time: time, a: beforeOrAt.blockTimestamp, b: target})) {
-                revert Oracle_TargetPredatesOldestObservation(beforeOrAt.blockTimestamp, target);
+                revert Oracle_TargetPredatesOldestObservation({
+                    oldestTimestamp: beforeOrAt.blockTimestamp, targetTimestamp: target
+                });
             }
 
             // if we've reached this point, we have to binary search
