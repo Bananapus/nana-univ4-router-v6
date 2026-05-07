@@ -829,7 +829,7 @@ contract OracleDeepTest is Test {
         (, int24 currentTick,,) = pm.getSlot0(id);
         uint128 currentLiquidity = pm.getLiquidity(id);
 
-        vm.expectRevert(JBUniswapV4Hook.JBUniswapV4Hook_SecondsAgoCannotBeZero.selector);
+        vm.expectRevert(abi.encodeWithSelector(JBUniswapV4Hook.JBUniswapV4Hook_SecondsAgoCannotBeZero.selector, 0));
         hook.observeTWAP(id, 0, currentTick, obsIndex, currentLiquidity, card);
     }
 

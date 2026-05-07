@@ -35,7 +35,7 @@ import {HookMiner} from "@uniswap/v4-periphery/src/utils/HookMiner.sol";
 // Mock contracts (each test file needs its own copies)
 // ============================================================
 
-contract MockJBTokens_AuditGaps {
+contract MockJBTokens_RegressionGaps {
     mapping(address => uint256) public projectIdOf;
 
     function setProjectId(address token, uint256 projectId) external {
@@ -43,7 +43,7 @@ contract MockJBTokens_AuditGaps {
     }
 }
 
-contract MockJBDirectory_AuditGaps {
+contract MockJBDirectory_RegressionGaps {
     address public mockTerminal;
     address public mockController;
 
@@ -78,7 +78,7 @@ contract MockJBDirectory_AuditGaps {
     }
 }
 
-contract MockJBPrices_AuditGaps {
+contract MockJBPrices_RegressionGaps {
     mapping(uint256 => mapping(uint256 => mapping(uint256 => uint256))) public prices;
 
     // forge-lint: disable-next-line(mixed-case-function)
@@ -112,7 +112,7 @@ contract MockJBPrices_AuditGaps {
     }
 }
 
-contract MockJBTerminalStore_AuditGaps {
+contract MockJBTerminalStore_RegressionGaps {
     mapping(uint256 => mapping(uint256 => uint256)) public surplusPerToken;
 
     function setSurplus(uint256 projectId, address token, uint256 surplusAmount) external {
@@ -152,14 +152,14 @@ contract MockJBTerminalStore_AuditGaps {
     }
 }
 
-contract MockJBMultiTerminal_AuditGaps {
+contract MockJBMultiTerminal_RegressionGaps {
     uint256 public lastProjectId;
     address public lastToken;
     uint256 public lastAmount;
     address public lastBeneficiary;
     mapping(uint256 => address) public projectTokens;
     // forge-lint: disable-next-line(mixed-case-variable)
-    MockJBTerminalStore_AuditGaps public TERMINAL_STORE;
+    MockJBTerminalStore_RegressionGaps public TERMINAL_STORE;
     uint256 public overridePayReturnAmount;
     bool public useOverridePayReturn;
 
@@ -173,7 +173,7 @@ contract MockJBMultiTerminal_AuditGaps {
     }
 
     function setTerminalStore(address terminalStore) external {
-        TERMINAL_STORE = MockJBTerminalStore_AuditGaps(terminalStore);
+        TERMINAL_STORE = MockJBTerminalStore_RegressionGaps(terminalStore);
     }
 
     // forge-lint: disable-next-line(mixed-case-function)
@@ -293,7 +293,7 @@ contract MockJBMultiTerminal_AuditGaps {
     }
 }
 
-contract MockJBController_AuditGaps {
+contract MockJBController_RegressionGaps {
     mapping(uint256 => uint256) public weights;
     mapping(uint256 => uint16) public reservedPercents;
 
@@ -350,7 +350,7 @@ contract MockJBController_AuditGaps {
 // Test 1: TWAP Manipulation Cost Analysis
 // ============================================================
 
-/// @title TestAuditGaps_TWAPManipulationCost
+/// @title TestRegressionGaps_TWAPManipulationCost
 /// @notice Demonstrates that manipulating the 30-minute TWAP window requires sustained
 ///         capital deployment across many blocks, making it impractical.
 ///
@@ -362,7 +362,7 @@ contract MockJBController_AuditGaps {
 ///   (b) Performing a large directional swap to push the tick.
 ///   (c) Measuring the TWAP deviation after the manipulation swap, showing it is
 ///       bounded because the 30-minute history dilutes the single-block push.
-contract TestAuditGaps_TWAPManipulationCost is Test {
+contract TestRegressionGaps_TWAPManipulationCost is Test {
     receive() external payable {}
 
     using PoolIdLibrary for PoolKey;
@@ -371,17 +371,17 @@ contract TestAuditGaps_TWAPManipulationCost is Test {
 
     JBUniswapV4Hook hook;
     // forge-lint: disable-next-line(mixed-case-variable)
-    MockJBTokens_AuditGaps mockJBTokens;
+    MockJBTokens_RegressionGaps mockJBTokens;
     // forge-lint: disable-next-line(mixed-case-variable)
-    MockJBDirectory_AuditGaps mockJBDirectory;
+    MockJBDirectory_RegressionGaps mockJBDirectory;
     // forge-lint: disable-next-line(mixed-case-variable)
-    MockJBMultiTerminal_AuditGaps mockJBMultiTerminal;
+    MockJBMultiTerminal_RegressionGaps mockJBMultiTerminal;
     // forge-lint: disable-next-line(mixed-case-variable)
-    MockJBController_AuditGaps mockJBController;
+    MockJBController_RegressionGaps mockJBController;
     // forge-lint: disable-next-line(mixed-case-variable)
-    MockJBPrices_AuditGaps mockJBPrices;
+    MockJBPrices_RegressionGaps mockJBPrices;
     // forge-lint: disable-next-line(mixed-case-variable)
-    MockJBTerminalStore_AuditGaps mockJBTerminalStore;
+    MockJBTerminalStore_RegressionGaps mockJBTerminalStore;
     IPoolManager manager;
     PoolSwapTest swapRouter;
     JuiceboxSwapRouter jbSwapRouter;
@@ -404,12 +404,12 @@ contract TestAuditGaps_TWAPManipulationCost is Test {
         jbSwapRouter = new JuiceboxSwapRouter(manager);
         modifyLiquidityRouter = new PoolModifyLiquidityTest(manager);
 
-        mockJBTokens = new MockJBTokens_AuditGaps();
-        mockJBDirectory = new MockJBDirectory_AuditGaps();
-        mockJBMultiTerminal = new MockJBMultiTerminal_AuditGaps();
-        mockJBController = new MockJBController_AuditGaps();
-        mockJBPrices = new MockJBPrices_AuditGaps();
-        mockJBTerminalStore = new MockJBTerminalStore_AuditGaps();
+        mockJBTokens = new MockJBTokens_RegressionGaps();
+        mockJBDirectory = new MockJBDirectory_RegressionGaps();
+        mockJBMultiTerminal = new MockJBMultiTerminal_RegressionGaps();
+        mockJBController = new MockJBController_RegressionGaps();
+        mockJBPrices = new MockJBPrices_RegressionGaps();
+        mockJBTerminalStore = new MockJBTerminalStore_RegressionGaps();
 
         mockJBDirectory.setMockTerminal(address(mockJBMultiTerminal));
         mockJBDirectory.setMockController(address(mockJBController));
@@ -737,7 +737,7 @@ contract TestAuditGaps_TWAPManipulationCost is Test {
 // Test 2: Spot Fallback Sandwich Window
 // ============================================================
 
-/// @title TestAuditGaps_SpotFallbackSandwichWindow
+/// @title TestRegressionGaps_SpotFallbackSandwichWindow
 /// @notice Documents the risk that during the oracle warmup period (before the TWAP
 ///         has enough history), the hook falls back to spot price. This spot-price
 ///         fallback is vulnerable to sandwich attacks because an attacker can push
@@ -747,7 +747,7 @@ contract TestAuditGaps_TWAPManipulationCost is Test {
 ///         This is a known and documented risk: pools are vulnerable during the
 ///         first 30 minutes after initialization (TWAP_PERIOD = 1800 seconds).
 ///         The test explicitly demonstrates and quantifies this vulnerability window.
-contract TestAuditGaps_SpotFallbackSandwichWindow is Test {
+contract TestRegressionGaps_SpotFallbackSandwichWindow is Test {
     receive() external payable {}
 
     using PoolIdLibrary for PoolKey;
@@ -756,17 +756,17 @@ contract TestAuditGaps_SpotFallbackSandwichWindow is Test {
 
     JBUniswapV4Hook hook;
     // forge-lint: disable-next-line(mixed-case-variable)
-    MockJBTokens_AuditGaps mockJBTokens;
+    MockJBTokens_RegressionGaps mockJBTokens;
     // forge-lint: disable-next-line(mixed-case-variable)
-    MockJBDirectory_AuditGaps mockJBDirectory;
+    MockJBDirectory_RegressionGaps mockJBDirectory;
     // forge-lint: disable-next-line(mixed-case-variable)
-    MockJBMultiTerminal_AuditGaps mockJBMultiTerminal;
+    MockJBMultiTerminal_RegressionGaps mockJBMultiTerminal;
     // forge-lint: disable-next-line(mixed-case-variable)
-    MockJBController_AuditGaps mockJBController;
+    MockJBController_RegressionGaps mockJBController;
     // forge-lint: disable-next-line(mixed-case-variable)
-    MockJBPrices_AuditGaps mockJBPrices;
+    MockJBPrices_RegressionGaps mockJBPrices;
     // forge-lint: disable-next-line(mixed-case-variable)
-    MockJBTerminalStore_AuditGaps mockJBTerminalStore;
+    MockJBTerminalStore_RegressionGaps mockJBTerminalStore;
     IPoolManager manager;
     PoolSwapTest swapRouter;
     JuiceboxSwapRouter jbSwapRouter;
@@ -789,12 +789,12 @@ contract TestAuditGaps_SpotFallbackSandwichWindow is Test {
         jbSwapRouter = new JuiceboxSwapRouter(manager);
         modifyLiquidityRouter = new PoolModifyLiquidityTest(manager);
 
-        mockJBTokens = new MockJBTokens_AuditGaps();
-        mockJBDirectory = new MockJBDirectory_AuditGaps();
-        mockJBMultiTerminal = new MockJBMultiTerminal_AuditGaps();
-        mockJBController = new MockJBController_AuditGaps();
-        mockJBPrices = new MockJBPrices_AuditGaps();
-        mockJBTerminalStore = new MockJBTerminalStore_AuditGaps();
+        mockJBTokens = new MockJBTokens_RegressionGaps();
+        mockJBDirectory = new MockJBDirectory_RegressionGaps();
+        mockJBMultiTerminal = new MockJBMultiTerminal_RegressionGaps();
+        mockJBController = new MockJBController_RegressionGaps();
+        mockJBPrices = new MockJBPrices_RegressionGaps();
+        mockJBTerminalStore = new MockJBTerminalStore_RegressionGaps();
 
         mockJBDirectory.setMockTerminal(address(mockJBMultiTerminal));
         mockJBDirectory.setMockController(address(mockJBController));

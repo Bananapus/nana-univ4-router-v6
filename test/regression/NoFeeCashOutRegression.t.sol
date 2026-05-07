@@ -39,10 +39,10 @@ contract NoFeeCashOutTerminal {
     }
 }
 
-contract CodexNemesisPoC is JuiceboxHookTest {
+contract RegressionRegression is JuiceboxHookTest {
     using PoolIdLibrary for PoolKey;
 
-    function test_PoC_DualJBPoolUsesBetterSellSideRoute() public {
+    function test_Regression_DualJBPoolUsesBetterSellSideRoute() public {
         MockERC20 dualToken0 = new MockERC20("DualJB0", "DJB0");
         MockERC20 dualToken1 = new MockERC20("DualJB1", "DJB1");
 
@@ -115,10 +115,10 @@ contract CodexNemesisPoC is JuiceboxHookTest {
         assertEq(mockJBMultiTerminal.lastProjectId(), sellProjectId, "routing should select the sell-side project");
     }
 
-    /// @dev After audit remediation, FEE() is wrapped in try-catch.
+    /// @dev After remediation, FEE() is wrapped in try-catch.
     /// A terminal that lacks IJBFeeTerminal no longer bricks the swap;
     /// fee defaults to 0 and the swap routes through V4 instead of reverting.
-    function test_PoC_SellSideGracefullyFallsBackWhenTerminalLacksFeeInterface() public {
+    function test_Regression_SellSideGracefullyFallsBackWhenTerminalLacksFeeInterface() public {
         NoFeeCashOutTerminal noFeeTerminal = new NoFeeCashOutTerminal(1);
         mockJBDirectory.setMockTerminal(address(noFeeTerminal));
 

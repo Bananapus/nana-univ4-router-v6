@@ -15,7 +15,7 @@
 | Oracle internals | [`src/libraries/Oracle.sol`](./src/libraries/Oracle.sol), [`test/TestObserve.t.sol`](./test/TestObserve.t.sol), [`test/OracleDeepTest.t.sol`](./test/OracleDeepTest.t.sol) |
 | Deployment script and setup | [`script/Deploy.s.sol`](./script/Deploy.s.sol) |
 | Routing invariants and slippage behavior | [`test/Invariant.t.sol`](./test/Invariant.t.sol), [`test/SlippageTolerance.t.sol`](./test/SlippageTolerance.t.sol), [`test/ThreeWayRouting.t.sol`](./test/ThreeWayRouting.t.sol), [`test/JBUniswapV4HookFork.t.sol`](./test/JBUniswapV4HookFork.t.sol) |
-| Structural edge cases and pinned findings | [`test/StressAndOrderOfMagnitude.t.sol`](./test/StressAndOrderOfMagnitude.t.sol), [`test/TestStructuralArbitrage.t.sol`](./test/TestStructuralArbitrage.t.sol), [`test/JBUniswapV4Hook.t.sol`](./test/JBUniswapV4Hook.t.sol), [`test/TestAuditGaps.sol`](./test/TestAuditGaps.sol) |
+| Structural edge cases and pinned notes | [`test/StressAndOrderOfMagnitude.t.sol`](./test/StressAndOrderOfMagnitude.t.sol), [`test/TestStructuralArbitrage.t.sol`](./test/TestStructuralArbitrage.t.sol), [`test/JBUniswapV4Hook.t.sol`](./test/JBUniswapV4Hook.t.sol), [`test/TestRegressionGaps.sol`](./test/TestRegressionGaps.sol) |
 
 ## Repo Map
 

@@ -17,11 +17,11 @@ import {JBUniswapV4Hook} from "../../src/JBUniswapV4Hook.sol";
 import {MockERC20} from "../mock/MockERC20.sol";
 import {JuiceboxSwapRouter} from "../utils/JuiceboxSwapRouter.sol";
 import {
-    MockJBTokens_AuditGaps,
-    MockJBDirectory_AuditGaps,
-    MockJBController_AuditGaps,
-    MockJBPrices_AuditGaps
-} from "../TestAuditGaps.sol";
+    MockJBTokens_RegressionGaps,
+    MockJBDirectory_RegressionGaps,
+    MockJBController_RegressionGaps,
+    MockJBPrices_RegressionGaps
+} from "../TestRegressionGaps.sol";
 import {IJBTokens, IJBPrices, IJBDirectory} from "../../src/JBUniswapV4Hook.sol";
 
 contract ExtremeDecimalsERC20 is MockERC20 {
@@ -32,18 +32,18 @@ contract ExtremeDecimalsERC20 is MockERC20 {
     }
 }
 
-contract CodexNemesisBadDecimalsTest is Test {
+contract RegressionBadDecimalsTest is Test {
     using PoolIdLibrary for PoolKey;
 
     JBUniswapV4Hook internal hook;
     // forge-lint: disable-next-line(mixed-case-variable)
-    MockJBTokens_AuditGaps internal mockJBTokens;
+    MockJBTokens_RegressionGaps internal mockJBTokens;
     // forge-lint: disable-next-line(mixed-case-variable)
-    MockJBDirectory_AuditGaps internal mockJBDirectory;
+    MockJBDirectory_RegressionGaps internal mockJBDirectory;
     // forge-lint: disable-next-line(mixed-case-variable)
-    MockJBController_AuditGaps internal mockJBController;
+    MockJBController_RegressionGaps internal mockJBController;
     // forge-lint: disable-next-line(mixed-case-variable)
-    MockJBPrices_AuditGaps internal mockJBPrices;
+    MockJBPrices_RegressionGaps internal mockJBPrices;
 
     IPoolManager internal manager;
     PoolModifyLiquidityTest internal modifyLiquidityRouter;
@@ -59,10 +59,10 @@ contract CodexNemesisBadDecimalsTest is Test {
         modifyLiquidityRouter = new PoolModifyLiquidityTest(manager);
         jbSwapRouter = new JuiceboxSwapRouter(manager);
 
-        mockJBTokens = new MockJBTokens_AuditGaps();
-        mockJBDirectory = new MockJBDirectory_AuditGaps();
-        mockJBController = new MockJBController_AuditGaps();
-        mockJBPrices = new MockJBPrices_AuditGaps();
+        mockJBTokens = new MockJBTokens_RegressionGaps();
+        mockJBDirectory = new MockJBDirectory_RegressionGaps();
+        mockJBController = new MockJBController_RegressionGaps();
+        mockJBPrices = new MockJBPrices_RegressionGaps();
 
         mockJBDirectory.setMockController(address(mockJBController));
 

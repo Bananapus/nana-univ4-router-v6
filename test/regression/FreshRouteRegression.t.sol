@@ -87,7 +87,7 @@ contract PreviewRevertingLiveSellTerminal {
     }
 }
 
-contract CodexNemesisFreshPoC is JuiceboxHookTest {
+contract RegressionFreshRegression is JuiceboxHookTest {
     function test_poc_largeBuyMisroutesToV4OnLinearQuote() public {
         uint256 amountIn = 5 ether;
         uint256 quotedV4Out = hook.estimateUniswapOutput(id, key, amountIn, false);
@@ -99,7 +99,7 @@ contract CodexNemesisFreshPoC is JuiceboxHookTest {
         token1.mint(address(this), amountIn);
         token1.approve(address(jbSwapRouter), amountIn);
 
-        // The PoC amount is deliberately small and cannot exceed `int256.max`.
+        // The regression amount is deliberately small and cannot exceed `int256.max`.
         // forge-lint: disable-next-line(unsafe-typecast)
         int256 exactBuyAmount = -int256(amountIn);
         SwapParams memory params = SwapParams({
@@ -128,7 +128,7 @@ contract CodexNemesisFreshPoC is JuiceboxHookTest {
         uint256 initialToken1Balance = token1.balanceOf(address(this));
         token0.approve(address(jbSwapRouter), amountIn);
 
-        // The PoC amount is deliberately small and cannot exceed `int256.max`.
+        // The regression amount is deliberately small and cannot exceed `int256.max`.
         // forge-lint: disable-next-line(unsafe-typecast)
         int256 exactSellAmount = -int256(amountIn);
         SwapParams memory params = SwapParams({

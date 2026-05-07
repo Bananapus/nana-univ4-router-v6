@@ -82,7 +82,7 @@ src/
   JBUniswapV4Hook.sol
   libraries/
 test/
-  routing, oracle, fork, invariant, audit, and regression coverage
+  routing, oracle, fork, invariant, review, and regression coverage
 script/
   Deploy.s.sol
   helpers/

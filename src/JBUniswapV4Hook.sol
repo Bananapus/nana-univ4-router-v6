@@ -69,18 +69,22 @@ contract JBUniswapV4Hook is BaseHook {
     //*********************************************************************//
 
     /// @notice Reverts when amountOutMin is not provided in hookData.
-    error JBUniswapV4Hook_AmountOutMinRequired();
+    /// @param hookDataLength The length of the hook data that was provided.
+    error JBUniswapV4Hook_AmountOutMinRequired(uint256 hookDataLength);
 
     /// @notice Reverts when an exact-output swap is attempted.
     /// @dev Only exact-input swaps are supported.
-    error JBUniswapV4Hook_ExactOutputSwapsNotSupported();
+    /// @param amountSpecified The positive exact-output amount that was requested.
+    error JBUniswapV4Hook_ExactOutputSwapsNotSupported(int256 amountSpecified);
 
     /// @notice Reverts when a Juicebox input cannot fit inside Uniswap V4's signed delta accounting.
     /// @param amount The oversized input amount.
     error JBUniswapV4Hook_InputExceedsV4DeltaLimit(uint256 amount);
 
     /// @notice Reverts when swap output is below minimum required amount.
-    error JBUniswapV4Hook_InsufficientOutput();
+    /// @param amount The amount that would be delivered.
+    /// @param minimum The minimum amount required by the caller.
+    error JBUniswapV4Hook_InsufficientOutput(uint256 amount, uint256 minimum);
 
     /// @notice Reverts when a nonzero Juicebox sell cash-out delivers no reclaim token.
     error JBUniswapV4Hook_JuiceboxSellDidNotDeliver(address inputToken, address outputToken, uint256 amountIn);
@@ -90,10 +94,12 @@ contract JBUniswapV4Hook is BaseHook {
     error JBUniswapV4Hook_OutputExceedsV4DeltaLimit(uint256 amount);
 
     /// @notice Reverts when a reentrant swap is detected during Juicebox routing.
-    error JBUniswapV4Hook_ReentrantRouting();
+    /// @param caller The account that attempted the reentrant route.
+    error JBUniswapV4Hook_ReentrantRouting(address caller);
 
     /// @notice Reverts when secondsAgo is zero in observeTWAP().
-    error JBUniswapV4Hook_SecondsAgoCannotBeZero();
+    /// @param secondsAgo The invalid lookback window.
+    error JBUniswapV4Hook_SecondsAgoCannotBeZero(uint32 secondsAgo);
 
     /// @notice Reverts when a temporary terminal allowance was not fully consumed.
     error JBUniswapV4Hook_TemporaryAllowanceNotConsumed(address token, address spender, uint256 allowance);
@@ -243,7 +249,6 @@ contract JBUniswapV4Hook is BaseHook {
         outputToken = _normalizeToken(outputToken);
 
         // Use the terminal's cash-out preview, which simulates any configured cash-out data hook.
-        // slither-disable-next-line unused-return
         try IJBCashOutTerminal(address(terminal))
             .previewCashOutFrom({
             holder: address(this),
@@ -393,7 +398,6 @@ contract JBUniswapV4Hook is BaseHook {
     /// @param amountIn The input amount
     /// @param zeroForOne Whether swapping token0 for token1
     /// @return estimatedOut The estimated output amount
-    // slither-disable-next-line incorrect-equality
     function estimateUniswapOutput(
         PoolId poolId,
         PoolKey memory key,
@@ -411,9 +415,7 @@ contract JBUniswapV4Hook is BaseHook {
         // NOTE: Spot price is used as a fallback for newly created pools that lack sufficient TWAP history.
         // In this state, the estimate is susceptible to spot-price manipulation. Once the pool accumulates
         // enough observations for TWAP, this fallback is no longer used.
-        // slither-disable-next-line incorrect-equality
         if (sqrtPriceX96TWAP == 0) {
-            // slither-disable-next-line unused-return
             (sqrtPriceX96TWAP,,,) = poolManager.getSlot0(poolId);
         }
 
@@ -443,7 +445,6 @@ contract JBUniswapV4Hook is BaseHook {
         // Fee values are in hundredths of a bip (pips), so 3000 = 0.3%.
         {
             // Read protocol fee from slot0 (directional: lower 12 bits = zeroForOne, upper 12 bits = oneForZero)
-            // slither-disable-next-line unused-return
             (,, uint24 protocolFee, uint24 slot0LpFee) = poolManager.getSlot0(PoolIdLibrary.toId(key));
 
             // Determine the LP fee: use key.fee for static pools, slot0LpFee for dynamic pools
@@ -506,7 +507,6 @@ contract JBUniswapV4Hook is BaseHook {
         PoolId poolId = key.toId();
         ObservationState memory state = states[poolId];
 
-        // slither-disable-next-line unused-return
         (, int24 tick,,) = poolManager.getSlot0(poolId);
         uint128 liquidity = poolManager.getLiquidity(poolId);
 
@@ -542,7 +542,14 @@ contract JBUniswapV4Hook is BaseHook {
         view
         returns (int24 arithmeticMeanTick)
     {
-        return _observeTWAP(poolId, secondsAgo, tick, index, liquidity, cardinality);
+        return _observeTWAP({
+            poolId: poolId,
+            secondsAgo: secondsAgo,
+            tick: tick,
+            index: index,
+            liquidity: liquidity,
+            cardinality: cardinality
+        });
     }
 
     //*********************************************************************//
@@ -644,7 +651,7 @@ contract JBUniswapV4Hook is BaseHook {
                     // forge-lint: disable-next-line(unsafe-typecast)
                     uint256 outputAmount = rawOutput < 0 ? uint256(int256(-rawOutput)) : uint256(int256(rawOutput));
                     if (outputAmount < amountOutMin) {
-                        revert JBUniswapV4Hook_InsufficientOutput();
+                        revert JBUniswapV4Hook_InsufficientOutput({amount: outputAmount, minimum: amountOutMin});
                     }
                 }
             }
@@ -674,7 +681,7 @@ contract JBUniswapV4Hook is BaseHook {
         returns (bytes4, BeforeSwapDelta, uint24)
     {
         // Prevent recursive routing: if we're already routing through Juicebox, block reentrant swaps.
-        if (_routing) revert JBUniswapV4Hook_ReentrantRouting();
+        if (_routing) revert JBUniswapV4Hook_ReentrantRouting(msg.sender);
 
         // Decode amountOutMin from the first 32-byte word of hookData.
         // Pure V4 integrations may append extra metadata after this prefix, so `_beforeSwap` must accept the same
@@ -683,7 +690,7 @@ contract JBUniswapV4Hook is BaseHook {
         if (hookData.length >= 32) {
             amountOutMin = abi.decode(hookData[:32], (uint256));
         } else {
-            revert JBUniswapV4Hook_AmountOutMinRequired();
+            revert JBUniswapV4Hook_AmountOutMinRequired(hookData.length);
         }
         PoolId poolId = key.toId();
 
@@ -691,7 +698,7 @@ contract JBUniswapV4Hook is BaseHook {
         // Exact-output swaps (amountSpecified > 0) are not supported as they require
         // different handling of specified/unspecified tokens and delta signs
         if (params.amountSpecified > 0) {
-            revert JBUniswapV4Hook_ExactOutputSwapsNotSupported();
+            revert JBUniswapV4Hook_ExactOutputSwapsNotSupported(params.amountSpecified);
         }
 
         // Determine input and output currencies based on swap direction
@@ -731,7 +738,6 @@ contract JBUniswapV4Hook is BaseHook {
             // If previewing is unavailable, treat the JB buy path as ineligible so swaps can fall back to V4
             // instead of relying on static weight math that may ignore runtime terminal constraints.
             if (address(buySideTerminal) != address(0)) {
-                // slither-disable-next-line unused-return
                 try buySideTerminal.previewPayFor({
                     projectId: buyProjectId,
                     token: _normalizeToken(tokenIn),
@@ -1028,7 +1034,6 @@ contract JBUniswapV4Hook is BaseHook {
 
         // Get current pool state for observation
         // getSlot0 returns: sqrtPriceX96, tick, protocolFee, lpFee (no liquidity)
-        // slither-disable-next-line unused-return
         (, int24 tick,,) = poolManager.getSlot0(poolId);
         // Get current liquidity from the dedicated accessor
         uint128 liquidity = poolManager.getLiquidity(poolId);
@@ -1039,7 +1044,6 @@ contract JBUniswapV4Hook is BaseHook {
         uint32 oldestAllowedTime = currentTime > TWAP_PERIOD ? currentTime - TWAP_PERIOD : 0;
 
         // Get oldest observation timestamp
-        // slither-disable-next-line weak-prng
         Oracle.Observation memory oldestObs = observations[poolId][(state.index + 1) % state.cardinality];
         if (!oldestObs.initialized) {
             oldestObs = observations[poolId][0];
@@ -1097,7 +1101,7 @@ contract JBUniswapV4Hook is BaseHook {
         returns (int24 arithmeticMeanTick)
     {
         if (secondsAgo == 0) {
-            revert JBUniswapV4Hook_SecondsAgoCannotBeZero();
+            revert JBUniswapV4Hook_SecondsAgoCannotBeZero(secondsAgo);
         }
 
         // Batch both observations into a single call to avoid redundant binary searches.
@@ -1105,7 +1109,6 @@ contract JBUniswapV4Hook is BaseHook {
         secondsAgos[0] = 0;
         secondsAgos[1] = secondsAgo;
 
-        // slither-disable-next-line unused-return
         (int56[] memory tickCumulatives,) = observations[poolId].observe({
             time: uint32(block.timestamp),
             secondsAgos: secondsAgos,
@@ -1131,7 +1134,6 @@ contract JBUniswapV4Hook is BaseHook {
     function _recordObservation(PoolId poolId) internal {
         // Get current pool state
         // getSlot0 returns: sqrtPriceX96, tick, protocolFee, lpFee (no liquidity)
-        // slither-disable-next-line unused-return
         (, int24 tick,,) = poolManager.getSlot0(poolId);
         // Get current liquidity from the dedicated accessor
         uint128 liquidity = poolManager.getLiquidity(poolId);
@@ -1141,7 +1143,6 @@ contract JBUniswapV4Hook is BaseHook {
         // Auto-grow cardinality when at capacity to enable TWAP functionality
         // Grow when we're about to wrap around (index == cardinality - 1) and cardinality == cardinalityNext
         uint16 newCardinalityNext = state.cardinalityNext;
-        // slither-disable-next-line incorrect-equality
         if (state.cardinality == state.cardinalityNext && state.index == state.cardinality - 1) {
             // Double the cardinality until the configured cap is reached.
             uint16 targetCardinality =
@@ -1195,7 +1196,6 @@ contract JBUniswapV4Hook is BaseHook {
     /// @param terminal The Juicebox terminal to use
     /// @param amountOutMin Minimum tokens user accepts (enforced by JB terminal)
     /// @return outputReceived The amount of output tokens received
-    // slither-disable-next-line arbitrary-send-eth
     function _routeThroughJuicebox(
         uint256 projectId,
         Currency inputCurrency,
@@ -1234,7 +1234,6 @@ contract JBUniswapV4Hook is BaseHook {
 
             // Route the buy through JB. The terminal enforces `amountOutMin` against issued project tokens.
             uint256 payValue = inputCurrency.isAddressZero() ? amountIn : 0;
-            // slither-disable-next-line unused-return
             terminal.pay{value: payValue}({
                 projectId: projectId,
                 token: normalizedTokenIn, // Native ETH → JB_NATIVE_TOKEN
@@ -1253,7 +1252,6 @@ contract JBUniswapV4Hook is BaseHook {
         } else {
             // Route the sell through JB. Native ETH is normalized for terminal accounting.
             address normalizedTokenOut = _normalizeToken(tokenOut);
-            // slither-disable-next-line unused-return
             IJBMultiTerminal(address(terminal))
                 .cashOutTokensOf({
                 holder: address(this), // holder (hook owns the JB tokens)
@@ -1274,7 +1272,6 @@ contract JBUniswapV4Hook is BaseHook {
 
         // A nonzero sell that delivers no reclaim token is not a valid JB route. Revert instead of settling a
         // zero-output swap that appeared executable during preview.
-        // slither-disable-next-line incorrect-equality
         if (!isBuying && amountIn != 0 && outputReceived == 0) {
             revert JBUniswapV4Hook_JuiceboxSellDidNotDeliver({
                 inputToken: tokenIn, outputToken: tokenOut, amountIn: amountIn
@@ -1283,7 +1280,9 @@ contract JBUniswapV4Hook is BaseHook {
 
         // Enforce the user or router minimum on the reconciled balance delta, not on the terminal return value. This
         // catches fee-on-transfer output tokens and terminals that over-report how much the hook actually received.
-        if (outputReceived < amountOutMin) revert JBUniswapV4Hook_InsufficientOutput();
+        if (outputReceived < amountOutMin) {
+            revert JBUniswapV4Hook_InsufficientOutput({amount: outputReceived, minimum: amountOutMin});
+        }
 
         // Settle output back to PoolManager.
         _settleOutput({outputCurrency: outputCurrency, amount: outputReceived});

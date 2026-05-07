@@ -134,7 +134,7 @@ contract FeeFreeSurplusLikeTerminal {
     }
 }
 
-contract CodexNemesisFeeFreeSurplusCashoutMisrouteTest is JuiceboxHookTest {
+contract RegressionFeeFreeSurplusCashoutMisrouteTest is JuiceboxHookTest {
     FeeFreeSurplusLikeTerminal internal feeFreeTerminal;
 
     function test_zeroTaxFeeFreeSurplusCanRouteToJBBelowAvailableV4Output() public {
@@ -156,7 +156,7 @@ contract CodexNemesisFeeFreeSurplusCashoutMisrouteTest is JuiceboxHookTest {
         uint256 amountIn = 1 ether;
         SwapParams memory params = SwapParams({
             zeroForOne: true,
-            // The PoC amount is a small constant and fits safely in int256.
+            // The regression amount is a small constant and fits safely in int256.
             // forge-lint: disable-next-line(unsafe-typecast)
             amountSpecified: -int256(amountIn),
             sqrtPriceLimitX96: TickMath.MIN_SQRT_PRICE + 1
