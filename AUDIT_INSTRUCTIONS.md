@@ -1,8 +1,8 @@
-# Review Guide
+# Audit Instructions
 
 This repo is the Uniswap V4 hook that compares V4 execution against Juicebox execution and routes to the better outcome. It also maintains the TWAP oracle used by other repos.
 
-## Review Objective
+## Audit Objective
 
 Find issues that:
 

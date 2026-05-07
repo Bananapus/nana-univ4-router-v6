@@ -9,7 +9,7 @@ This repo is the UniV4 hook and oracle primitive for Juicebox-aware swaps. It ow
 - projects that want UniV4 swaps to respect Juicebox mint and cash-out economics
 - traders whose best route may be the pool or the protocol depending on direction and price
 - integrators reading the per-pool oracle this hook maintains
-- reviewers reviewing oracle maturity, reentrancy, and path-selection assumptions
+- auditors reviewing oracle maturity, reentrancy, and path-selection assumptions
 
 ## Key Surfaces
 
@@ -101,7 +101,7 @@ This repo is the UniV4 hook and oracle primitive for Juicebox-aware swaps. It ow
 
 ## Journey 4: Warm Up The Oracle Before Trusting It For Safety-Critical Routing
 
-**Actor:** operator or reviewer.
+**Actor:** operator or auditor.
 
 **Intent:** understand when the hook still behaves like spot routing rather than mature TWAP routing.
 
