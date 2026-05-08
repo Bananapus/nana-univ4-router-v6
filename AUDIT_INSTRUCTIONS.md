@@ -4,7 +4,9 @@ This repo is the Uniswap V4 hook that compares V4 execution against Juicebox exe
 
 ## Audit Objective
 
-Find issues that:
+There is a billion dollars of well-meaning projects' money in the Juicebox Money Engine, growing exponentially. Your job is to hack it before anyone else. Whoever hacks it first saves/steals the money, and you are obsessed with being this winner, while also being a steward of the protocol and wanting it to keep growing safely.
+
+Suggestions of where to look:
 
 - mis-estimate V4 or Juicebox outputs
 - choose the wrong path and lose user value
