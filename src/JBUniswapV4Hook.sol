@@ -419,10 +419,9 @@ contract JBUniswapV4Hook is BaseHook {
             (sqrtPriceX96TWAP,,,) = poolManager.getSlot0(poolId);
         }
 
-        // Compose the combined swap fee (protocol fee + LP fee) so it can be applied to the input amount FIRST,
-        // matching Uniswap V4's actual swap math. Applying the fee to the input then computing output via the
-        // price ratio preserves V4's rounding direction for small inputs; the previous order (ratio first, then
-        // fee) overquoted at low-decimal boundaries (e.g. amountIn=2 at 0.3%).
+        // Apply the combined swap fee (protocol fee + LP fee) to the input amount BEFORE the price-ratio
+        // conversion, mirroring Uniswap V4's swap math so this estimator's floor rounding matches V4's
+        // execution rounding (small inputs at typical fees would otherwise diverge by one unit).
         uint256 amountInAfterFee = amountIn;
         {
             // Read protocol fee from slot0 (directional: lower 12 bits = zeroForOne, upper 12 bits = oneForZero)
@@ -441,7 +440,11 @@ contract JBUniswapV4Hook is BaseHook {
             uint24 swapFee = directionalProtocolFee == 0 ? lpFee : directionalProtocolFee.calculateSwapFee(lpFee);
 
             if (swapFee > 0) {
-                amountInAfterFee = FullMath.mulDiv({a: amountIn, b: 1_000_000 - swapFee, denominator: 1_000_000});
+                amountInAfterFee = FullMath.mulDiv({
+                    a: amountIn,
+                    b: ProtocolFeeLibrary.PIPS_DENOMINATOR - swapFee,
+                    denominator: ProtocolFeeLibrary.PIPS_DENOMINATOR
+                });
             }
         }
 
