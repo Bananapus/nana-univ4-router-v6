@@ -151,6 +151,9 @@ contract RegressionInvalidFeeSellDoSExecutor {
 
         console2.log({p0: "V4 quote before revert path", p1: v4Quote});
 
+        // After the RISKS §9 fix, `calculateExpectedOutputFromSelling` returns 0 when the terminal reports a fee
+        // above `JBConstants.MAX_FEE`, making the JB sell path ineligible so the swap degrades to V4 instead of
+        // reverting. The script now asserts this fall-through executes cleanly.
         try jbSwapRouter.swap({
             key: key,
             params: SwapParams({
@@ -158,9 +161,10 @@ contract RegressionInvalidFeeSellDoSExecutor {
             }),
             amountOutMin: 0
         }) {
-            revert("expected swap to revert");
-        } catch {
-            console2.log("swap reverted before fallback, demonstrating invalid-fee sell-side DoS");
+            console2.log("swap fell through to V4 cleanly with fee > MAX_FEE (RISKS section 9 fix)");
+        } catch (bytes memory reason) {
+            console2.logBytes(reason);
+            revert("swap reverted with fee > MAX_FEE: RISKS section 9 fall-through regressed");
         }
     }
 }

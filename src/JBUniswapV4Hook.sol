@@ -419,30 +419,11 @@ contract JBUniswapV4Hook is BaseHook {
             (sqrtPriceX96TWAP,,,) = poolManager.getSlot0(poolId);
         }
 
-        // Calculate price ratio from sqrtPriceX96, handling overflow for large values.
-        // When sqrtPriceX96 <= type(uint128).max, we can square it directly (fits in uint256).
-        // Otherwise, use FullMath.mulDiv to avoid overflow, at the cost of reduced precision.
-        if (sqrtPriceX96TWAP <= type(uint128).max) {
-            uint256 ratioX192 = uint256(sqrtPriceX96TWAP) * sqrtPriceX96TWAP;
-            if (zeroForOne) {
-                estimatedOut = FullMath.mulDiv({a: amountIn, b: ratioX192, denominator: 1 << 192});
-            } else {
-                estimatedOut = FullMath.mulDiv({a: amountIn, b: 1 << 192, denominator: ratioX192});
-            }
-        } else {
-            uint256 ratioX128 = FullMath.mulDiv({a: sqrtPriceX96TWAP, b: sqrtPriceX96TWAP, denominator: 1 << 64});
-            if (zeroForOne) {
-                estimatedOut = FullMath.mulDiv({a: amountIn, b: ratioX128, denominator: 1 << 128});
-            } else {
-                estimatedOut = FullMath.mulDiv({a: amountIn, b: 1 << 128, denominator: ratioX128});
-            }
-        }
-
-        // Apply combined swap fee (protocol fee + LP fee).
-        // The protocol fee is directional and taken FIRST from the input amount,
-        // then the LP fee is taken from the remainder. We use Uniswap V4's
-        // ProtocolFeeLibrary.calculateSwapFee to compose them correctly.
-        // Fee values are in hundredths of a bip (pips), so 3000 = 0.3%.
+        // Compose the combined swap fee (protocol fee + LP fee) so it can be applied to the input amount FIRST,
+        // matching Uniswap V4's actual swap math. Applying the fee to the input then computing output via the
+        // price ratio preserves V4's rounding direction for small inputs; the previous order (ratio first, then
+        // fee) overquoted at low-decimal boundaries (e.g. amountIn=2 at 0.3%).
+        uint256 amountInAfterFee = amountIn;
         {
             // Read protocol fee from slot0 (directional: lower 12 bits = zeroForOne, upper 12 bits = oneForZero)
             (,, uint24 protocolFee, uint24 slot0LpFee) = poolManager.getSlot0(PoolIdLibrary.toId(key));
@@ -455,12 +436,31 @@ contract JBUniswapV4Hook is BaseHook {
                 lpFee = key.fee;
             }
 
-            // Extract the directional protocol fee and compose with LP fee
+            // Extract the directional protocol fee and compose with LP fee.
             uint16 directionalProtocolFee = zeroForOne ? protocolFee.getZeroForOneFee() : protocolFee.getOneForZeroFee();
             uint24 swapFee = directionalProtocolFee == 0 ? lpFee : directionalProtocolFee.calculateSwapFee(lpFee);
 
             if (swapFee > 0) {
-                estimatedOut = estimatedOut - FullMath.mulDiv({a: estimatedOut, b: swapFee, denominator: 1_000_000});
+                amountInAfterFee = FullMath.mulDiv({a: amountIn, b: 1_000_000 - swapFee, denominator: 1_000_000});
+            }
+        }
+
+        // Calculate price ratio from sqrtPriceX96, handling overflow for large values.
+        // When sqrtPriceX96 <= type(uint128).max, we can square it directly (fits in uint256).
+        // Otherwise, use FullMath.mulDiv to avoid overflow, at the cost of reduced precision.
+        if (sqrtPriceX96TWAP <= type(uint128).max) {
+            uint256 ratioX192 = uint256(sqrtPriceX96TWAP) * sqrtPriceX96TWAP;
+            if (zeroForOne) {
+                estimatedOut = FullMath.mulDiv({a: amountInAfterFee, b: ratioX192, denominator: 1 << 192});
+            } else {
+                estimatedOut = FullMath.mulDiv({a: amountInAfterFee, b: 1 << 192, denominator: ratioX192});
+            }
+        } else {
+            uint256 ratioX128 = FullMath.mulDiv({a: sqrtPriceX96TWAP, b: sqrtPriceX96TWAP, denominator: 1 << 64});
+            if (zeroForOne) {
+                estimatedOut = FullMath.mulDiv({a: amountInAfterFee, b: ratioX128, denominator: 1 << 128});
+            } else {
+                estimatedOut = FullMath.mulDiv({a: amountInAfterFee, b: 1 << 128, denominator: ratioX128});
             }
         }
 
