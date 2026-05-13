@@ -264,8 +264,16 @@ contract JBUniswapV4Hook is BaseHook {
                 _effectivePreviewCashOutAmount({reclaimAmount: grossReclaim, hookSpecifications: hookSpecifications});
             if (effectiveReclaim == 0) return 0;
 
-            // Deduct the protocol fee regardless of cash-out tax rate. Even at zero tax, the live terminal
-            // charges fees on fee-free surplus, so the preview must account for that to stay consistent.
+            // Metadata-only previews carry an executable `minimumSwapAmountOut` inside a buyback hook spec when
+            // `grossReclaim == 0`. That amount is the AMM sell-side proceeds, which bypass `_processFee` (the
+            // sell-side hook spec is created with `amount = 0`), so the metadata amount is ALREADY net of terminal
+            // fees. Subtracting `terminal.FEE()` again here would double-discount the JB route and silently push
+            // it below the V4 quote even when execution would have paid more.
+            if (grossReclaim == 0) return effectiveReclaim;
+
+            // Standard reclaim path: deduct the protocol fee regardless of cash-out tax rate. Even at zero tax,
+            // the live terminal charges fees on fee-free surplus, so the preview must account for that to stay
+            // consistent with executable behavior.
             uint256 fee;
             try IJBFeeTerminal(address(terminal)).FEE() returns (uint256 _fee) {
                 fee = _fee;

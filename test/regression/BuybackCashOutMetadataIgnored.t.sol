@@ -144,9 +144,11 @@ contract BuybackCashOutMetadataIgnoredTest is JuiceboxHookTest {
         uint256 previewQuote = hook.calculateExpectedOutputFromSelling(
             123, amountIn, address(token1), IJBTerminal(address(metadataOnlySellTerminal))
         );
-        // The preview now always deducts the 2.5% protocol fee: 2 ether * 975/1000 = 1.95 ether.
-        uint256 expectedPreview = liveCashOutAmount - liveCashOutAmount * 25 / 1000;
-        assertEq(previewQuote, expectedPreview, "hook should surface metadata-only sell preview (after fee)");
+        // Metadata-only previews carry an already-net AMM sell amount (the sell-side hook spec has `amount = 0`,
+        // so the terminal never charges its fee). Subtracting the protocol fee here would double-discount the
+        // metadata route and silently push it below V4 quotes that pay less. The preview must equal the live
+        // executable amount.
+        assertEq(previewQuote, liveCashOutAmount, "metadata-only sell preview must surface the executable amount");
 
         uint256 balanceBefore = token1.balanceOf(address(this));
 
