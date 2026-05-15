@@ -9,6 +9,15 @@ This repo was not part of the deployed v5 ecosystem that the top-level changelog
 - `JBUniswapV4Hook`
 - `Oracle`
 
+## 0.0.31 — Bump nana-core-v6 to 0.0.52
+
+`nana-core-v6@0.0.52` centralized the protocol fee constant into `JBConstants.FEE` and dropped `IJBFeeTerminal.FEE()`. Updated `JBUniswapV4Hook` accordingly:
+
+- `calculateExpectedOutputFromSelling` no longer does `try IJBFeeTerminal(terminal).FEE()` + fallback to 0 — it reads the compile-time constant `JBConstants.FEE` directly. The previous fallback and the `fee > MAX_FEE` guard are now both dead (constant is `25`, `MAX_FEE` is `1000`), so they're removed.
+- Dropped the `IJBFeeTerminal` import (no longer referenced).
+- Deleted `test/regression/RegressionInvalidFeeSellDoS.t.sol` — it specifically tested the "terminal-reported FEE > MAX_FEE" failure mode, which is no longer reachable because the fee is no longer a per-terminal value.
+- Added `pauseCrossProjectFeeFreeInflows: false` to all `JBRulesetMetadata` literals across `test/` for the new ruleset field added in core 0.0.52.
+
 ## Summary
 
 - This repo is a dedicated Uniswap v4 hook package for the v6 stack rather than a deployed v5 migration target.

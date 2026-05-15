@@ -4,7 +4,6 @@ pragma solidity 0.8.28;
 import {IJBCashOutTerminal} from "@bananapus/core-v6/src/interfaces/IJBCashOutTerminal.sol";
 import {IJBController} from "@bananapus/core-v6/src/interfaces/IJBController.sol";
 import {IJBDirectory} from "@bananapus/core-v6/src/interfaces/IJBDirectory.sol";
-import {IJBFeeTerminal} from "@bananapus/core-v6/src/interfaces/IJBFeeTerminal.sol";
 import {IJBMultiTerminal} from "@bananapus/core-v6/src/interfaces/IJBMultiTerminal.sol";
 import {IJBPrices} from "@bananapus/core-v6/src/interfaces/IJBPrices.sol";
 import {IJBTerminal} from "@bananapus/core-v6/src/interfaces/IJBTerminal.sol";
@@ -273,20 +272,10 @@ contract JBUniswapV4Hook is BaseHook {
 
             // Standard reclaim path: deduct the protocol fee regardless of cash-out tax rate. Even at zero tax,
             // the live terminal charges fees on fee-free surplus, so the preview must account for that to stay
-            // consistent with executable behavior.
-            uint256 fee;
-            try IJBFeeTerminal(address(terminal)).FEE() returns (uint256 _fee) {
-                fee = _fee;
-            } catch {
-                fee = 0;
-            }
-
-            if (fee == 0) return effectiveReclaim;
-
-            // If the terminal reports a fee exceeding the protocol maximum, treat the JB sell path as ineligible.
-            if (fee > JBConstants.MAX_FEE) return 0;
-
-            return effectiveReclaim - FullMath.mulDiv({a: effectiveReclaim, b: fee, denominator: JBConstants.MAX_FEE});
+            // consistent with executable behavior. nana-core-v6 0.0.52 centralized `FEE` into `JBConstants.FEE`
+            // (compile-time constant), so the previous try/catch on `IJBFeeTerminal.FEE()` is no longer needed.
+            return effectiveReclaim
+                - FullMath.mulDiv({a: effectiveReclaim, b: JBConstants.FEE, denominator: JBConstants.MAX_FEE});
         } catch {
             // Conservative degrade rule: if the live preview surface is unavailable, do not resurrect the older
             // static reclaim estimate. Cash-out data hooks and terminal-specific logic can make that estimate stale,
