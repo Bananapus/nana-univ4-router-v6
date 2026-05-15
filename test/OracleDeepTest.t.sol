@@ -17,6 +17,7 @@ import {TickMath} from "@uniswap/v4-core/src/libraries/TickMath.sol";
 import {Hooks} from "@uniswap/v4-core/src/libraries/Hooks.sol";
 
 import {JBUniswapV4Hook} from "../src/JBUniswapV4Hook.sol";
+import {Oracle} from "../src/libraries/Oracle.sol";
 import {MockERC20} from "./mock/MockERC20.sol";
 import {JuiceboxSwapRouter} from "./utils/JuiceboxSwapRouter.sol";
 import {IJBTokens, IJBPrices, IJBDirectory} from "../src/JBUniswapV4Hook.sol";
@@ -644,6 +645,44 @@ contract OracleDeepTest is Test {
         int24 meanTick = hook.observeTWAP(id, hook.TWAP_PERIOD(), currentTick, index, currentLiquidity, cardinality);
         assertGe(meanTick, -1000, "Mean tick should remain bounded after fast-block warmup");
         assertLe(meanTick, 1000, "Mean tick should remain bounded after fast-block warmup");
+    }
+
+    /// @notice At one-observation-per-second cadence the buffer would erase the 30-minute TWAP
+    /// window in under 17 minutes (1024 slots / 1s). The hook drops writes that would promote a
+    /// too-young slot into the oldest position, so the window stays intact and the TWAP oracle
+    /// continues to answer queries instead of falling back to spot.
+    function test_TWAPRetention_CapPreservesThirtyMinuteWindowAtOneSecondCadence() public {
+        uint256 ts = 10_000;
+        uint32 twapPeriod = hook.TWAP_PERIOD();
+        uint256 swapCount = twapPeriod + 250;
+
+        for (uint256 i = 0; i < swapCount; i++) {
+            ts += 1;
+            vm.warp(ts);
+            _doSwap(true, -0.0001 ether);
+        }
+
+        (uint16 index, uint16 cardinality, uint16 cardinalityNext) = hook.states(id);
+        assertEq(cardinality, hook.MAX_TWAP_CARDINALITY(), "Cardinality should be capped");
+        assertEq(cardinalityNext, hook.MAX_TWAP_CARDINALITY(), "CardinalityNext should be capped");
+
+        uint16 oldestIndex = (index + 1) % cardinality;
+        (uint32 oldestTimestamp,,,) = hook.observations(id, oldestIndex);
+        uint32 targetTimestamp = uint32(block.timestamp) - twapPeriod;
+        assertLe(
+            oldestTimestamp,
+            targetTimestamp,
+            "The oldest retained observation covers (or predates) the TWAP target - window preserved"
+        );
+
+        IPoolManager pm = manager;
+        (, int24 currentTick,,) = pm.getSlot0(id);
+        uint128 currentLiquidity = pm.getLiquidity(id);
+
+        // observeTWAP no longer reverts because the buffer still contains an observation at or
+        // before the 30-minute lookback target.
+        int24 meanTick = hook.observeTWAP(id, twapPeriod, currentTick, index, currentLiquidity, cardinality);
+        meanTick;
     }
 
     // ---------------------------------------------------------------

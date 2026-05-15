@@ -189,6 +189,40 @@ contract BuybackCashOutMetadataIgnoredTest is JuiceboxHookTest {
         assertEq(metadataOnlySellTerminal.lastProjectId(), 123, "minimum order should route through the JB path");
     }
 
+    function test_metadataOnlySellPreviewMatchesLiveOutputAndRoutesThroughJB() public {
+        uint256 amountIn = 1 ether;
+        uint256 liveCashOutAmount = 1.02 ether;
+        _installMetadataOnlySellTerminal(liveCashOutAmount);
+        token0.approve(address(jbSwapRouter), amountIn);
+
+        // Metadata-only previews carry an already-net AMM sell amount (the sell-side hook spec has
+        // `amount = 0`, so the terminal never charges its fee). The preview must surface the live
+        // executable amount, not subtract the protocol fee a second time.
+        uint256 previewQuote = hook.calculateExpectedOutputFromSelling(
+            123, amountIn, address(token1), IJBTerminal(address(metadataOnlySellTerminal))
+        );
+        uint256 v4Quote = hook.estimateUniswapOutput(id, key, amountIn, true);
+
+        assertEq(previewQuote, liveCashOutAmount, "metadata-only preview surfaces the executable amount");
+        assertGt(previewQuote, v4Quote, "JB preview beats V4 once the double fee discount is removed");
+
+        uint256 balanceBefore = token1.balanceOf(address(this));
+        jbSwapRouter.swap(
+            key,
+            SwapParams({
+                zeroForOne: true,
+                // forge-lint: disable-next-line(unsafe-typecast)
+                amountSpecified: -int256(amountIn),
+                sqrtPriceLimitX96: TickMath.MIN_SQRT_PRICE + 1
+            }),
+            0
+        );
+        uint256 received = token1.balanceOf(address(this)) - balanceBefore;
+
+        assertEq(metadataOnlySellTerminal.lastProjectId(), 123, "router selected the JB hook path");
+        assertEq(received, liveCashOutAmount, "user received the executable JB hook output");
+    }
+
     function test_directJBCashOutCouldHaveSatisfiedTheSameMinimum() public {
         uint256 balanceBefore = token1.balanceOf(address(this));
         _installMetadataOnlySellTerminal(2 ether);
