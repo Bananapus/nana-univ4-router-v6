@@ -264,8 +264,16 @@ contract JBUniswapV4Hook is BaseHook {
                 _effectivePreviewCashOutAmount({reclaimAmount: grossReclaim, hookSpecifications: hookSpecifications});
             if (effectiveReclaim == 0) return 0;
 
-            // Deduct the protocol fee regardless of cash-out tax rate. Even at zero tax, the live terminal
-            // charges fees on fee-free surplus, so the preview must account for that to stay consistent.
+            // Metadata-only previews carry an executable `minimumSwapAmountOut` inside a buyback hook spec when
+            // `grossReclaim == 0`. That amount is the AMM sell-side proceeds, which bypass `_processFee` (the
+            // sell-side hook spec is created with `amount = 0`), so the metadata amount is ALREADY net of terminal
+            // fees. Subtracting `terminal.FEE()` again here would double-discount the JB route and silently push
+            // it below the V4 quote even when execution would have paid more.
+            if (grossReclaim == 0) return effectiveReclaim;
+
+            // Standard reclaim path: deduct the protocol fee regardless of cash-out tax rate. Even at zero tax,
+            // the live terminal charges fees on fee-free surplus, so the preview must account for that to stay
+            // consistent with executable behavior.
             uint256 fee;
             try IJBFeeTerminal(address(terminal)).FEE() returns (uint256 _fee) {
                 fee = _fee;
@@ -1146,6 +1154,27 @@ contract JBUniswapV4Hook is BaseHook {
         uint128 liquidity = poolManager.getLiquidity(poolId);
 
         ObservationState memory state = states[poolId];
+
+        // Preserve the 30-minute TWAP window when the buffer is at the configured cap. A fresh
+        // write would overwrite the current oldest slot, promoting the second-oldest into the new
+        // oldest position — so the window stays intact only when that second-oldest is at least
+        // TWAP_PERIOD old at the moment of the write. Without this guard, sustained sub-2s swap
+        // cadence (1024 slots / 1s) erases the entire window in under 17 minutes and forces
+        // `observeTWAP` into the predates-oldest revert, collapsing routing back to spot pricing
+        // exactly when TWAP protection matters most.
+        if (state.cardinality == MAX_TWAP_CARDINALITY) {
+            uint16 newOldestIndex;
+            unchecked {
+                newOldestIndex = (state.index + 2) % state.cardinality;
+            }
+            Oracle.Observation memory newOldest = observations[poolId][newOldestIndex];
+            // Only enforce the guard once that slot has been written for real — newly grown slots
+            // carry a sentinel `blockTimestamp = 1` and `initialized = false` until first written.
+            // forge-lint: disable-next-line(block-timestamp)
+            if (newOldest.initialized && uint32(block.timestamp) - newOldest.blockTimestamp < TWAP_PERIOD) {
+                return;
+            }
+        }
 
         // Auto-grow cardinality when at capacity to enable TWAP functionality
         // Grow when we're about to wrap around (index == cardinality - 1) and cardinality == cardinalityNext

@@ -77,6 +77,8 @@ The hook uses spot price before enough history exists for the configured TWAP lo
 
 The hook routes sell-side cash outs through itself so it can settle back into PoolManager. This is safe only because the hook is not meant to be a feeless address on terminals.
 
+Metadata-only sell previews (where `previewCashOutFrom` returns `reclaimAmount == 0` and an executable `minimumSwapAmountOut` lives inside the buyback hook spec metadata) carry an amount that is **already net of terminal fees** — the AMM sell-side hook spec is created with `amount = 0`, so the terminal never calls `_processFee` on that path. `calculateExpectedOutputFromSelling` accordingly skips the fee deduction when `grossReclaim == 0` to avoid double-discounting the metadata route. The standard `grossReclaim > 0` path still deducts the protocol fee.
+
 ### 8.4 Zero-tax sell-path routing can keep favoring Juicebox
 
 For zero-tax projects, repeated sell-side JB routing may remain structurally preferable because the per-token reclaim value does not decay through tax retention. That is an economic property of the configured project, not a routing bug.
