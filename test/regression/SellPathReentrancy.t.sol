@@ -139,7 +139,6 @@ contract MockJBControllerReentrancy {
             ownerMustSendPayouts: false,
             holdFees: false,
             scopeCashOutsToLocalBalances: true,
-            pauseCrossProjectFeeFreeInflows: false,
             useDataHookForPay: false,
             useDataHookForCashOut: useDataHookForCashOuts[projectId],
             dataHook: address(0),

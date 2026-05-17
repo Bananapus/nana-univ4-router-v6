@@ -98,8 +98,8 @@ contract CodexNemesisSellMetadataFeeUnderquoteTest is JuiceboxHookTest {
     /// @notice The metadata-only buyback sell preview returns `reclaimAmount == 0` and carries the executable
     /// `minimumSwapAmountOut` inside hook metadata. That metadata amount is ALREADY net of terminal fees because
     /// the AMM sell-side path bypasses `_processFee` (its hook spec carries `amount = 0`). The router previously
-    /// applied `terminal.FEE()` on top, double-discounting the metadata route and silently making JB look worse
-    /// than V4 even when JB would have paid out more. The fix skips the fee deduction when the effective amount
+    /// applied the standard terminal fee on top, double-discounting the metadata route and silently making JB look
+    /// worse than V4 even when JB would have paid out more. The fix skips the fee deduction when the effective amount
     /// came from metadata (i.e. `grossReclaim == 0`).
     function test_metadataBackedSellRouteWinsAfterFix() public {
         uint256 amountIn = 1 ether;

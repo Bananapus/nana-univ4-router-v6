@@ -10,6 +10,7 @@ import {IJBTerminal} from "@bananapus/core-v6/src/interfaces/IJBTerminal.sol";
 import {IJBToken} from "@bananapus/core-v6/src/interfaces/IJBToken.sol";
 import {IJBTokens} from "@bananapus/core-v6/src/interfaces/IJBTokens.sol";
 import {JBConstants} from "@bananapus/core-v6/src/libraries/JBConstants.sol";
+import {JBFees} from "@bananapus/core-v6/src/libraries/JBFees.sol";
 import {JBRulesetMetadataResolver} from "@bananapus/core-v6/src/libraries/JBRulesetMetadataResolver.sol";
 
 import {JBCashOutHookSpecification} from "@bananapus/core-v6/src/structs/JBCashOutHookSpecification.sol";
@@ -266,16 +267,14 @@ contract JBUniswapV4Hook is BaseHook {
             // Metadata-only previews carry an executable `minimumSwapAmountOut` inside a buyback hook spec when
             // `grossReclaim == 0`. That amount is the AMM sell-side proceeds, which bypass `_processFee` (the
             // sell-side hook spec is created with `amount = 0`), so the metadata amount is ALREADY net of terminal
-            // fees. Subtracting `terminal.FEE()` again here would double-discount the JB route and silently push
-            // it below the V4 quote even when execution would have paid more.
+            // fees. Subtracting the standard fee again here would double-discount the JB route and silently push it
+            // below the V4 quote even when execution would have paid more.
             if (grossReclaim == 0) return effectiveReclaim;
 
             // Standard reclaim path: deduct the protocol fee regardless of cash-out tax rate. Even at zero tax,
             // the live terminal charges fees on fee-free surplus, so the preview must account for that to stay
-            // consistent with executable behavior. nana-core-v6 0.0.52 centralized `FEE` into `JBConstants.FEE`
-            // (compile-time constant), so the previous try/catch on `IJBFeeTerminal.FEE()` is no longer needed.
-            return effectiveReclaim
-                - FullMath.mulDiv({a: effectiveReclaim, b: JBConstants.FEE, denominator: JBConstants.MAX_FEE});
+            // consistent with executable behavior. The fee numerator is a compile-time constant in `JBConstants`.
+            return effectiveReclaim - JBFees.standardFeeAmountFrom(effectiveReclaim);
         } catch {
             // Conservative degrade rule: if the live preview surface is unavailable, do not resurrect the older
             // static reclaim estimate. Cash-out data hooks and terminal-specific logic can make that estimate stale,
