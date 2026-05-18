@@ -405,14 +405,14 @@ contract JBUniswapV4Hook is BaseHook {
         returns (uint256 estimatedOut)
     {
         // Get TWAP price instead of spot price to prevent manipulation
-        uint160 sqrtPriceX96TWAP = _getTWAPSqrtPrice(poolId);
+        uint160 sqrtPriceX96twap = _getTWAPSqrtPrice(poolId);
 
         // If TWAP is not available (not enough observations), fallback to spot price.
         // NOTE: Spot price is used as a fallback for newly created pools that lack sufficient TWAP history.
         // In this state, the estimate is susceptible to spot-price manipulation. Once the pool accumulates
         // enough observations for TWAP, this fallback is no longer used.
-        if (sqrtPriceX96TWAP == 0) {
-            (sqrtPriceX96TWAP,,,) = poolManager.getSlot0(poolId);
+        if (sqrtPriceX96twap == 0) {
+            (sqrtPriceX96twap,,,) = poolManager.getSlot0(poolId);
         }
 
         // Apply the combined swap fee (protocol fee + LP fee) to the input amount BEFORE the price-ratio
@@ -447,15 +447,15 @@ contract JBUniswapV4Hook is BaseHook {
         // Calculate price ratio from sqrtPriceX96, handling overflow for large values.
         // When sqrtPriceX96 <= type(uint128).max, we can square it directly (fits in uint256).
         // Otherwise, use FullMath.mulDiv to avoid overflow, at the cost of reduced precision.
-        if (sqrtPriceX96TWAP <= type(uint128).max) {
-            uint256 ratioX192 = uint256(sqrtPriceX96TWAP) * sqrtPriceX96TWAP;
+        if (sqrtPriceX96twap <= type(uint128).max) {
+            uint256 ratioX192 = uint256(sqrtPriceX96twap) * sqrtPriceX96twap;
             if (zeroForOne) {
                 estimatedOut = FullMath.mulDiv({a: amountInAfterFee, b: ratioX192, denominator: 1 << 192});
             } else {
                 estimatedOut = FullMath.mulDiv({a: amountInAfterFee, b: 1 << 192, denominator: ratioX192});
             }
         } else {
-            uint256 ratioX128 = FullMath.mulDiv({a: sqrtPriceX96TWAP, b: sqrtPriceX96TWAP, denominator: 1 << 64});
+            uint256 ratioX128 = FullMath.mulDiv({a: sqrtPriceX96twap, b: sqrtPriceX96twap, denominator: 1 << 64});
             if (zeroForOne) {
                 estimatedOut = FullMath.mulDiv({a: amountInAfterFee, b: ratioX128, denominator: 1 << 128});
             } else {
@@ -715,22 +715,22 @@ contract JBUniswapV4Hook is BaseHook {
         uint256 tokenOutProjectId = TOKENS.projectIdOf(IJBToken(tokenOut));
 
         // Determine if we're buying or selling JB tokens
-        bool isSellingJBToken = tokenInProjectId != 0;
-        bool isBuyingJBToken = tokenOutProjectId != 0;
+        bool isSellingJbToken = tokenInProjectId != 0;
+        bool isBuyingJbToken = tokenOutProjectId != 0;
 
         // When both tokens are JB tokens, each side has its own project ID.
         // Use separate variables to avoid confusing buy-side and sell-side contexts.
         // Buying uses tokenOutProjectId (the project whose token we're acquiring).
         // Selling uses tokenInProjectId (the project whose token we're cashing out).
-        uint256 buyProjectId = isBuyingJBToken ? tokenOutProjectId : 0;
-        uint256 sellProjectId = isSellingJBToken ? tokenInProjectId : 0;
+        uint256 buyProjectId = isBuyingJbToken ? tokenOutProjectId : 0;
+        uint256 sellProjectId = isSellingJbToken ? tokenInProjectId : 0;
 
         uint256 buySideExpectedOutput;
         uint256 sellSideExpectedOutput;
         IJBTerminal buySideTerminal;
         IJBTerminal sellSideTerminal;
 
-        if (isBuyingJBToken) {
+        if (isBuyingJbToken) {
             buySideTerminal = _getPrimaryTerminal({projectId: buyProjectId, token: tokenIn});
             // Buying JB tokens: compare Juicebox vs Uniswap for getting JB tokens.
             // Prefer previewPayFor because it reflects live terminal execution semantics.
@@ -763,7 +763,7 @@ contract JBUniswapV4Hook is BaseHook {
             }
         }
 
-        if (isSellingJBToken) {
+        if (isSellingJbToken) {
             sellSideTerminal = _getPrimaryTerminal({projectId: sellProjectId, token: tokenOut});
             // Selling JB tokens: compare Juicebox vs Uniswap for getting output tokens
             // NOTE: When cashOutTaxRate == 0, the bonding curve is linear — each token redeems for its
@@ -778,7 +778,7 @@ contract JBUniswapV4Hook is BaseHook {
             });
         }
 
-        if (!isBuyingJBToken && !isSellingJBToken) {
+        if (!isBuyingJbToken && !isSellingJbToken) {
             // No JB token involved, proceed with normal Uniswap swap
             emit RouteSelected({poolId: poolId, useJuicebox: false, expectedTokens: 0, caller: msg.sender});
             return (BaseHook.beforeSwap.selector, BeforeSwapDeltaLibrary.ZERO_DELTA, 0);
