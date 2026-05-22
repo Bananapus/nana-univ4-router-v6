@@ -84,7 +84,8 @@ contract RevertingSellPreviewTerminal {
         address tokenToReclaim,
         uint256 minTokensReclaimed,
         address payable beneficiary,
-        bytes calldata
+        bytes calldata,
+        uint256 /* referralProjectId */
     )
         external
         returns (uint256)
@@ -222,7 +223,7 @@ contract RegressionSellPreviewFallbackTest is Test {
             123, amountIn, address(paymentToken), IJBTerminal(address(mockTerminal))
         );
         uint256 liveCashOutOutput = mockTerminal.cashOutTokensOf(
-            address(this), 123, amountIn, address(paymentToken), 0, payable(address(this)), bytes("")
+            address(this), 123, amountIn, address(paymentToken), 0, payable(address(this)), bytes(""), 0
         );
 
         assertEq(quotedSellOutput, 0, "preview revert zeroes the JB sell quote");

@@ -2049,7 +2049,8 @@ contract JBUniswapV4HookForkTest is Test {
                 tokenToReclaim: JBConstants.NATIVE_TOKEN,
                 minTokensReclaimed: 0,
                 beneficiary: payable(user),
-                metadata: ""
+                metadata: "",
+                referralProjectId: 0
             });
         }
 
