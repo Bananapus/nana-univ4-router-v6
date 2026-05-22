@@ -114,7 +114,8 @@ contract MetadataOnlySellPreviewTerminal {
         address tokenToReclaim,
         uint256 minTokensReclaimed,
         address payable beneficiary,
-        bytes calldata
+        bytes calldata,
+        uint256 /* referralProjectId */
     )
         external
         returns (uint256)
