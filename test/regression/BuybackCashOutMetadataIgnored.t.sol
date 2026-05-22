@@ -229,7 +229,7 @@ contract BuybackCashOutMetadataIgnoredTest is JuiceboxHookTest {
         _installMetadataOnlySellTerminal(2 ether);
 
         uint256 reclaimed = metadataOnlySellTerminal.cashOutTokensOf(
-            address(this), 123, 1 ether, address(token1), 1.5 ether, payable(address(this)), bytes("")
+            address(this), 123, 1 ether, address(token1), 1.5 ether, payable(address(this)), bytes(""), 0
         );
 
         assertEq(reclaimed, 2 ether, "terminal itself can satisfy the minimum");
