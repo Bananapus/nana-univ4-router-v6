@@ -99,7 +99,8 @@ contract MetadataOnlySellPreviewTerminal {
                 int24(0),
                 uint128(0),
                 PoolId.wrap(bytes32(0)),
-                _liveCashOutAmount
+                _liveCashOutAmount,
+                false
             )
         });
 
