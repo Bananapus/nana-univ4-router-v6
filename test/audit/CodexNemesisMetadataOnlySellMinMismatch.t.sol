@@ -17,6 +17,7 @@ import {IJBTerminal} from "@bananapus/core-v6/src/interfaces/IJBTerminal.sol";
 
 contract CoreLikeMetadataOnlySellTerminal {
     uint256 internal immutable _hookDeliveredAmount;
+    uint256 public lastProjectId;
 
     constructor(uint256 hookDeliveredAmount) {
         _hookDeliveredAmount = hookDeliveredAmount;
@@ -102,7 +103,7 @@ contract CoreLikeMetadataOnlySellTerminal {
 
     function cashOutTokensOf(
         address,
-        uint256,
+        uint256 projectId,
         uint256,
         address tokenToReclaim,
         uint256 minTokensReclaimed,
@@ -113,6 +114,7 @@ contract CoreLikeMetadataOnlySellTerminal {
         external
         returns (uint256 reclaimAmount)
     {
+        lastProjectId = projectId;
         MockERC20(tokenToReclaim).mint(beneficiary, _hookDeliveredAmount);
 
         // Mirrors JBMultiTerminal.cashOutTokensOf(): minTokensReclaimed is checked against direct reclaimAmount,
@@ -122,10 +124,9 @@ contract CoreLikeMetadataOnlySellTerminal {
 }
 
 contract CodexNemesisMetadataOnlySellMinMismatchTest is JuiceboxHookTest {
-    function test_metadataOnlySellRouteRevertsWhenUserSetsPositiveMin() public {
+    function test_unsupportedMetadataOnlySellShapeIsIgnoredForRouting() public {
         uint256 amountIn = 1 ether;
         uint256 hookDeliveredAmount = 2 ether;
-        uint256 amountOutMin = 1.5 ether;
 
         CoreLikeMetadataOnlySellTerminal terminal = new CoreLikeMetadataOnlySellTerminal(hookDeliveredAmount);
         mockJBDirectory.setMockTerminal(address(terminal));
@@ -136,18 +137,22 @@ contract CodexNemesisMetadataOnlySellMinMismatchTest is JuiceboxHookTest {
             outputToken: address(token1),
             terminal: IJBTerminal(address(terminal))
         });
-        assertEq(quote, hookDeliveredAmount, "metadata-only preview makes the JB route look executable");
+        assertEq(quote, 0, "unsupported metadata shape must not influence routing");
 
         token0.approve(address(jbSwapRouter), amountIn);
+        uint256 balanceBefore = token1.balanceOf(address(this));
 
-        // PoolManager wraps hook reverts, so the exact revert bytes are asserted in the trace rather than here.
-        vm.expectRevert();
         jbSwapRouter.swap(
             key,
             SwapParams({
                 zeroForOne: true, amountSpecified: -int256(amountIn), sqrtPriceLimitX96: TickMath.MIN_SQRT_PRICE + 1
             }),
-            amountOutMin
+            0
         );
+
+        uint256 received = token1.balanceOf(address(this)) - balanceBefore;
+
+        assertEq(terminal.lastProjectId(), 0, "unsupported metadata-only cash-out must not be routed through JB");
+        assertGt(received, 0, "fallback V4 route should execute");
     }
 }

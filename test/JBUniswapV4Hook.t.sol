@@ -475,7 +475,7 @@ contract MockJBTerminalStore {
                 metadata: _cashOutTaxedRulesetMetadata()
             }),
             reclaimAmount,
-            0,
+            1,
             new JBCashOutHookSpecification[](0)
         );
     }

@@ -258,10 +258,14 @@ contract JBUniswapV4Hook is BaseHook {
             beneficiary: payable(address(this)),
             metadata: bytes("")
         }) returns (
-            JBRuleset memory, uint256 grossReclaim, uint256, JBCashOutHookSpecification[] memory hookSpecifications
+            JBRuleset memory,
+            uint256 grossReclaim,
+            uint256 cashOutTaxRate,
+            JBCashOutHookSpecification[] memory hookSpecifications
         ) {
-            uint256 effectiveReclaim =
-                _effectivePreviewCashOutAmount({reclaimAmount: grossReclaim, hookSpecifications: hookSpecifications});
+            uint256 effectiveReclaim = _effectivePreviewCashOutAmount({
+                reclaimAmount: grossReclaim, hookSpecifications: hookSpecifications
+            });
             if (effectiveReclaim == 0) return 0;
 
             // Metadata-only previews carry an executable `minimumSwapAmountOut` inside a buyback hook spec when
@@ -271,9 +275,13 @@ contract JBUniswapV4Hook is BaseHook {
             // below the V4 quote even when execution would have paid more.
             if (grossReclaim == 0) return effectiveReclaim;
 
-            // Standard reclaim path: deduct the protocol fee regardless of cash-out tax rate. Even at zero tax,
-            // the live terminal charges fees on fee-free surplus, so the preview must account for that to stay
-            // consistent with executable behavior. The fee numerator is a compile-time constant in `JBConstants`.
+            // Zero-tax cash-out previews should not get a blanket standard-fee haircut. Cash-out hooks receive
+            // `beneficiaryIsFeeless` in their preview context, and terminal-specific fee-free-surplus state is not
+            // exposed here; treating every zero-tax reclaim as feeable silently under-ranks executable JB cash-outs.
+            if (cashOutTaxRate == 0) return effectiveReclaim;
+
+            // Positive-tax standard reclaim path: core terminals charge the standard protocol fee on the full reclaim
+            // amount for non-feeless beneficiaries. Use the conservative fee-discounted quote for route comparison.
             return effectiveReclaim - JBFees.standardFeeAmountFrom(effectiveReclaim);
         } catch {
             // Conservative degrade rule: if the live preview surface is unavailable, do not resurrect the older
@@ -920,16 +928,18 @@ contract JBUniswapV4Hook is BaseHook {
             JBCashOutHookSpecification memory specification = hookSpecifications[i];
 
             // Current buyback cash-out metadata is eight words. Word 0 is the executable floor; word 6 is a diagnostic
-            // raw quote that can overstate what execution can prove; word 7 only says whether the floor was user
-            // supplied.
+            // raw quote that can overstate what execution can prove; word 7 says whether the floor was user supplied.
+            // A derived metadata floor with no quote behind it is not an executable buyback preview, so ignore it.
             // Ignore every other payload shape so unrelated hooks cannot accidentally influence routing.
             if (!specification.noop && specification.metadata.length == 8 * 32) {
-                (uint256 minimumSwapAmountOut,,,,,,,) = abi.decode(
+                (uint256 minimumSwapAmountOut,,,,,, uint256 rawSwapQuote, bool hasUserSpecifiedMinimum) = abi.decode(
                     specification.metadata, (uint256, uint256, uint256, int24, uint128, bytes32, uint256, bool)
                 );
 
                 // Multiple hook specs are possible; keep the strongest executable output.
-                if (minimumSwapAmountOut > effectiveReclaimAmount) effectiveReclaimAmount = minimumSwapAmountOut;
+                if ((rawSwapQuote != 0 || hasUserSpecifiedMinimum) && minimumSwapAmountOut > effectiveReclaimAmount) {
+                    effectiveReclaimAmount = minimumSwapAmountOut;
+                }
             }
 
             unchecked {
