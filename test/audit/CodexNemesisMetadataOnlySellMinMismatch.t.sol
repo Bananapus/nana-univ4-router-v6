@@ -88,7 +88,14 @@ contract CoreLikeMetadataOnlySellTerminal {
             noop: false,
             amount: 0,
             metadata: abi.encode(
-                _hookDeliveredAmount, uint256(0), uint256(0), int24(0), uint128(0), PoolId.wrap(bytes32(0)), uint256(0)
+                _hookDeliveredAmount,
+                uint256(0),
+                uint256(0),
+                int24(0),
+                uint128(0),
+                PoolId.wrap(bytes32(0)),
+                uint256(0),
+                false
             )
         });
     }
