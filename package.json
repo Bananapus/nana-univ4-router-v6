@@ -1,6 +1,6 @@
 {
   "name": "@bananapus/univ4-router-v6",
-  "version": "0.0.36",
+  "version": "0.0.37",
   "license": "MIT",
   "repository": {
     "type": "git",
@@ -10,8 +10,7 @@
     "foundry.toml",
     "references/",
     "remappings.txt",
-    "script/Deploy.s.sol",
-    "script/helpers/",
+    "script/",
     "src/"
   ],
   "engines": {
