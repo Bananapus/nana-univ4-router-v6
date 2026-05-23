@@ -1,29 +1,24 @@
 // SPDX-License-Identifier: MIT
 pragma solidity 0.8.28;
 
-import {TickMath} from "@uniswap/v4-core/src/libraries/TickMath.sol";
-import {PoolId} from "@uniswap/v4-core/src/types/PoolId.sol";
-import {SwapParams} from "@uniswap/v4-core/src/types/PoolOperation.sol";
-
 import {IJBTerminal} from "@bananapus/core-v6/src/interfaces/IJBTerminal.sol";
 import {IJBCashOutHook} from "@bananapus/core-v6/src/interfaces/IJBCashOutHook.sol";
 import {IJBRulesetApprovalHook} from "@bananapus/core-v6/src/interfaces/IJBRulesetApprovalHook.sol";
 import {JBCashOutHookSpecification} from "@bananapus/core-v6/src/structs/JBCashOutHookSpecification.sol";
 import {JBRuleset} from "@bananapus/core-v6/src/structs/JBRuleset.sol";
+import {PoolId} from "@uniswap/v4-core/src/types/PoolId.sol";
+import {SwapParams} from "@uniswap/v4-core/src/types/PoolOperation.sol";
+import {TickMath} from "@uniswap/v4-core/src/libraries/TickMath.sol";
 
 import {JuiceboxHookTest} from "../JBUniswapV4Hook.t.sol";
 import {MockERC20} from "../mock/MockERC20.sol";
 
-contract CodexNemesisMetadataSellTerminal {
+contract ActualBuybackMetadataLengthTerminal {
     uint256 internal immutable _liveCashOutAmount;
     uint256 public lastProjectId;
 
     constructor(uint256 liveCashOutAmount) {
         _liveCashOutAmount = liveCashOutAmount;
-    }
-
-    function FEE() external pure returns (uint256) {
-        return 25;
     }
 
     function previewCashOutFrom(
@@ -62,7 +57,7 @@ contract CodexNemesisMetadataSellTerminal {
             amount: 0,
             metadata: abi.encode(
                 _liveCashOutAmount,
-                uint256(0),
+                uint256(1 ether),
                 uint256(0),
                 int24(0),
                 uint128(0),
@@ -84,7 +79,7 @@ contract CodexNemesisMetadataSellTerminal {
         uint256 minTokensReclaimed,
         address payable beneficiary,
         bytes calldata,
-        uint256 /* referralProjectId */
+        uint256
     )
         external
         returns (uint256)
@@ -96,35 +91,32 @@ contract CodexNemesisMetadataSellTerminal {
     }
 }
 
-contract CodexNemesisSellMetadataFeeUnderquoteTest is JuiceboxHookTest {
-    /// @notice The metadata-only buyback sell preview returns `reclaimAmount == 0` and carries the executable
-    /// `minimumSwapAmountOut` inside hook metadata. That metadata amount is ALREADY net of terminal fees because
-    /// the AMM sell-side path bypasses `_processFee` (its hook spec carries `amount = 0`). The router previously
-    /// applied the standard terminal fee on top, double-discounting the metadata route and silently making JB look
-    /// worse than V4 even when JB would have paid out more. The fix skips the fee deduction when the effective amount
-    /// came from metadata (i.e. `grossReclaim == 0`).
-    function test_metadataBackedSellRouteWinsAfterFix() public {
+contract CodexNemesisActualBuybackMetadataLengthTest is JuiceboxHookTest {
+    function test_actualEightWordBuybackSellMetadataRoutesThroughJB() public {
         uint256 amountIn = 1 ether;
         uint256 liveCashOutAmount = 1.02 ether;
 
-        CodexNemesisMetadataSellTerminal terminal = new CodexNemesisMetadataSellTerminal(liveCashOutAmount);
+        ActualBuybackMetadataLengthTerminal terminal = new ActualBuybackMetadataLengthTerminal(liveCashOutAmount);
         mockJBDirectory.setMockTerminal(address(terminal));
 
-        uint256 routerPreview =
-            hook.calculateExpectedOutputFromSelling(123, amountIn, address(token1), IJBTerminal(address(terminal)));
-        uint256 v4Quote = hook.estimateUniswapOutput(id, key, amountIn, true);
+        uint256 preview = hook.calculateExpectedOutputFromSelling({
+            projectId: 123,
+            tokenAmountIn: amountIn,
+            outputToken: address(token1),
+            terminal: IJBTerminal(address(terminal))
+        });
+        uint256 v4Quote = hook.estimateUniswapOutput({poolId: id, key: key, amountIn: amountIn, zeroForOne: true});
 
-        assertEq(routerPreview, liveCashOutAmount, "router preview must reflect the executable metadata amount as-is");
-        assertLt(v4Quote, routerPreview, "JB metadata route should rank ahead of V4 when it pays out more");
+        assertEq(preview, liveCashOutAmount, "router decodes the current 8-word buyback metadata");
+        assertLt(v4Quote, preview, "the metadata-backed JB route should rank ahead of V4");
 
         token0.approve(address(jbSwapRouter), amountIn);
         uint256 balanceBefore = token1.balanceOf(address(this));
-
         jbSwapRouter.swap(
             key,
             SwapParams({
                 zeroForOne: true,
-                // The PoC amount is a small constant and fits safely in int256.
+                // Safe: amountIn is a fixed 1 ether test constant.
                 // forge-lint: disable-next-line(unsafe-typecast)
                 amountSpecified: -int256(amountIn),
                 sqrtPriceLimitX96: TickMath.MIN_SQRT_PRICE + 1
@@ -133,8 +125,7 @@ contract CodexNemesisSellMetadataFeeUnderquoteTest is JuiceboxHookTest {
         );
 
         uint256 received = token1.balanceOf(address(this)) - balanceBefore;
-
-        assertEq(terminal.lastProjectId(), 123, "router must route through the JB metadata sell path");
-        assertGe(received, liveCashOutAmount, "user must receive at least the executable JB metadata amount");
+        assertEq(terminal.lastProjectId(), 123, "router must use the JB sell route");
+        assertGe(received, liveCashOutAmount, "user receives the executable metadata-backed JB output");
     }
 }
