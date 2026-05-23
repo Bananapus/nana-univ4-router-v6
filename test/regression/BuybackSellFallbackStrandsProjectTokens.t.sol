@@ -7,7 +7,6 @@ import {IJBTerminal} from "@bananapus/core-v6/src/interfaces/IJBTerminal.sol";
 import {IJBRulesetApprovalHook} from "@bananapus/core-v6/src/interfaces/IJBRulesetApprovalHook.sol";
 import {JBCashOutHookSpecification} from "@bananapus/core-v6/src/structs/JBCashOutHookSpecification.sol";
 import {JBPayHookSpecification} from "@bananapus/core-v6/src/structs/JBPayHookSpecification.sol";
-import {JBFees} from "@bananapus/core-v6/src/libraries/JBFees.sol";
 import {JBRuleset} from "@bananapus/core-v6/src/structs/JBRuleset.sol";
 
 import {JuiceboxHookTest} from "../JBUniswapV4Hook.t.sol";
@@ -118,11 +117,7 @@ contract BuybackSellFallbackStrandsProjectTokensTest is JuiceboxHookTest {
         uint256 previewQuote = hook.calculateExpectedOutputFromSelling(
             123, amountIn, address(token1), IJBTerminal(address(sellFallbackTerminal))
         );
-        assertEq(
-            previewQuote,
-            2 ether - JBFees.standardFeeAmountFrom(2 ether),
-            "preview should make the JB sell route look best"
-        );
+        assertEq(previewQuote, 2 ether, "zero-tax preview should make the JB sell route look best");
 
         uint256 userToken0Before = token0.balanceOf(address(this));
         uint256 userToken1Before = token1.balanceOf(address(this));

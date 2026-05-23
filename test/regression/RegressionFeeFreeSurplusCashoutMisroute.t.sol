@@ -138,7 +138,7 @@ contract FeeFreeSurplusLikeTerminal {
 contract RegressionFeeFreeSurplusCashoutMisrouteTest is JuiceboxHookTest {
     FeeFreeSurplusLikeTerminal internal feeFreeTerminal;
 
-    function test_zeroTaxFeeFreeSurplusCanRouteToJBBelowAvailableV4Output() public {
+    function test_zeroTaxFeeFreeSurplusRouteSettlesActualCashOutOutput() public {
         feeFreeTerminal = new FeeFreeSurplusLikeTerminal();
         mockJBDirectory.setMockTerminal(address(feeFreeTerminal));
 
@@ -171,8 +171,9 @@ contract RegressionFeeFreeSurplusCashoutMisrouteTest is JuiceboxHookTest {
         uint256 v4Received = token1.balanceOf(address(this)) - v4BalanceBefore;
         vm.revertToState(snapshot);
 
-        // With the fee always deducted in preview, set JB reclaim high enough so the
-        // post-fee preview (2 ether * 975/1000 = 1.95 ether) genuinely beats V4 (~0.997 ether).
+        // Keep the executable cash-out above V4 even if the terminal applies hidden fee-free-surplus accounting
+        // after preview. The router compares the zero-tax preview directly, then settlement reconciles the actual
+        // token balance returned by the terminal.
         uint256 previewBeforeFee = 2 ether;
         uint256 actualAfterFee = 1.95 ether;
         feeFreeTerminal.setReclaimAmounts({previewReclaim_: previewBeforeFee, actualReclaim_: actualAfterFee});
@@ -182,7 +183,7 @@ contract RegressionFeeFreeSurplusCashoutMisrouteTest is JuiceboxHookTest {
         uint256 jbReceived = token1.balanceOf(address(this)) - jbBalanceBefore;
 
         assertEq(feeFreeTerminal.lastProjectId(), 123, "preview made the hook choose JB cash-out");
-        assertEq(jbReceived, actualAfterFee, "cash-out execution deducted the fee-free-surplus fee");
-        assertGt(jbReceived, v4Received, "JB route is genuinely better after fee deduction");
+        assertEq(jbReceived, actualAfterFee, "settlement should use the actual token balance received");
+        assertGt(jbReceived, v4Received, "JB route is genuinely better after terminal-side accounting");
     }
 }

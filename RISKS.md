@@ -37,6 +37,9 @@ This file focuses on the routing, oracle, and composition risks in `JBUniswapV4H
 - **V4 estimates are approximate.** Large trades can diverge materially from the linearized V4 quote.
 - **Buy-side estimates depend on preview availability.** If the terminal cannot provide a usable preview, the hook intentionally makes the Juicebox buy path ineligible.
 - **Sell-side estimates are conservative.** If `previewCashOutFrom(...)` is unavailable or reverts, the hook intentionally declines JB sell routing instead of reviving older static reclaim math.
+- **Zero-tax sell previews rely on terminal/data-hook semantics.** Cash-out hooks receive `beneficiaryIsFeeless` in
+  their preview context, and the hook does not apply a blanket protocol-fee haircut to zero-tax previews. Final
+  settlement still measures the actual token balance delivered by the terminal.
 
 ## 4. MEV Surface
 
@@ -77,17 +80,29 @@ The hook uses spot price before enough history exists for the configured TWAP lo
 
 The hook routes sell-side cash outs through itself so it can settle back into PoolManager. This is safe only because the hook is not meant to be a feeless address on terminals.
 
-Metadata-only sell previews (where `previewCashOutFrom` returns `reclaimAmount == 0` and an executable `minimumSwapAmountOut` lives inside the buyback hook spec metadata) carry an amount that is **already net of terminal fees** — the AMM sell-side hook spec is created with `amount = 0`, so the terminal never calls `_processFee` on that path. `calculateExpectedOutputFromSelling` accordingly skips the fee deduction when `grossReclaim == 0` to avoid double-discounting the metadata route. The standard `grossReclaim > 0` path still deducts the protocol fee.
+Metadata-only sell previews (where `previewCashOutFrom` returns `reclaimAmount == 0` and an executable `minimumSwapAmountOut` lives inside the buyback hook spec metadata) carry an amount that is **already net of terminal fees** — the AMM sell-side hook spec is created with `amount = 0`, so the terminal never calls `_processFee` on that path. `calculateExpectedOutputFromSelling` accordingly skips the fee deduction when `grossReclaim == 0` to avoid double-discounting the metadata route. Standard `grossReclaim > 0` previews are fee-discounted only when the terminal reports a positive cash-out tax rate.
 
 ### 8.4 Zero-tax sell-path routing can keep favoring Juicebox
 
 For zero-tax projects, repeated sell-side JB routing may remain structurally preferable because the per-token reclaim value does not decay through tax retention. That is an economic property of the configured project, not a routing bug.
 
-### 8.5 Price impact ignorance in large V4 trades
+### 8.5 Zero-tax sell-preview assumptions
+
+`previewCashOutFrom(...)` does not expose whether a zero-tax cash-out will be charged against
+`JBMultiTerminal._feeFreeSurplusOf`. The router therefore does not try to infer that hidden counter by subtracting a
+full standard fee from every zero-tax preview. Instead, it treats the terminal/data-hook preview as the best available
+route-comparison quote, and `_routeThroughJuicebox(...)` settles only the actual token balance received from the
+terminal.
+
+This avoids under-ranking ordinary zero-tax cash-outs with no fee-free surplus. The residual composition risk is that
+a terminal with hidden fee-free-surplus accounting can deliver less than the gross zero-tax preview; callers should use
+`amountOutMin` for hard execution floors until a net-after-terminal-fees preview is exposed.
+
+### 8.6 Price impact ignorance in large V4 trades
 
 `estimateUniswapOutput()` uses a linear TWAP quote without liquidity-depth simulation. For large trades in shallow pools, the actual V4 execution price may be worse than the Juicebox issuance path. A full liquidity-depth check was deemed too complex for the routing hot path. `amountOutMin` slippage protection prevents worst-case execution.
 
-### 8.6 TWAP warmup spot-price fallback
+### 8.7 TWAP warmup spot-price fallback
 
 When the TWAP oracle has insufficient observation history (newly created pools, first ~30 minutes), `estimateUniswapOutput` falls back to the manipulable spot price. During this window, routing decisions may be suboptimal. Slippage protection (`amountOutMin`) prevents worst-case execution. This is documented in code and is a bounded startup condition.
 
