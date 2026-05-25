@@ -49,13 +49,10 @@ import {Oracle} from "./libraries/Oracle.sol";
 /// (cash out) swaps. Provides IGeomeanOracle-compatible `observe()` for TWAP queries by external contracts.
 /// @dev COMPOSITION WARNING — This hook is designed to serve as the ORACLE_HOOK for JBBuybackHook on the same V4
 /// pool.
-/// When the buyback hook attempts a swap, it flows through this hook's `_beforeSwap` routing logic. If the routing
-/// decision leads back to Juicebox (via `_routeThroughJuicebox`), the `_routing` reentrancy guard prevents infinite
-/// recursion and the buyback hook falls back to minting. Live buy-side routing trusts `previewPayFor(...)` when a
-/// terminal exposes it and treats preview failures as ineligible for Juicebox routing. Static weight math remains only
-/// an offchain/reference helper, so deployers must not treat it as proof that data-hook-adjusted projects are safe for
-/// live best-execution routing. Sell-side routing depends on `previewCashOutFrom(...)` and falls back to V4 when the
-/// preview is unavailable.
+/// When the buyback hook attempts a swap, it flows through this hook's `_beforeSwap` routing logic. Live routing only
+/// trusts direct terminal preview outputs. Buyback-hook metadata is ignored because it can send users through the same
+/// pool indirectly. Static weight math remains only an offchain/reference helper, so deployers must not treat it as
+/// proof that data-hook-adjusted projects are safe for live best-execution routing.
 contract JBUniswapV4Hook is BaseHook {
     using Oracle for Oracle.Observation[65_535];
     using PoolIdLibrary for PoolKey;
@@ -88,6 +85,9 @@ contract JBUniswapV4Hook is BaseHook {
 
     /// @notice Reverts when a nonzero Juicebox sell cash-out delivers no reclaim token.
     error JBUniswapV4Hook_JuiceboxSellDidNotDeliver(address inputToken, address outputToken, uint256 amountIn);
+
+    /// @notice Reverts when a Juicebox sell route returns or fails to consume exact-input project tokens.
+    error JBUniswapV4Hook_SellInputReturned(address token, uint256 balanceBefore, uint256 balanceAfter);
 
     /// @notice Reverts when a Juicebox output cannot fit inside Uniswap V4's signed delta accounting.
     /// @param amount The oversized output amount.
@@ -227,7 +227,6 @@ contract JBUniswapV4Hook is BaseHook {
     /// If previewing is unavailable or reverts, this helper intentionally returns `0` and makes the JB sell route
     /// ineligible. That conservative degrade rule avoids routing through JB on a stale static reclaim estimate that
     /// may disagree with the terminal's live cash-out path.
-    /// Buyback-hook metadata-only swap previews are already expressed as executable minimums.
     /// @dev NOTE: Fee calls are best-effort. If the terminal does not expose `FEE()`, the estimate falls back to the
     /// raw preview.
     /// @param projectId The Juicebox project ID
@@ -258,31 +257,20 @@ contract JBUniswapV4Hook is BaseHook {
             beneficiary: payable(address(this)),
             metadata: bytes("")
         }) returns (
-            JBRuleset memory,
-            uint256 grossReclaim,
-            uint256 cashOutTaxRate,
-            JBCashOutHookSpecification[] memory hookSpecifications
+            JBRuleset memory, uint256 grossReclaim, uint256 cashOutTaxRate, JBCashOutHookSpecification[] memory
         ) {
-            uint256 effectiveReclaim = _effectivePreviewCashOutAmount({
-                reclaimAmount: grossReclaim, hookSpecifications: hookSpecifications
-            });
-            if (effectiveReclaim == 0) return 0;
-
-            // Metadata-only previews carry an executable `minimumSwapAmountOut` inside a buyback hook spec when
-            // `grossReclaim == 0`. That amount is the AMM sell-side proceeds, which bypass `_processFee` (the
-            // sell-side hook spec is created with `amount = 0`), so the metadata amount is ALREADY net of terminal
-            // fees. Subtracting the standard fee again here would double-discount the JB route and silently push it
-            // below the V4 quote even when execution would have paid more.
-            if (grossReclaim == 0) return effectiveReclaim;
+            if (grossReclaim == 0) {
+                return 0;
+            }
 
             // Zero-tax cash-out previews should not get a blanket standard-fee haircut. Cash-out hooks receive
             // `beneficiaryIsFeeless` in their preview context, and terminal-specific fee-free-surplus state is not
             // exposed here; treating every zero-tax reclaim as feeable silently under-ranks executable JB cash-outs.
-            if (cashOutTaxRate == 0) return effectiveReclaim;
+            if (cashOutTaxRate == 0) return grossReclaim;
 
             // Positive-tax standard reclaim path: core terminals charge the standard protocol fee on the full reclaim
             // amount for non-feeless beneficiaries. Use the conservative fee-discounted quote for route comparison.
-            return effectiveReclaim - JBFees.standardFeeAmountFrom(effectiveReclaim);
+            return grossReclaim - JBFees.standardFeeAmountFrom(grossReclaim);
         } catch {
             // Conservative degrade rule: if the live preview surface is unavailable, do not resurrect the older
             // static reclaim estimate. Cash-out data hooks and terminal-specific logic can make that estimate stale,
@@ -749,14 +737,9 @@ contract JBUniswapV4Hook is BaseHook {
                     beneficiary: address(this),
                     metadata: bytes("")
                 }) returns (
-                    JBRuleset memory,
-                    uint256 beneficiaryTokenCount,
-                    uint256,
-                    JBPayHookSpecification[] memory hookSpecifications
+                    JBRuleset memory, uint256 beneficiaryTokenCount, uint256, JBPayHookSpecification[] memory
                 ) {
-                    buySideExpectedOutput = _effectivePreviewPayBeneficiaryTokenCount({
-                        beneficiaryTokenCount: beneficiaryTokenCount, hookSpecifications: hookSpecifications
-                    });
+                    buySideExpectedOutput = beneficiaryTokenCount;
                 } catch {
                     // Preview failure means the live JB buy path is not trustworthy enough for best execution.
                     // Leave the quote at 0 so V4 remains available.
@@ -796,23 +779,20 @@ contract JBUniswapV4Hook is BaseHook {
         // Compare V4 vs Juicebox
         bool buySideAvailable = address(buySideTerminal) != address(0) && address(buySideTerminal).code.length > 0;
         bool sellSideAvailable = address(sellSideTerminal) != address(0) && address(sellSideTerminal).code.length > 0;
-        // When both sides are JB-aware, prefer the side with the strictly better expected Juicebox output.
+        // When both sides are JB-aware, compare only quotes that fit V4's signed-delta accounting domain.
         // Ties fall toward the buy side so the router stays deterministic and avoids evaluating both paths twice.
-        bool routeViaBuySide =
-            buySideAvailable && buySideExpectedOutput >= sellSideExpectedOutput && buySideExpectedOutput > 0;
-        bool routeViaSellSide =
-            sellSideAvailable && sellSideExpectedOutput > buySideExpectedOutput && sellSideExpectedOutput > 0;
+        bool buySideEligible = buySideAvailable && buySideExpectedOutput > 0 && buySideExpectedOutput <= MAX_V4_DELTA;
+        bool sellSideEligible =
+            sellSideAvailable && sellSideExpectedOutput > 0 && sellSideExpectedOutput <= MAX_V4_DELTA;
+        bool routeViaBuySide = buySideEligible && (!sellSideEligible || buySideExpectedOutput >= sellSideExpectedOutput);
+        bool routeViaSellSide = sellSideEligible && (!buySideEligible || sellSideExpectedOutput > buySideExpectedOutput);
         // Collapse the selected Juicebox side back into the single route payload consumed by _routeThroughJuicebox.
         uint256 juiceboxExpectedOutput = routeViaSellSide ? sellSideExpectedOutput : buySideExpectedOutput;
         IJBTerminal jbTerminal = routeViaSellSide ? sellSideTerminal : buySideTerminal;
         uint256 projectId = routeViaSellSide ? sellProjectId : buyProjectId;
-        // Uniswap V4 deltas are signed int128 values. Even if Juicebox would return more,
-        // the hook must treat over-cap quotes as ineligible and let the swap continue through V4.
-        bool juiceboxFitsV4Delta = juiceboxExpectedOutput <= MAX_V4_DELTA;
-        // Only route through Juicebox if the chosen JB side beats the best Uniswap quote
-        // and can still be represented by the downstream V4 accounting domain.
-        bool juiceboxBetterThanV4 = (routeViaBuySide || routeViaSellSide) && juiceboxFitsV4Delta
-            && juiceboxExpectedOutput > uniswapV4ExpectedTokens;
+        // Only route through Juicebox if the chosen eligible JB side beats the best Uniswap quote.
+        bool juiceboxBetterThanV4 =
+            (routeViaBuySide || routeViaSellSide) && juiceboxExpectedOutput > uniswapV4ExpectedTokens;
 
         emit BestRouteSelected({
             poolId: poolId,
@@ -827,6 +807,10 @@ contract JBUniswapV4Hook is BaseHook {
                 poolId: poolId, useJuicebox: true, expectedTokens: juiceboxExpectedOutput, caller: msg.sender
             });
 
+            uint256 routeMinimum = amountOutMin;
+            if (routeViaSellSide && juiceboxExpectedOutput > routeMinimum) {
+                routeMinimum = juiceboxExpectedOutput;
+            }
             uint256 outputReceived = _routeThroughJuicebox({
                 projectId: projectId,
                 inputCurrency: inputCurrency,
@@ -834,7 +818,7 @@ contract JBUniswapV4Hook is BaseHook {
                 amountIn: amountIn,
                 isBuying: routeViaBuySide,
                 terminal: jbTerminal,
-                amountOutMin: amountOutMin
+                amountOutMin: routeMinimum
             });
 
             return (BaseHook.beforeSwap.selector, _createSwapDelta({amountIn: amountIn, amountOut: outputReceived}), 0);
@@ -899,106 +883,6 @@ contract JBUniswapV4Hook is BaseHook {
             // forge-lint: disable-next-line(unsafe-typecast)
             deltaUnspecified: -int128(uint128(amountOut))
         });
-    }
-
-    /// @notice Normalize a cash-out preview into the reclaim amount used for route comparison.
-    /// @dev Standard cash-out previews return `reclaimAmount` directly. Metadata-only buyback previews can return
-    /// zero reclaim amount while carrying their executable `minimumSwapAmountOut` inside hook metadata. This matters
-    /// for programmatic callers that cannot supply an offchain quote: the router can still compare the executable
-    /// buyback floor that the terminal preview already committed to.
-    /// @param reclaimAmount The terminal-reported reclaim amount.
-    /// @param hookSpecifications The cash-out hook specifications returned by the terminal preview.
-    /// @return effectiveReclaimAmount The amount the router should compare against the Uniswap quote.
-    function _effectivePreviewCashOutAmount(
-        uint256 reclaimAmount,
-        JBCashOutHookSpecification[] memory hookSpecifications
-    )
-        internal
-        pure
-        returns (uint256 effectiveReclaimAmount)
-    {
-        // Nonzero terminal output is already the executable reclaim amount.
-        effectiveReclaimAmount = reclaimAmount;
-        if (reclaimAmount != 0) return effectiveReclaimAmount;
-
-        for (uint256 i; i < hookSpecifications.length;) {
-            JBCashOutHookSpecification memory specification = hookSpecifications[i];
-
-            // Current buyback cash-out metadata is eight words. Word 0 is the executable floor; word 6 is a diagnostic
-            // raw quote that can overstate what execution can prove; word 7 says whether the floor was user supplied.
-            // A derived metadata floor with no quote behind it is not an executable buyback preview, so ignore it.
-            // Ignore every other payload shape so unrelated hooks cannot accidentally influence routing.
-            if (!specification.noop && specification.metadata.length == 8 * 32) {
-                (uint256 minimumSwapAmountOut,,,,,, uint256 rawSwapQuote, bool hasUserSpecifiedMinimum) = abi.decode(
-                    specification.metadata, (uint256, uint256, uint256, int24, uint128, bytes32, uint256, bool)
-                );
-
-                // Multiple hook specs are possible; keep the strongest executable output.
-                if ((rawSwapQuote != 0 || hasUserSpecifiedMinimum) && minimumSwapAmountOut > effectiveReclaimAmount) {
-                    effectiveReclaimAmount = minimumSwapAmountOut;
-                }
-            }
-
-            unchecked {
-                ++i;
-            }
-        }
-    }
-
-    /// @notice Normalize a pay preview into the beneficiary token count used for route comparison.
-    /// @dev Standard pay previews return `beneficiaryTokenCount` directly. Metadata-only buyback previews can return
-    /// zero beneficiary tokens while carrying their executable `minimumBeneficiaryTokenCount` inside hook metadata.
-    /// This keeps contract-to-contract pay flows usable when no offchain quote was prepared.
-    /// @param beneficiaryTokenCount The terminal-reported beneficiary token count.
-    /// @param hookSpecifications The pay hook specifications returned by the terminal preview.
-    /// @return effectiveBeneficiaryTokenCount The token count the router should compare against the Uniswap quote.
-    function _effectivePreviewPayBeneficiaryTokenCount(
-        uint256 beneficiaryTokenCount,
-        JBPayHookSpecification[] memory hookSpecifications
-    )
-        internal
-        pure
-        returns (uint256 effectiveBeneficiaryTokenCount)
-    {
-        // Nonzero terminal output is already the executable beneficiary token count.
-        effectiveBeneficiaryTokenCount = beneficiaryTokenCount;
-        if (beneficiaryTokenCount != 0) return effectiveBeneficiaryTokenCount;
-
-        for (uint256 i; i < hookSpecifications.length;) {
-            JBPayHookSpecification memory specification = hookSpecifications[i];
-
-            // Buyback pay metadata is thirteen words; word 10 is the minimum beneficiary token count.
-            // Treat shorter, longer, or noop hook payloads as unrelated metadata.
-            if (!specification.noop && specification.metadata.length == 13 * 32) {
-                (,,,,,,,,,, uint256 minimumBeneficiaryTokenCount,,) = abi.decode(
-                    specification.metadata,
-                    (
-                        bool,
-                        uint256,
-                        uint256,
-                        bool,
-                        address,
-                        uint256,
-                        uint256,
-                        int24,
-                        uint128,
-                        bytes32,
-                        uint256,
-                        uint256,
-                        uint256
-                    )
-                );
-
-                // Multiple hook specs are possible; the strongest executable minimum is the safest route estimate.
-                if (minimumBeneficiaryTokenCount > effectiveBeneficiaryTokenCount) {
-                    effectiveBeneficiaryTokenCount = minimumBeneficiaryTokenCount;
-                }
-            }
-
-            unchecked {
-                ++i;
-            }
-        }
     }
 
     /// @notice Looks up the Juicebox terminal that handles a specific token for a project. Returns address(0) if the
@@ -1247,6 +1131,11 @@ contract JBUniswapV4Hook is BaseHook {
         address tokenIn = Currency.unwrap(inputCurrency);
         address tokenOut = Currency.unwrap(outputCurrency);
 
+        // On sell-side routes the hook takes exact-input project tokens from PoolManager. Those tokens must be fully
+        // consumed by the cash-out; otherwise a partial-fill hook can leave unsold project tokens stranded here.
+        uint256 inputBalanceBefore =
+            !isBuying && !inputCurrency.isAddressZero() ? IERC20(tokenIn).balanceOf(address(this)) : 0;
+
         // Pull the input that PoolManager already escrowed for this swap; the router can then pay or cash out in JB.
         poolManager.take({currency: inputCurrency, to: address(this), amount: amountIn});
 
@@ -1303,6 +1192,21 @@ contract JBUniswapV4Hook is BaseHook {
         uint256 balanceAfter =
             outputCurrency.isAddressZero() ? address(this).balance : IERC20(tokenOut).balanceOf(address(this));
         outputReceived = balanceAfter - balanceBefore;
+
+        // ERC-20 sell routes should end with the hook holding the same amount of input token it held before the swap.
+        // `poolManager.take()` temporarily moves the exact input project tokens here, and a valid JB cash-out burns or
+        // otherwise consumes all of them. Native ETH cannot be stranded as project-token input, so it is skipped.
+        if (!isBuying && !inputCurrency.isAddressZero()) {
+            uint256 inputBalanceAfter = IERC20(tokenIn).balanceOf(address(this));
+
+            // A changed balance means the terminal returned or failed to consume some exact-input project tokens while
+            // still delivering output. Revert before settlement so a partial-fill sell route cannot strand tokens here.
+            if (inputBalanceAfter != inputBalanceBefore) {
+                revert JBUniswapV4Hook_SellInputReturned({
+                    token: tokenIn, balanceBefore: inputBalanceBefore, balanceAfter: inputBalanceAfter
+                });
+            }
+        }
 
         // A nonzero sell that delivers no reclaim token is not a valid JB route. Revert instead of settling a
         // zero-output swap that appeared executable during preview.

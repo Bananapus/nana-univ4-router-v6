@@ -92,7 +92,7 @@ contract ActualBuybackMetadataLengthTerminal {
 }
 
 contract CodexNemesisActualBuybackMetadataLengthTest is JuiceboxHookTest {
-    function test_actualEightWordBuybackSellMetadataRoutesThroughJB() public {
+    function test_actualEightWordBuybackSellMetadataIsIgnoredForRouting() public {
         uint256 amountIn = 1 ether;
         uint256 liveCashOutAmount = 1.02 ether;
 
@@ -107,8 +107,8 @@ contract CodexNemesisActualBuybackMetadataLengthTest is JuiceboxHookTest {
         });
         uint256 v4Quote = hook.estimateUniswapOutput({poolId: id, key: key, amountIn: amountIn, zeroForOne: true});
 
-        assertEq(preview, liveCashOutAmount, "router decodes the current 8-word buyback metadata");
-        assertLt(v4Quote, preview, "the metadata-backed JB route should rank ahead of V4");
+        assertEq(preview, 0, "router ignores current 8-word buyback metadata");
+        assertLt(v4Quote, liveCashOutAmount, "direct JB output would beat V4");
 
         token0.approve(address(jbSwapRouter), amountIn);
         uint256 balanceBefore = token1.balanceOf(address(this));
@@ -125,7 +125,8 @@ contract CodexNemesisActualBuybackMetadataLengthTest is JuiceboxHookTest {
         );
 
         uint256 received = token1.balanceOf(address(this)) - balanceBefore;
-        assertEq(terminal.lastProjectId(), 123, "router must use the JB sell route");
-        assertGe(received, liveCashOutAmount, "user receives the executable metadata-backed JB output");
+        assertEq(terminal.lastProjectId(), 0, "router must skip the JB metadata sell route");
+        assertGt(received, 0, "swap should fall back to V4");
+        assertLt(received, liveCashOutAmount, "metadata-only preview must not steer route choice");
     }
 }

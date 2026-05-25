@@ -241,7 +241,7 @@ contract MockJBMultiTerminal_RegressionGaps {
     }
 
     function cashOutTokensOf(
-        address,
+        address holder,
         uint256 projectId,
         uint256 cashOutCount,
         address tokenToReclaim,
@@ -265,6 +265,11 @@ contract MockJBMultiTerminal_RegressionGaps {
         outputAmount = (surplusAmount * cashOutCount) / 1e18;
 
         require(outputAmount >= minTokensReclaimed, "Insufficient tokens reclaimed");
+
+        address projectToken = projectTokens[projectId];
+        if (projectToken != address(0) && cashOutCount != 0) {
+            MockERC20(projectToken).burn(holder, cashOutCount);
+        }
 
         if (outputAmount > 0) {
             MockERC20(tokenToReclaim).mint(beneficiary, outputAmount);

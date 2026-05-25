@@ -18,10 +18,15 @@ contract FeeFreeSurplusLikeTerminal {
     uint256 public previewReclaim;
     uint256 public actualReclaim;
     uint256 public lastProjectId;
+    address public projectToken;
 
     function setReclaimAmounts(uint256 previewReclaim_, uint256 actualReclaim_) external {
         previewReclaim = previewReclaim_;
         actualReclaim = actualReclaim_;
+    }
+
+    function setProjectToken(address projectToken_) external {
+        projectToken = projectToken_;
     }
 
     // forge-lint: disable-next-line(mixed-case-function)
@@ -116,9 +121,9 @@ contract FeeFreeSurplusLikeTerminal {
     }
 
     function cashOutTokensOf(
-        address,
+        address holder,
         uint256 projectId,
-        uint256,
+        uint256 cashOutCount,
         address tokenToReclaim,
         uint256 minTokensReclaimed,
         address payable beneficiary,
@@ -130,6 +135,9 @@ contract FeeFreeSurplusLikeTerminal {
     {
         require(actualReclaim >= minTokensReclaimed, "min reclaim");
         lastProjectId = projectId;
+        if (projectToken != address(0) && cashOutCount != 0) {
+            MockERC20(projectToken).burn(holder, cashOutCount);
+        }
         MockERC20(tokenToReclaim).mint(beneficiary, actualReclaim);
         return actualReclaim;
     }
@@ -140,6 +148,7 @@ contract RegressionFeeFreeSurplusCashoutMisrouteTest is JuiceboxHookTest {
 
     function test_zeroTaxFeeFreeSurplusRouteSettlesActualCashOutOutput() public {
         feeFreeTerminal = new FeeFreeSurplusLikeTerminal();
+        feeFreeTerminal.setProjectToken(address(token0));
         mockJBDirectory.setMockTerminal(address(feeFreeTerminal));
 
         token0.mint(address(this), 10_000 ether);
@@ -171,19 +180,17 @@ contract RegressionFeeFreeSurplusCashoutMisrouteTest is JuiceboxHookTest {
         uint256 v4Received = token1.balanceOf(address(this)) - v4BalanceBefore;
         vm.revertToState(snapshot);
 
-        // Keep the executable cash-out above V4 even if the terminal applies hidden fee-free-surplus accounting
-        // after preview. The router compares the zero-tax preview directly, then settlement reconciles the actual
-        // token balance returned by the terminal.
-        uint256 previewBeforeFee = 2 ether;
-        uint256 actualAfterFee = 1.95 ether;
-        feeFreeTerminal.setReclaimAmounts({previewReclaim_: previewBeforeFee, actualReclaim_: actualAfterFee});
+        // Keep the executable cash-out above V4. The router should compare the zero-tax preview directly without
+        // applying the standard fee discount.
+        uint256 zeroTaxReclaim = 1.95 ether;
+        feeFreeTerminal.setReclaimAmounts({previewReclaim_: zeroTaxReclaim, actualReclaim_: zeroTaxReclaim});
 
         uint256 jbBalanceBefore = token1.balanceOf(address(this));
         jbSwapRouter.swap(key, params, 0);
         uint256 jbReceived = token1.balanceOf(address(this)) - jbBalanceBefore;
 
         assertEq(feeFreeTerminal.lastProjectId(), 123, "preview made the hook choose JB cash-out");
-        assertEq(jbReceived, actualAfterFee, "settlement should use the actual token balance received");
-        assertGt(jbReceived, v4Received, "JB route is genuinely better after terminal-side accounting");
+        assertEq(jbReceived, zeroTaxReclaim, "settlement should use the actual token balance received");
+        assertGt(jbReceived, v4Received, "JB route is genuinely better than V4");
     }
 }

@@ -8,9 +8,9 @@ import {IJBTerminal} from "@bananapus/core-v6/src/interfaces/IJBTerminal.sol";
 import {BuybackCashOutMetadataIgnoredTest} from "../regression/BuybackCashOutMetadataIgnored.t.sol";
 
 contract CodexNemesisBuybackSellMetadataUnderquoteTest is BuybackCashOutMetadataIgnoredTest {
-    /// @notice Metadata-only sell previews surface the executable amount as-is. When the JB route pays more than the
-    /// V4 spot quote, the router must route through JB instead of misrouting to V4.
-    function test_metadataBackedSellRouteWinsAfterFix() public {
+    /// @notice Metadata-only sell previews are ignored for route choice even when a direct terminal call would pay
+    /// more.
+    function test_metadataBackedSellRouteStaysIneligible() public {
         uint256 amountIn = 1 ether;
         uint256 liveCashOutAmount = 1.02 ether;
 
@@ -25,8 +25,8 @@ contract CodexNemesisBuybackSellMetadataUnderquoteTest is BuybackCashOutMetadata
         });
         uint256 v4Quote = hook.estimateUniswapOutput({poolId: id, key: key, amountIn: amountIn, zeroForOne: true});
 
-        assertEq(previewQuote, liveCashOutAmount, "preview must reflect the executable metadata amount");
-        assertGt(previewQuote, v4Quote, "JB metadata route must rank ahead of V4 when it pays more");
+        assertEq(previewQuote, 0, "metadata-only preview must not influence routing");
+        assertGt(liveCashOutAmount, v4Quote, "direct JB output would beat V4");
 
         uint256 balanceBefore = token1.balanceOf(address(this));
         jbSwapRouter.swap({
@@ -42,7 +42,8 @@ contract CodexNemesisBuybackSellMetadataUnderquoteTest is BuybackCashOutMetadata
         });
         uint256 received = token1.balanceOf(address(this)) - balanceBefore;
 
-        assertEq(metadataOnlySellTerminal.lastProjectId(), 123, "router must execute the JB metadata sell path");
-        assertGe(received, liveCashOutAmount, "user must receive at least the executable JB metadata amount");
+        assertEq(metadataOnlySellTerminal.lastProjectId(), 0, "router must skip the JB metadata sell path");
+        assertGt(received, 0, "swap should fall back to V4");
+        assertLt(received, liveCashOutAmount, "metadata-only preview must not steer route choice");
     }
 }

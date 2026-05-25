@@ -285,9 +285,9 @@ contract FeeOnTransferTerminalSell {
 
     /// @notice Accepts cashOut, returns reportedAmount but only mints actualAmount of output token.
     function cashOutTokensOf(
-        address,
+        address holder,
         uint256 projectId,
-        uint256,
+        uint256 cashOutCount,
         address,
         uint256,
         address payable beneficiary,
@@ -298,6 +298,11 @@ contract FeeOnTransferTerminalSell {
         returns (uint256)
     {
         lastCashOutProjectId = projectId;
+
+        address projectToken = projectTokens[projectId];
+        if (projectToken != address(0) && cashOutCount != 0) {
+            MockERC20(projectToken).burn(holder, cashOutCount);
+        }
 
         // Actually mint only the reduced amount.
         if (outputToken != address(0) && actualAmount > 0) {
@@ -549,8 +554,8 @@ contract BalanceDeltaSettlement_BuyTest is Test {
 // ═══════════════════════════════════════════════════════════════════════
 
 /// @title BalanceDeltaSettlement_SellTest
-/// @notice Verifies that when a terminal reports returning X tokens from cashOutTokensOf() but
-///         only delivers Y < X output tokens, the hook settles Y instead of X.
+/// @notice Verifies that when a terminal previews returning X tokens from cashOutTokensOf() but only delivers
+///         Y < X output tokens, the hook reverts instead of settling a lower-output sell route.
 contract BalanceDeltaSettlement_SellTest is Test {
     receive() external payable {}
 
@@ -687,11 +692,12 @@ contract BalanceDeltaSettlement_SellTest is Test {
         );
     }
 
-    /// @notice When a terminal reports returning 2e18 tokens from cashOut but only mints 1.8e18
-    ///         (simulating fee-on-transfer), the hook should settle the actual 1.8e18.
-    function test_SellSide_FeeOnTransfer_SettlesActualBalance() public {
+    /// @notice When a terminal previews returning 2e18 tokens from cashOut but only mints 1.8e18
+    ///         (simulating fee-on-transfer), the hook should revert instead of settling an under-filled sell route.
+    function test_SellSide_FeeOnTransfer_RevertsWhenActualOutputBelowPreview() public {
         uint256 amountIn = 1 ether; // selling 1 ether of project tokens
 
+        uint256 projectTokenBefore = projectToken.balanceOf(address(this));
         uint256 paymentTokenBefore = paymentToken.balanceOf(address(this));
 
         SwapParams memory params = SwapParams({
@@ -701,16 +707,13 @@ contract BalanceDeltaSettlement_SellTest is Test {
             sqrtPriceLimitX96: zeroForOne ? TickMath.MIN_SQRT_PRICE + 1 : TickMath.MAX_SQRT_PRICE - 1
         });
 
+        vm.expectRevert();
         jbSwapRouter.swap(key, params, 0);
 
-        uint256 paymentTokenAfter = paymentToken.balanceOf(address(this));
-
-        // Verify the terminal was called.
-        assertEq(fotTerminal.lastCashOutProjectId(), PROJECT_ID, "Terminal should have been called for cashOut");
-
-        // User should have received ACTUAL_AMOUNT, not REPORTED_AMOUNT.
-        uint256 tokensReceived = paymentTokenAfter - paymentTokenBefore;
-        assertEq(tokensReceived, ACTUAL_AMOUNT, "User should receive the actual minted amount, not the reported amount");
-        assertTrue(tokensReceived < REPORTED_AMOUNT, "Received amount must be less than the inflated reported amount");
+        assertEq(fotTerminal.lastCashOutProjectId(), 0, "terminal effects should revert");
+        assertEq(projectToken.balanceOf(address(this)), projectTokenBefore, "user should keep project tokens");
+        assertEq(
+            paymentToken.balanceOf(address(this)), paymentTokenBefore, "user should receive no under-filled output"
+        );
     }
 }
