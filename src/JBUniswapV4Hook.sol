@@ -51,11 +51,11 @@ import {Oracle} from "./libraries/Oracle.sol";
 /// pool.
 /// When the buyback hook attempts a swap, it flows through this hook's `_beforeSwap` routing logic. If the routing
 /// decision leads back to Juicebox (via `_routeThroughJuicebox`), the `_routing` reentrancy guard prevents infinite
-/// recursion and the buyback hook falls back to minting. This weight comparison uses static issuance weight while
-/// the buyback hook uses TWAP-derived estimates, so the two may occasionally disagree on routing. Buy-side routing
-/// remains incompatible with projects whose data hooks override pay weight, and sell-side routing is intentionally
-/// disabled for projects whose data hooks override cash-out economics. Deployers MUST keep those composition limits
-/// in mind when choosing this hook for best-execution routing.
+/// recursion and the buyback hook falls back to minting. Live buy-side routing trusts `previewPayFor(...)` when a
+/// terminal exposes it and treats preview failures as ineligible for Juicebox routing. Static weight math remains only
+/// an offchain/reference helper, so deployers must not treat it as proof that data-hook-adjusted projects are safe for
+/// live best-execution routing. Sell-side routing depends on `previewCashOutFrom(...)` and falls back to V4 when the
+/// preview is unavailable.
 contract JBUniswapV4Hook is BaseHook {
     using Oracle for Oracle.Observation[65_535];
     using PoolIdLibrary for PoolKey;
@@ -292,9 +292,8 @@ contract JBUniswapV4Hook is BaseHook {
     }
 
     /// @notice Estimates how many JB project tokens a user would receive by paying a given amount into the project.
-    /// @dev WARNING: This estimate uses the ruleset's static weight. If the project has a data hook (such as a
-    /// buyback hook) that overrides the weight at payment time, the actual token issuance may differ from this
-    /// estimate, causing the swap-vs-mint routing decision to diverge. Deployers must ensure weight compatibility.
+    /// @dev WARNING: This estimate uses the ruleset's static weight. If the project has a data hook that overrides the
+    /// weight at payment time, actual token issuance may differ from this helper's output.
     /// @dev This helper is intentionally more permissive than live routing. `_beforeSwap()` only trusts
     /// `previewPayFor()` for buy-side best-execution decisions and uses this helper as an offchain/reference surface.
     /// @param projectId The Juicebox project ID
@@ -315,9 +314,7 @@ contract JBUniswapV4Hook is BaseHook {
         // Get the currency Id for the `weight`.
         uint256 baseCurrency;
         uint16 reservedPercent;
-        // NOTE: This estimate uses the ruleset's static weight. If the project has a data hook that overrides
-        // the weight at payment time, the actual issuance may differ from this estimate, potentially causing
-        // the swap-vs-mint routing decision to diverge from what would be optimal.
+        // This reference estimate uses static ruleset weight. Live routing uses previewPayFor instead.
         try IJBController(address(DIRECTORY.controllerOf(projectId))).currentRulesetOf(projectId) returns (
             JBRuleset memory ruleset, JBRulesetMetadata memory metadata
         ) {

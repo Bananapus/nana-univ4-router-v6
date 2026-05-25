@@ -245,7 +245,7 @@ contract EasyPosmTest is Test, Deployers {
         assertEq(delta.amount1(), -mintDelta.amount1() - 1 wei);
     }
 
-    // This test requires a donateRouter, TODO
+    // Collect coverage is left disabled because this helper suite does not deploy a donate router.
     // function test_collect() public {
     //     (uint256 tokenId,) = positionManager.mint(
     //         key,
