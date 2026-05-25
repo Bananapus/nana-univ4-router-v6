@@ -8,8 +8,8 @@ import {IJBTerminal} from "@bananapus/core-v6/src/interfaces/IJBTerminal.sol";
 import {BuybackCashOutMetadataIgnoredTest} from "../regression/BuybackCashOutMetadataIgnored.t.sol";
 
 contract CodexNemesisBuybackSellMetadataUnderquoteTest is BuybackCashOutMetadataIgnoredTest {
-    /// @notice After the fix, the metadata-only sell preview surfaces the executable amount as-is. When the JB
-    /// route pays more than the V4 spot quote, the router must route through JB instead of misrouting to V4.
+    /// @notice Metadata-only sell previews surface the executable amount as-is. When the JB route pays more than the
+    /// V4 spot quote, the router must route through JB instead of misrouting to V4.
     function test_metadataBackedSellRouteWinsAfterFix() public {
         uint256 amountIn = 1 ether;
         uint256 liveCashOutAmount = 1.02 ether;
