@@ -813,6 +813,7 @@ contract JBUniswapV4Hook is BaseHook {
             } else if (routeViaBuySide && uniswapV4ExpectedTokens + 1 > routeMinimum) {
                 // Buy-side previews decide whether JB beats V4, but live payment can still mint fewer project tokens
                 // than previewed. Require the realized JB output to at least beat the V4 quote it displaced.
+                // The `+ 1` is the strict better-than-V4 floor; eligible quotes are already bounded below MAX_V4_DELTA.
                 routeMinimum = uniswapV4ExpectedTokens + 1;
             }
             uint256 outputReceived = _routeThroughJuicebox({
