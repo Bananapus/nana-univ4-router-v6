@@ -42,9 +42,11 @@ import {JBCashOutHookSpecification} from "@bananapus/core-v6/src/structs/JBCashO
 /// @notice Minimal mock that maps token addresses to project IDs.
 contract MockJBTokens_BalanceDelta {
     mapping(address => uint256) public projectIdOf;
+    mapping(uint256 => address) public tokenOf;
 
     function setProjectId(address token, uint256 projectId) external {
         projectIdOf[token] = projectId;
+        if (projectId != 0) tokenOf[projectId] = token;
     }
 }
 

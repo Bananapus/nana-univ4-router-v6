@@ -35,9 +35,11 @@ import {HookMiner} from "@uniswap/v4-periphery/src/utils/HookMiner.sol";
 
 contract MockJBTokens_Observe {
     mapping(address => uint256) public projectIdOf;
+    mapping(uint256 => address) public tokenOf;
 
     function setProjectId(address token, uint256 projectId) external {
         projectIdOf[token] = projectId;
+        if (projectId != 0) tokenOf[projectId] = token;
     }
 }
 
