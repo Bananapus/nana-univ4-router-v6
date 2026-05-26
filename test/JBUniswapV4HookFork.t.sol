@@ -196,15 +196,17 @@ contract JBUniswapV4HookForkTest is Test {
                 | Hooks.AFTER_REMOVE_LIQUIDITY_FLAG
         );
 
-        bytes memory constructorArgs = abi.encode(
-            manager, IJBTokens(address(jbTokens)), IJBDirectory(address(jbDirectory)), IJBPrices(address(jbPrices))
-        );
+        bytes memory constructorArgs = abi.encode(address(this));
 
         (, bytes32 salt) = HookMiner.find(address(this), flags, type(JBUniswapV4Hook).creationCode, constructorArgs);
 
-        hook = new JBUniswapV4Hook{salt: salt}(
-            manager, IJBTokens(address(jbTokens)), IJBDirectory(address(jbDirectory)), IJBPrices(address(jbPrices))
-        );
+        hook = new JBUniswapV4Hook{salt: salt}(address(this));
+        hook.setChainSpecificConstants({
+            newPoolManager: manager,
+            newTokens: IJBTokens(address(jbTokens)),
+            newDirectory: IJBDirectory(address(jbDirectory)),
+            newPrices: IJBPrices(address(jbPrices))
+        });
 
         // Set up a simple pool with NANA/WETH (currencies must be ordered: currency0 < currency1)
         // The deployed NANA ERC-20 address is non-deterministic, so we order dynamically.

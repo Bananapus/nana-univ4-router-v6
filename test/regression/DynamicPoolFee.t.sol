@@ -82,21 +82,17 @@ contract DynamicPoolFeeTest is Test {
                 | Hooks.AFTER_REMOVE_LIQUIDITY_FLAG
         );
 
-        bytes memory constructorArgs = abi.encode(
-            manager,
-            IJBTokens(address(stubTokens)),
-            IJBDirectory(address(stubDirectory)),
-            IJBPrices(address(stubPrices))
-        );
+        bytes memory constructorArgs = abi.encode(address(this));
 
         (, bytes32 salt) = HookMiner.find(address(this), flags, type(JBUniswapV4Hook).creationCode, constructorArgs);
 
-        hook = new JBUniswapV4Hook{salt: salt}(
-            manager,
-            IJBTokens(address(stubTokens)),
-            IJBDirectory(address(stubDirectory)),
-            IJBPrices(address(stubPrices))
-        );
+        hook = new JBUniswapV4Hook{salt: salt}(address(this));
+        hook.setChainSpecificConstants({
+            newPoolManager: manager,
+            newTokens: IJBTokens(address(stubTokens)),
+            newDirectory: IJBDirectory(address(stubDirectory)),
+            newPrices: IJBPrices(address(stubPrices))
+        });
 
         // Deploy tokens and sort them
         tokenA = new MockERC20("TokenA", "A");

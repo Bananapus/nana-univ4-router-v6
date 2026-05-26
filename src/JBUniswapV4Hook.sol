@@ -23,6 +23,7 @@ import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {IERC20Metadata} from "@openzeppelin/contracts/token/ERC20/extensions/IERC20Metadata.sol";
 import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 import {CurrencySettler} from "@openzeppelin/uniswap-hooks/src/utils/CurrencySettler.sol";
+import {IHooks} from "@uniswap/v4-core/src/interfaces/IHooks.sol";
 import {IPoolManager} from "@uniswap/v4-core/src/interfaces/IPoolManager.sol";
 import {FullMath} from "@uniswap/v4-core/src/libraries/FullMath.sol";
 import {Hooks} from "@uniswap/v4-core/src/libraries/Hooks.sol";
@@ -40,7 +41,6 @@ import {Currency} from "@uniswap/v4-core/src/types/Currency.sol";
 import {PoolKey} from "@uniswap/v4-core/src/types/PoolKey.sol";
 import {PoolId, PoolIdLibrary} from "@uniswap/v4-core/src/types/PoolId.sol";
 import {SwapParams, ModifyLiquidityParams} from "@uniswap/v4-core/src/types/PoolOperation.sol";
-import {BaseHook} from "@uniswap/v4-periphery/src/utils/BaseHook.sol";
 
 import {Oracle} from "./libraries/Oracle.sol";
 
@@ -55,7 +55,7 @@ import {Oracle} from "./libraries/Oracle.sol";
 /// trusts direct terminal preview outputs. Buyback-hook metadata is ignored because it can send users through the same
 /// pool indirectly. Static weight math remains only an offchain/reference helper, so deployers must not treat it as
 /// proof that data-hook-adjusted projects are safe for live best-execution routing.
-contract JBUniswapV4Hook is BaseHook {
+contract JBUniswapV4Hook is IHooks {
     using Oracle for Oracle.Observation[65_535];
     using PoolIdLibrary for PoolKey;
     using ProtocolFeeLibrary for uint16;
@@ -71,10 +71,16 @@ contract JBUniswapV4Hook is BaseHook {
     /// @param hookDataLength The length of the hook data that was provided.
     error JBUniswapV4Hook_AmountOutMinRequired(uint256 hookDataLength);
 
+    /// @notice Reverts when chain-specific constants have already been configured.
+    error JBUniswapV4Hook_AlreadyConfigured();
+
     /// @notice Reverts when an exact-output swap is attempted.
     /// @dev Only exact-input swaps are supported.
     /// @param amountSpecified The positive exact-output amount that was requested.
     error JBUniswapV4Hook_ExactOutputSwapsNotSupported(int256 amountSpecified);
+
+    /// @notice Reverts when a disabled hook function is called.
+    error JBUniswapV4Hook_HookNotImplemented();
 
     /// @notice Reverts when a Juicebox input cannot fit inside Uniswap V4's signed delta accounting.
     /// @param amount The oversized input amount.
@@ -99,12 +105,21 @@ contract JBUniswapV4Hook is BaseHook {
     /// @param caller The account that attempted the reentrant route.
     error JBUniswapV4Hook_ReentrantRouting(address caller);
 
+    /// @notice Reverts when a caller other than the configured PoolManager calls a hook function.
+    /// @param caller The invalid caller.
+    /// @param poolManager The configured PoolManager.
+    error JBUniswapV4Hook_NotPoolManager(address caller, address poolManager);
+
     /// @notice Reverts when secondsAgo is zero in observeTWAP().
     /// @param secondsAgo The invalid lookback window.
     error JBUniswapV4Hook_SecondsAgoCannotBeZero(uint32 secondsAgo);
 
     /// @notice Reverts when a temporary terminal allowance was not fully consumed.
     error JBUniswapV4Hook_TemporaryAllowanceNotConsumed(address token, address spender, uint256 allowance);
+
+    /// @notice Reverts when an unauthorized address tries to configure this hook.
+    /// @param caller The unauthorized caller.
+    error JBUniswapV4Hook_Unauthorized(address caller);
 
     //*********************************************************************//
     // ---------------------------- structs ------------------------------ //
@@ -146,21 +161,34 @@ contract JBUniswapV4Hook is BaseHook {
     address public constant UNISWAP_NATIVE_ETH = address(0);
 
     //*********************************************************************//
-    // --------------- public immutable stored properties ---------------- //
+    // -------------- internal immutable stored properties -------------- //
     //*********************************************************************//
 
-    /// @notice The Juicebox directory for terminal lookup
-    IJBDirectory public immutable DIRECTORY;
-
-    /// @notice The Juicebox prices contract for currency conversion
-    IJBPrices public immutable PRICES;
-
-    /// @notice The Juicebox tokens contract for project token lookup
-    IJBTokens public immutable TOKENS;
+    /// @notice The address authorized to call `setChainSpecificConstants` exactly once.
+    /// @dev Held immutable so the constructor inputs are byte-identical across chains and the CREATE2 address is
+    /// unified.
+    address internal immutable _DEPLOYER;
 
     //*********************************************************************//
     // --------------------- public stored properties -------------------- //
     //*********************************************************************//
+
+    /// @notice The Juicebox directory for terminal lookup.
+    /// @dev Set once by `_DEPLOYER` via `setChainSpecificConstants`.
+    IJBDirectory public DIRECTORY;
+
+    /// @notice The Uniswap V4 pool manager.
+    /// @dev Set once by `_DEPLOYER` via `setChainSpecificConstants` instead of in the constructor so the hook can be
+    /// deployed to the same address across chains.
+    IPoolManager public poolManager;
+
+    /// @notice The Juicebox prices contract for currency conversion.
+    /// @dev Set once by `_DEPLOYER` via `setChainSpecificConstants`.
+    IJBPrices public PRICES;
+
+    /// @notice The Juicebox tokens contract for project token lookup.
+    /// @dev Set once by `_DEPLOYER` via `setChainSpecificConstants`.
+    IJBTokens public TOKENS;
 
     /// @notice The list of observations for a given pool ID
     mapping(PoolId => Oracle.Observation[65_535]) public observations;
@@ -169,7 +197,7 @@ contract JBUniswapV4Hook is BaseHook {
     mapping(PoolId => ObservationState) public states;
 
     //*********************************************************************//
-    // -------------------- private stored properties ------------------- //
+    // -------------------- private stored properties -------------------- //
     //*********************************************************************//
 
     /// @notice Flag to prevent recursive routing through Juicebox during swap hooks.
@@ -192,21 +220,22 @@ contract JBUniswapV4Hook is BaseHook {
     // -------------------------- constructor ---------------------------- //
     //*********************************************************************//
 
-    /// @param poolManager The Uniswap v4 pool manager
-    /// @param tokens The Juicebox tokens contract
-    /// @param directory The Juicebox directory
-    /// @param prices The Juicebox prices contract for currency conversion
-    constructor(
-        IPoolManager poolManager,
-        IJBTokens tokens,
-        IJBDirectory directory,
-        IJBPrices prices
-    )
-        BaseHook(poolManager)
-    {
-        DIRECTORY = directory;
-        PRICES = prices;
-        TOKENS = tokens;
+    /// @param deployer The address authorized to call `setChainSpecificConstants` exactly once.
+    constructor(address deployer) {
+        _DEPLOYER = deployer;
+        Hooks.validateHookPermissions({self: IHooks(address(this)), permissions: getHookPermissions()});
+    }
+
+    //*********************************************************************//
+    // ---------------------------- modifiers ---------------------------- //
+    //*********************************************************************//
+
+    /// @notice Only allow calls from the configured PoolManager contract.
+    modifier onlyPoolManager() {
+        if (msg.sender != address(poolManager)) {
+            revert JBUniswapV4Hook_NotPoolManager({caller: msg.sender, poolManager: address(poolManager)});
+        }
+        _;
     }
 
     //*********************************************************************//
@@ -217,6 +246,195 @@ contract JBUniswapV4Hook is BaseHook {
     /// @dev No withdrawal mechanism is needed — ETH received here is consumed during the same transaction
     /// as part of CurrencySettler.settle() for native-ETH output routing.
     receive() external payable {}
+
+    //*********************************************************************//
+    // ---------------------- external transactions ---------------------- //
+    //*********************************************************************//
+
+    /// @inheritdoc IHooks
+    function afterAddLiquidity(
+        address sender,
+        PoolKey calldata key,
+        ModifyLiquidityParams calldata params,
+        BalanceDelta delta,
+        BalanceDelta feesAccrued,
+        bytes calldata hookData
+    )
+        external
+        override
+        onlyPoolManager
+        returns (bytes4, BalanceDelta)
+    {
+        return _afterAddLiquidity(sender, key, params, delta, feesAccrued, hookData);
+    }
+
+    /// @inheritdoc IHooks
+    function afterDonate(
+        address,
+        PoolKey calldata,
+        uint256,
+        uint256,
+        bytes calldata
+    )
+        external
+        view
+        override
+        onlyPoolManager
+        returns (bytes4)
+    {
+        revert JBUniswapV4Hook_HookNotImplemented();
+    }
+
+    /// @inheritdoc IHooks
+    function afterInitialize(
+        address sender,
+        PoolKey calldata key,
+        uint160 sqrtPriceX96,
+        int24 tick
+    )
+        external
+        override
+        onlyPoolManager
+        returns (bytes4)
+    {
+        return _afterInitialize(sender, key, sqrtPriceX96, tick);
+    }
+
+    /// @inheritdoc IHooks
+    function afterRemoveLiquidity(
+        address sender,
+        PoolKey calldata key,
+        ModifyLiquidityParams calldata params,
+        BalanceDelta delta,
+        BalanceDelta feesAccrued,
+        bytes calldata hookData
+    )
+        external
+        override
+        onlyPoolManager
+        returns (bytes4, BalanceDelta)
+    {
+        return _afterRemoveLiquidity(sender, key, params, delta, feesAccrued, hookData);
+    }
+
+    /// @inheritdoc IHooks
+    function afterSwap(
+        address sender,
+        PoolKey calldata key,
+        SwapParams calldata params,
+        BalanceDelta delta,
+        bytes calldata hookData
+    )
+        external
+        override
+        onlyPoolManager
+        returns (bytes4, int128)
+    {
+        return _afterSwap(sender, key, params, delta, hookData);
+    }
+
+    /// @inheritdoc IHooks
+    function beforeAddLiquidity(
+        address,
+        PoolKey calldata,
+        ModifyLiquidityParams calldata,
+        bytes calldata
+    )
+        external
+        view
+        override
+        onlyPoolManager
+        returns (bytes4)
+    {
+        revert JBUniswapV4Hook_HookNotImplemented();
+    }
+
+    /// @inheritdoc IHooks
+    function beforeDonate(
+        address,
+        PoolKey calldata,
+        uint256,
+        uint256,
+        bytes calldata
+    )
+        external
+        view
+        override
+        onlyPoolManager
+        returns (bytes4)
+    {
+        revert JBUniswapV4Hook_HookNotImplemented();
+    }
+
+    /// @inheritdoc IHooks
+    function beforeInitialize(
+        address,
+        PoolKey calldata,
+        uint160
+    )
+        external
+        view
+        override
+        onlyPoolManager
+        returns (bytes4)
+    {
+        revert JBUniswapV4Hook_HookNotImplemented();
+    }
+
+    /// @inheritdoc IHooks
+    function beforeRemoveLiquidity(
+        address,
+        PoolKey calldata,
+        ModifyLiquidityParams calldata,
+        bytes calldata
+    )
+        external
+        view
+        override
+        onlyPoolManager
+        returns (bytes4)
+    {
+        revert JBUniswapV4Hook_HookNotImplemented();
+    }
+
+    /// @inheritdoc IHooks
+    function beforeSwap(
+        address sender,
+        PoolKey calldata key,
+        SwapParams calldata params,
+        bytes calldata hookData
+    )
+        external
+        override
+        onlyPoolManager
+        returns (bytes4, BeforeSwapDelta, uint24)
+    {
+        return _beforeSwap(sender, key, params, hookData);
+    }
+
+    /// @notice One-shot setter for chain-specific Juicebox and Uniswap addresses.
+    /// @dev Callable only by `_DEPLOYER` and only once. Keeping these values out of the constructor makes the hook's
+    /// CREATE2 inputs byte-identical across chains.
+    /// @param newPoolManager The Uniswap V4 PoolManager on this chain.
+    /// @param newTokens The Juicebox tokens contract on this chain.
+    /// @param newDirectory The Juicebox directory on this chain.
+    /// @param newPrices The Juicebox prices contract on this chain.
+    function setChainSpecificConstants(
+        IPoolManager newPoolManager,
+        IJBTokens newTokens,
+        IJBDirectory newDirectory,
+        IJBPrices newPrices
+    )
+        external
+    {
+        if (msg.sender != _DEPLOYER) revert JBUniswapV4Hook_Unauthorized({caller: msg.sender});
+        if (address(poolManager) != address(0)) revert JBUniswapV4Hook_AlreadyConfigured();
+
+        poolManager = newPoolManager;
+        TOKENS = newTokens;
+        DIRECTORY = newDirectory;
+        PRICES = newPrices;
+    }
 
     //*********************************************************************//
     // ------------------------- public views ---------------------------- //
@@ -469,7 +687,7 @@ contract JBUniswapV4Hook is BaseHook {
     /// @notice Declares which Uniswap V4 lifecycle callbacks this hook uses (afterInitialize, afterSwap,
     /// beforeSwap, etc.).
     /// @return permissions The hook permissions struct
-    function getHookPermissions() public pure override returns (Hooks.Permissions memory) {
+    function getHookPermissions() public pure returns (Hooks.Permissions memory) {
         return Hooks.Permissions({
             beforeInitialize: false,
             afterInitialize: true, // Initialize oracle observations
@@ -568,17 +786,16 @@ contract JBUniswapV4Hook is BaseHook {
         bytes calldata
     )
         internal
-        override
         returns (bytes4, BalanceDelta)
     {
         _recordObservation(key.toId());
-        return (BaseHook.afterAddLiquidity.selector, BalanceDelta.wrap(0));
+        return (IHooks.afterAddLiquidity.selector, BalanceDelta.wrap(0));
     }
 
     /// @notice Initializes the TWAP oracle array when a new pool is created with this hook attached.
     /// @param key The pool key
     /// @return selector The function selector
-    function _afterInitialize(address, PoolKey calldata key, uint160, int24) internal override returns (bytes4) {
+    function _afterInitialize(address, PoolKey calldata key, uint160, int24) internal returns (bytes4) {
         PoolId poolId = key.toId();
 
         // Initialize oracle with first observation
@@ -586,7 +803,7 @@ contract JBUniswapV4Hook is BaseHook {
 
         states[poolId] = ObservationState({index: 0, cardinality: cardinality, cardinalityNext: cardinalityNext});
 
-        return BaseHook.afterInitialize.selector;
+        return IHooks.afterInitialize.selector;
     }
 
     /// @notice Records a price observation after liquidity is removed so the TWAP oracle stays up-to-date.
@@ -602,11 +819,10 @@ contract JBUniswapV4Hook is BaseHook {
         bytes calldata
     )
         internal
-        override
         returns (bytes4, BalanceDelta)
     {
         _recordObservation(key.toId());
-        return (BaseHook.afterRemoveLiquidity.selector, BalanceDelta.wrap(0));
+        return (IHooks.afterRemoveLiquidity.selector, BalanceDelta.wrap(0));
     }
 
     /// @notice Records a price observation after a swap completes and enforces slippage protection for V4-routed swaps.
@@ -624,7 +840,6 @@ contract JBUniswapV4Hook is BaseHook {
         bytes calldata hookData
     )
         internal
-        override
         returns (bytes4, int128)
     {
         // Validate slippage protection for V4 swaps
@@ -657,7 +872,7 @@ contract JBUniswapV4Hook is BaseHook {
         }
 
         _recordObservation(key.toId());
-        return (BaseHook.afterSwap.selector, 0);
+        return (IHooks.afterSwap.selector, 0);
     }
 
     /// @notice The main routing engine: compares expected output from V4 and Juicebox, then routes to whichever gives
@@ -666,7 +881,7 @@ contract JBUniswapV4Hook is BaseHook {
     /// @param key The pool key identifying the V4 pool
     /// @param params The swap parameters (direction, amount, price limit)
     /// @param hookData Must contain amountOutMin as uint256 (minimum tokens user accepts)
-    /// @return selector The function selector (BaseHook.beforeSwap.selector)
+    /// @return selector The function selector (`IHooks.beforeSwap.selector`)
     /// @return delta The swap delta (zero for V4, custom for V3/Juicebox routing)
     /// @return protocolFee The protocol fee (always 0)
     function _beforeSwap(
@@ -676,7 +891,6 @@ contract JBUniswapV4Hook is BaseHook {
         bytes calldata hookData
     )
         internal
-        override
         returns (bytes4, BeforeSwapDelta, uint24)
     {
         // Prevent recursive routing: if we're already routing through Juicebox, block reentrant swaps.
@@ -777,7 +991,7 @@ contract JBUniswapV4Hook is BaseHook {
         if (!isBuyingJbToken && !isSellingJbToken) {
             // No JB token involved, proceed with normal Uniswap swap
             emit RouteSelected({poolId: poolId, useJuicebox: false, expectedTokens: 0, caller: msg.sender});
-            return (BaseHook.beforeSwap.selector, BeforeSwapDeltaLibrary.ZERO_DELTA, 0);
+            return (IHooks.beforeSwap.selector, BeforeSwapDeltaLibrary.ZERO_DELTA, 0);
         }
 
         // Calculate how many tokens we'd get from Uniswap v4
@@ -839,7 +1053,7 @@ contract JBUniswapV4Hook is BaseHook {
                 amountOutMin: routeMinimum
             });
 
-            return (BaseHook.beforeSwap.selector, _createSwapDelta({amountIn: amountIn, amountOut: outputReceived}), 0);
+            return (IHooks.beforeSwap.selector, _createSwapDelta({amountIn: amountIn, amountOut: outputReceived}), 0);
         }
 
         // Proceed with normal v4 swap
@@ -847,7 +1061,7 @@ contract JBUniswapV4Hook is BaseHook {
         emit RouteSelected({
             poolId: poolId, useJuicebox: false, expectedTokens: uniswapV4ExpectedTokens, caller: msg.sender
         });
-        return (BaseHook.beforeSwap.selector, BeforeSwapDeltaLibrary.ZERO_DELTA, 0);
+        return (IHooks.beforeSwap.selector, BeforeSwapDeltaLibrary.ZERO_DELTA, 0);
     }
 
     /// @notice Converts a payment amount (in any token decimals) into the expected number of project tokens using the

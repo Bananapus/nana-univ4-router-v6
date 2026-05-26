@@ -35,8 +35,9 @@ contract DeployScript is Script {
                 | Hooks.AFTER_REMOVE_LIQUIDITY_FLAG
         );
 
-        // Prepare constructor arguments.
-        bytes memory constructorArgs = abi.encode(IPoolManager(poolManager), core.tokens, core.directory, core.prices);
+        // Keep constructor arguments chain-same so this hook's CREATE2 inputs are byte-identical across chains.
+        // Chain-specific addresses are configured once after deployment.
+        bytes memory constructorArgs = abi.encode(deployer);
 
         // Mine a valid hook address.
         (address hookAddress, bytes32 salt) = HookMiner.find({
@@ -50,9 +51,16 @@ contract DeployScript is Script {
 
         vm.startBroadcast(deployerPrivateKey);
 
-        JBUniswapV4Hook hook = new JBUniswapV4Hook{salt: salt}({
-            poolManager: IPoolManager(poolManager), tokens: core.tokens, directory: core.directory, prices: core.prices
-        });
+        JBUniswapV4Hook hook = JBUniswapV4Hook(payable(hookAddress));
+        if (address(hook).code.length == 0) hook = new JBUniswapV4Hook{salt: salt}(deployer);
+        if (address(hook.poolManager()) == address(0)) {
+            hook.setChainSpecificConstants({
+                newPoolManager: IPoolManager(poolManager),
+                newTokens: core.tokens,
+                newDirectory: core.directory,
+                newPrices: core.prices
+            });
+        }
 
         console2.log({p0: "JBUniswapV4Hook deployed at:", p1: address(hook)});
 

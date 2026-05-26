@@ -320,21 +320,17 @@ contract PreviewPayForRoutingTest is Test {
                 | Hooks.BEFORE_SWAP_RETURNS_DELTA_FLAG | Hooks.AFTER_ADD_LIQUIDITY_FLAG
                 | Hooks.AFTER_REMOVE_LIQUIDITY_FLAG
         );
-        bytes memory ctorArgs = abi.encode(
-            manager,
-            IJBTokens(address(mockTokens)),
-            IJBDirectory(address(mockDirectory)),
-            IJBPrices(address(mockPrices))
-        );
+        bytes memory ctorArgs = abi.encode(address(this));
         (, bytes32 salt) = HookMiner.find(address(this), flags, type(JBUniswapV4Hook).creationCode, ctorArgs);
 
         // Deploy hook at the mined address.
-        hook = new JBUniswapV4Hook{salt: salt}(
-            manager,
-            IJBTokens(address(mockTokens)),
-            IJBDirectory(address(mockDirectory)),
-            IJBPrices(address(mockPrices))
-        );
+        hook = new JBUniswapV4Hook{salt: salt}(address(this));
+        hook.setChainSpecificConstants({
+            newPoolManager: manager,
+            newTokens: IJBTokens(address(mockTokens)),
+            newDirectory: IJBDirectory(address(mockDirectory)),
+            newPrices: IJBPrices(address(mockPrices))
+        });
 
         // Deploy ERC-20 test tokens.
         projectToken = new MockERC20("Project", "PRJ");
@@ -475,20 +471,16 @@ contract PreviewPayForFallbackTest is Test {
                 | Hooks.BEFORE_SWAP_RETURNS_DELTA_FLAG | Hooks.AFTER_ADD_LIQUIDITY_FLAG
                 | Hooks.AFTER_REMOVE_LIQUIDITY_FLAG
         );
-        bytes memory ctorArgs = abi.encode(
-            manager,
-            IJBTokens(address(mockTokens)),
-            IJBDirectory(address(mockDirectory)),
-            IJBPrices(address(mockPrices))
-        );
+        bytes memory ctorArgs = abi.encode(address(this));
         (, bytes32 salt) = HookMiner.find(address(this), flags, type(JBUniswapV4Hook).creationCode, ctorArgs);
 
-        hook = new JBUniswapV4Hook{salt: salt}(
-            manager,
-            IJBTokens(address(mockTokens)),
-            IJBDirectory(address(mockDirectory)),
-            IJBPrices(address(mockPrices))
-        );
+        hook = new JBUniswapV4Hook{salt: salt}(address(this));
+        hook.setChainSpecificConstants({
+            newPoolManager: manager,
+            newTokens: IJBTokens(address(mockTokens)),
+            newDirectory: IJBDirectory(address(mockDirectory)),
+            newPrices: IJBPrices(address(mockPrices))
+        });
 
         // Deploy ERC-20 test tokens.
         projectToken = new MockERC20("Project", "PRJ");
@@ -620,20 +612,16 @@ contract NoTerminalFallbackTest is Test {
                 | Hooks.BEFORE_SWAP_RETURNS_DELTA_FLAG | Hooks.AFTER_ADD_LIQUIDITY_FLAG
                 | Hooks.AFTER_REMOVE_LIQUIDITY_FLAG
         );
-        bytes memory ctorArgs = abi.encode(
-            manager,
-            IJBTokens(address(mockTokens)),
-            IJBDirectory(address(mockDirectory)),
-            IJBPrices(address(mockPrices))
-        );
+        bytes memory ctorArgs = abi.encode(address(this));
         (, bytes32 salt) = HookMiner.find(address(this), flags, type(JBUniswapV4Hook).creationCode, ctorArgs);
 
-        hook = new JBUniswapV4Hook{salt: salt}(
-            manager,
-            IJBTokens(address(mockTokens)),
-            IJBDirectory(address(mockDirectory)),
-            IJBPrices(address(mockPrices))
-        );
+        hook = new JBUniswapV4Hook{salt: salt}(address(this));
+        hook.setChainSpecificConstants({
+            newPoolManager: manager,
+            newTokens: IJBTokens(address(mockTokens)),
+            newDirectory: IJBDirectory(address(mockDirectory)),
+            newPrices: IJBPrices(address(mockPrices))
+        });
 
         // Deploy ERC-20 test tokens.
         projectToken = new MockERC20("Project", "PRJ");

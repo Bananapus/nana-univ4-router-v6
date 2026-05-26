@@ -42,12 +42,7 @@ contract RegressionHookDataLengthTest is Test {
         directory = new DummyRegression();
         prices = new DummyRegression();
 
-        bytes memory constructorArgs = abi.encode(
-            IPoolManager(POOL_MANAGER),
-            IJBTokens(address(tokens)),
-            IJBDirectory(address(directory)),
-            IJBPrices(address(prices))
-        );
+        bytes memory constructorArgs = abi.encode(address(this));
 
         uint160 flags = uint160(
             Hooks.AFTER_INITIALIZE_FLAG | Hooks.BEFORE_SWAP_FLAG | Hooks.AFTER_SWAP_FLAG
@@ -57,12 +52,13 @@ contract RegressionHookDataLengthTest is Test {
 
         (, bytes32 salt) = HookMiner.find(address(this), flags, type(JBUniswapV4Hook).creationCode, constructorArgs);
 
-        hook = new JBUniswapV4Hook{salt: salt}(
-            IPoolManager(POOL_MANAGER),
-            IJBTokens(address(tokens)),
-            IJBDirectory(address(directory)),
-            IJBPrices(address(prices))
-        );
+        hook = new JBUniswapV4Hook{salt: salt}(address(this));
+        hook.setChainSpecificConstants({
+            newPoolManager: IPoolManager(POOL_MANAGER),
+            newTokens: IJBTokens(address(tokens)),
+            newDirectory: IJBDirectory(address(directory)),
+            newPrices: IJBPrices(address(prices))
+        });
 
         key = PoolKey({
             currency0: Currency.wrap(address(0x1000)),

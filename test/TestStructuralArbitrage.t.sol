@@ -472,21 +472,17 @@ contract TestStructuralArbitrage is Test {
                 | Hooks.AFTER_REMOVE_LIQUIDITY_FLAG
         );
 
-        bytes memory constructorArgs = abi.encode(
-            manager,
-            IJBTokens(address(mockJbTokens)),
-            IJBDirectory(address(mockJbDirectory)),
-            IJBPrices(address(mockJbPrices))
-        );
+        bytes memory constructorArgs = abi.encode(address(this));
 
         (, bytes32 salt) = HookMiner.find(address(this), flags, type(JBUniswapV4Hook).creationCode, constructorArgs);
 
-        hook = new JBUniswapV4Hook{salt: salt}(
-            manager,
-            IJBTokens(address(mockJbTokens)),
-            IJBDirectory(address(mockJbDirectory)),
-            IJBPrices(address(mockJbPrices))
-        );
+        hook = new JBUniswapV4Hook{salt: salt}(address(this));
+        hook.setChainSpecificConstants({
+            newPoolManager: manager,
+            newTokens: IJBTokens(address(mockJbTokens)),
+            newDirectory: IJBDirectory(address(mockJbDirectory)),
+            newPrices: IJBPrices(address(mockJbPrices))
+        });
 
         // Create tokens, ensuring correct ordering (currency0 < currency1)
         token0 = new MockERC20("JBToken", "JBT");

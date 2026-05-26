@@ -429,21 +429,17 @@ contract TestRegressionGaps_TWAPManipulationCost is Test {
                 | Hooks.AFTER_REMOVE_LIQUIDITY_FLAG
         );
 
-        bytes memory constructorArgs = abi.encode(
-            manager,
-            IJBTokens(address(mockJBTokens)),
-            IJBDirectory(address(mockJBDirectory)),
-            IJBPrices(address(mockJBPrices))
-        );
+        bytes memory constructorArgs = abi.encode(address(this));
 
         (, bytes32 salt) = HookMiner.find(address(this), flags, type(JBUniswapV4Hook).creationCode, constructorArgs);
 
-        hook = new JBUniswapV4Hook{salt: salt}(
-            manager,
-            IJBTokens(address(mockJBTokens)),
-            IJBDirectory(address(mockJBDirectory)),
-            IJBPrices(address(mockJBPrices))
-        );
+        hook = new JBUniswapV4Hook{salt: salt}(address(this));
+        hook.setChainSpecificConstants({
+            newPoolManager: manager,
+            newTokens: IJBTokens(address(mockJBTokens)),
+            newDirectory: IJBDirectory(address(mockJBDirectory)),
+            newPrices: IJBPrices(address(mockJBPrices))
+        });
 
         token0 = new MockERC20("Token0", "TK0");
         token1 = new MockERC20("Token1", "TK1");
@@ -814,21 +810,17 @@ contract TestRegressionGaps_SpotFallbackSandwichWindow is Test {
                 | Hooks.AFTER_REMOVE_LIQUIDITY_FLAG
         );
 
-        bytes memory constructorArgs = abi.encode(
-            manager,
-            IJBTokens(address(mockJBTokens)),
-            IJBDirectory(address(mockJBDirectory)),
-            IJBPrices(address(mockJBPrices))
-        );
+        bytes memory constructorArgs = abi.encode(address(this));
 
         (, bytes32 salt) = HookMiner.find(address(this), flags, type(JBUniswapV4Hook).creationCode, constructorArgs);
 
-        hook = new JBUniswapV4Hook{salt: salt}(
-            manager,
-            IJBTokens(address(mockJBTokens)),
-            IJBDirectory(address(mockJBDirectory)),
-            IJBPrices(address(mockJBPrices))
-        );
+        hook = new JBUniswapV4Hook{salt: salt}(address(this));
+        hook.setChainSpecificConstants({
+            newPoolManager: manager,
+            newTokens: IJBTokens(address(mockJBTokens)),
+            newDirectory: IJBDirectory(address(mockJBDirectory)),
+            newPrices: IJBPrices(address(mockJBPrices))
+        });
 
         token0 = new MockERC20("Token0", "TK0");
         token1 = new MockERC20("Token1", "TK1");

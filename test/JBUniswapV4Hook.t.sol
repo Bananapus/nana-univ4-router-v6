@@ -577,40 +577,13 @@ contract JuiceboxHookTest is Test {
         // Set up the terminal store reference in the terminal
         mockJBMultiTerminal.setTerminalStore(address(mockJBTerminalStore));
 
-        // Deploy the hook with proper address mining
-        // Calculate the required flags for the hook permissions
-        // afterInitialize = true, beforeSwap = true, afterSwap = true, beforeSwapReturnDelta = true
-        // afterAddLiquidity = true, afterRemoveLiquidity = true
-        uint160 flags = uint160(
-            Hooks.AFTER_INITIALIZE_FLAG | Hooks.BEFORE_SWAP_FLAG | Hooks.AFTER_SWAP_FLAG
-                | Hooks.BEFORE_SWAP_RETURNS_DELTA_FLAG | Hooks.AFTER_ADD_LIQUIDITY_FLAG
-                | Hooks.AFTER_REMOVE_LIQUIDITY_FLAG
-        );
-
-        // Prepare constructor arguments
-        bytes memory constructorArgs = abi.encode(
-            manager,
-            IJBTokens(address(mockJBTokens)),
-            IJBDirectory(address(mockJBDirectory)),
-            IJBPrices(address(mockJBPrices))
-        );
-
-        // Find a valid hook address using HookMiner
-        (, bytes32 salt) =
-            HookMiner.find(
-                address(this), // deployer
-                flags,
-                type(JBUniswapV4Hook).creationCode,
-                constructorArgs
-            );
-
-        // Deploy the hook with the mined address
-        hook = new JBUniswapV4Hook{salt: salt}(
-            manager,
-            IJBTokens(address(mockJBTokens)),
-            IJBDirectory(address(mockJBDirectory)),
-            IJBPrices(address(mockJBPrices))
-        );
+        hook = _deployUnconfiguredHook(address(this));
+        hook.setChainSpecificConstants({
+            newPoolManager: manager,
+            newTokens: IJBTokens(address(mockJBTokens)),
+            newDirectory: IJBDirectory(address(mockJBDirectory)),
+            newPrices: IJBPrices(address(mockJBPrices))
+        });
 
         // Deploy test tokens
         token0 = new MockERC20("Token0", "TK0");
@@ -664,6 +637,21 @@ contract JuiceboxHookTest is Test {
             ModifyLiquidityParams({tickLower: -60, tickUpper: 60, liquidityDelta: 10 ether, salt: bytes32(0)}),
             ZERO_BYTES
         );
+    }
+
+    function _deployUnconfiguredHook(address deployer) internal returns (JBUniswapV4Hook) {
+        // Calculate the required flags for the hook permissions: afterInitialize, beforeSwap, afterSwap,
+        // beforeSwapReturnDelta, afterAddLiquidity, and afterRemoveLiquidity.
+        uint160 flags = uint160(
+            Hooks.AFTER_INITIALIZE_FLAG | Hooks.BEFORE_SWAP_FLAG | Hooks.AFTER_SWAP_FLAG
+                | Hooks.BEFORE_SWAP_RETURNS_DELTA_FLAG | Hooks.AFTER_ADD_LIQUIDITY_FLAG
+                | Hooks.AFTER_REMOVE_LIQUIDITY_FLAG
+        );
+
+        bytes memory constructorArgs = abi.encode(deployer);
+        (, bytes32 salt) = HookMiner.find(address(this), flags, type(JBUniswapV4Hook).creationCode, constructorArgs);
+
+        return new JBUniswapV4Hook{salt: salt}(deployer);
     }
 
     /// Given token1 has been minted to the test user
@@ -865,6 +853,58 @@ contract JuiceboxHookTest is Test {
         assertFalse(permissions.beforeDonate, "Should not have beforeDonate permission");
         assertFalse(permissions.afterDonate, "Should not have afterDonate permission");
         assertTrue(permissions.beforeSwapReturnDelta, "Should have beforeSwapReturnDelta permission");
+    }
+
+    /// Given the hook has already been configured
+    /// When configuring chain-specific constants again
+    /// Then the call reverts
+    function testSetChainSpecificConstantsRevertsIfAlreadyConfigured() public {
+        vm.expectRevert(JBUniswapV4Hook.JBUniswapV4Hook_AlreadyConfigured.selector);
+        hook.setChainSpecificConstants({
+            newPoolManager: manager,
+            newTokens: IJBTokens(address(mockJBTokens)),
+            newDirectory: IJBDirectory(address(mockJBDirectory)),
+            newPrices: IJBPrices(address(mockJBPrices))
+        });
+    }
+
+    /// Given the hook has not been configured
+    /// When an unauthorized caller configures chain-specific constants
+    /// Then the call reverts
+    function testSetChainSpecificConstantsRevertsIfUnauthorized() public {
+        address deployer = makeAddr("hook deployer");
+        address unauthorized = makeAddr("unauthorized");
+        JBUniswapV4Hook unconfiguredHook = _deployUnconfiguredHook(deployer);
+
+        vm.prank(unauthorized);
+        vm.expectRevert(abi.encodeWithSelector(JBUniswapV4Hook.JBUniswapV4Hook_Unauthorized.selector, unauthorized));
+        unconfiguredHook.setChainSpecificConstants({
+            newPoolManager: manager,
+            newTokens: IJBTokens(address(mockJBTokens)),
+            newDirectory: IJBDirectory(address(mockJBDirectory)),
+            newPrices: IJBPrices(address(mockJBPrices))
+        });
+    }
+
+    /// Given the hook has not been configured
+    /// When the authorized deployer configures chain-specific constants
+    /// Then the hook stores those chain-specific values
+    function testSetChainSpecificConstantsStoresValues() public {
+        address deployer = makeAddr("hook deployer");
+        JBUniswapV4Hook unconfiguredHook = _deployUnconfiguredHook(deployer);
+
+        vm.prank(deployer);
+        unconfiguredHook.setChainSpecificConstants({
+            newPoolManager: manager,
+            newTokens: IJBTokens(address(mockJBTokens)),
+            newDirectory: IJBDirectory(address(mockJBDirectory)),
+            newPrices: IJBPrices(address(mockJBPrices))
+        });
+
+        assertEq(address(unconfiguredHook.poolManager()), address(manager));
+        assertEq(address(unconfiguredHook.TOKENS()), address(mockJBTokens));
+        assertEq(address(unconfiguredHook.DIRECTORY()), address(mockJBDirectory));
+        assertEq(address(unconfiguredHook.PRICES()), address(mockJBPrices));
     }
 
     /// Given project 123 has a weight of 0
