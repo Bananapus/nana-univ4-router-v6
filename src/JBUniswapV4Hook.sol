@@ -978,18 +978,6 @@ contract JBUniswapV4Hook is BaseHook {
         }
     }
 
-    /// @notice Return the project ID only when `token` is the project's registered ERC-20.
-    /// @dev V4 pools can only custody transferable tokens. Internal Juicebox credits are not a routable pool asset,
-    /// so a project with no registered ERC-20 should fall back to the normal V4 swap path.
-    /// @param token The token to check.
-    /// @return projectId The token's project ID, or 0 if the token is not the project's registered ERC-20.
-    function _projectIdForRegisteredToken(address token) internal view returns (uint256 projectId) {
-        projectId = TOKENS.projectIdOf(IJBToken(token));
-        if (projectId == 0) return 0;
-
-        return address(TOKENS.tokenOf(projectId)) == token ? projectId : 0;
-    }
-
     /// @notice Computes the TWAP sqrt price over the configured lookback window. Returns 0 if the pool lacks
     /// sufficient observation history (fewer than 2 observations or none old enough).
     /// @param poolId The pool ID
@@ -1097,6 +1085,18 @@ contract JBUniswapV4Hook is BaseHook {
         if (tickCumulativeDelta < 0 && (tickCumulativeDelta % int56(uint56(secondsAgo)) != 0)) {
             arithmeticMeanTick--;
         }
+    }
+
+    /// @notice Returns the project ID only when `token` is the project's registered ERC-20.
+    /// @dev V4 pools can only custody transferable tokens. Internal Juicebox credits are not a routable pool asset,
+    /// so a project with no registered ERC-20 should fall back to the normal V4 swap path.
+    /// @param token The token to check.
+    /// @return projectId The token's project ID, or 0 if the token is not the project's registered ERC-20.
+    function _projectIdForRegisteredToken(address token) internal view returns (uint256 projectId) {
+        projectId = TOKENS.projectIdOf(IJBToken(token));
+        if (projectId == 0) return 0;
+
+        return address(TOKENS.tokenOf(projectId)) == token ? projectId : 0;
     }
 
     /// @notice Writes a new tick/liquidity observation to the oracle array. Automatically doubles the array capacity
