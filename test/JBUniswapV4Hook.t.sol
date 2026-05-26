@@ -37,9 +37,15 @@ import {HookMiner} from "@uniswap/v4-periphery/src/utils/HookMiner.sol";
 // Mock Juicebox contracts for testing
 contract MockJBTokens {
     mapping(address => uint256) public projectIdOf;
+    mapping(uint256 => address) public tokenOf;
 
     function setProjectId(address token, uint256 projectId) external {
         projectIdOf[token] = projectId;
+        if (projectId != 0) tokenOf[projectId] = token;
+    }
+
+    function setTokenOf(uint256 projectId, address token) external {
+        tokenOf[projectId] = token;
     }
 }
 
@@ -712,6 +718,29 @@ contract JuiceboxHookTest is Test {
         uint256 token0Received = finalToken0 - initialToken0;
         assertEq(token0Received, 1000 ether, "Should have received 1000 token0 from Juicebox");
         assertGt(token0Received, 1 ether, "JB should give way more than Uniswap's ~0.997");
+    }
+
+    /// Given a token maps to a project ID but is not the project's registered ERC-20
+    /// When the user swaps through the hook
+    /// Then the hook should not route through Juicebox
+    function testUnregisteredProjectTokenDoesNotRouteThroughJuicebox() public {
+        mockJBTokens.setTokenOf(123, address(0));
+
+        uint256 initialToken0 = token0.balanceOf(address(this));
+
+        token1.mint(address(this), 1 ether);
+        token1.approve(address(jbSwapRouter), 1 ether);
+
+        SwapParams memory params =
+            SwapParams({zeroForOne: false, amountSpecified: -1 ether, sqrtPriceLimitX96: TickMath.MAX_SQRT_PRICE - 1});
+
+        jbSwapRouter.swap(key, params, 0);
+
+        uint256 finalToken0 = token0.balanceOf(address(this));
+
+        assertEq(mockJBMultiTerminal.lastProjectId(), 0, "Should not route credit-only projects through Juicebox");
+        assertGt(finalToken0 - initialToken0, 0, "Should receive token0 from the V4 pool");
+        assertLt(finalToken0 - initialToken0, 2 ether, "Should use the V4 pool instead of the JB mint rate");
     }
 
     /// Given project 123 has a weight of 1000e18

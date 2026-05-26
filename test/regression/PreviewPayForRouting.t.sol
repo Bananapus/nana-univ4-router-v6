@@ -42,10 +42,12 @@ import {JBPayHookSpecification} from "@bananapus/core-v6/src/structs/JBPayHookSp
 contract MockJBTokens_Preview {
     // token address => project ID (0 = not a JB token)
     mapping(address => uint256) public projectIdOf;
+    mapping(uint256 => address) public tokenOf;
 
     /// @notice Register a token as belonging to a project.
     function setProjectId(address token, uint256 projectId) external {
         projectIdOf[token] = projectId;
+        if (projectId != 0) tokenOf[projectId] = token;
     }
 }
 

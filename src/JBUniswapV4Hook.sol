@@ -710,9 +710,10 @@ contract JBUniswapV4Hook is BaseHook {
         // Get input amount (amountSpecified is negative for exact input)
         uint256 amountIn = uint256(-params.amountSpecified);
 
-        // Check if either token is a JB token by looking up projectId dynamically
-        uint256 tokenInProjectId = TOKENS.projectIdOf(IJBToken(tokenIn));
-        uint256 tokenOutProjectId = TOKENS.projectIdOf(IJBToken(tokenOut));
+        // Check if either token is the ERC-20 that Juicebox has registered for a project.
+        // Credit-only project balances are intentionally out of scope for V4 pool routing.
+        uint256 tokenInProjectId = _projectIdForRegisteredToken(tokenIn);
+        uint256 tokenOutProjectId = _projectIdForRegisteredToken(tokenOut);
 
         // Determine if we're buying or selling JB tokens
         bool isSellingJbToken = tokenInProjectId != 0;
@@ -1084,6 +1085,18 @@ contract JBUniswapV4Hook is BaseHook {
         if (tickCumulativeDelta < 0 && (tickCumulativeDelta % int56(uint56(secondsAgo)) != 0)) {
             arithmeticMeanTick--;
         }
+    }
+
+    /// @notice Returns the project ID only when `token` is the project's registered ERC-20.
+    /// @dev V4 pools can only custody transferable tokens. Internal Juicebox credits are not a routable pool asset,
+    /// so a project with no registered ERC-20 should fall back to the normal V4 swap path.
+    /// @param token The token to check.
+    /// @return projectId The token's project ID, or 0 if the token is not the project's registered ERC-20.
+    function _projectIdForRegisteredToken(address token) internal view returns (uint256 projectId) {
+        projectId = TOKENS.projectIdOf(IJBToken(token));
+        if (projectId == 0) return 0;
+
+        return address(TOKENS.tokenOf(projectId)) == token ? projectId : 0;
     }
 
     /// @notice Writes a new tick/liquidity observation to the oracle array. Automatically doubles the array capacity
