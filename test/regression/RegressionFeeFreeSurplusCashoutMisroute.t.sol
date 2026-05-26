@@ -194,7 +194,11 @@ contract RegressionFeeFreeSurplusCashoutMisrouteTest is JuiceboxHookTest {
         assertGt(jbReceived, v4Received, "JB route is genuinely better than V4");
     }
 
-    function test_sellRouteUsesV4BeatFloorNotGrossPreview() public {
+    /// @notice A terminal that previews a higher reclaim than it actually delivers must revert the sell-side
+    /// settlement, not silently underfill the router. Honest terminals expose `feeFreeSurplusOf` so the router can
+    /// compute the exact net up front and preview matches actual; any gap is treated as a misbehaving or
+    /// fee-on-transfer terminal and rejected.
+    function test_sellRouteRevertsWhenActualReclaimUnderfillsPreview() public {
         feeFreeTerminal = new FeeFreeSurplusLikeTerminal();
         feeFreeTerminal.setProjectToken(address(token0));
         mockJBDirectory.setMockTerminal(address(feeFreeTerminal));
@@ -220,23 +224,14 @@ contract RegressionFeeFreeSurplusCashoutMisrouteTest is JuiceboxHookTest {
             sqrtPriceLimitX96: TickMath.MIN_SQRT_PRICE + 1
         });
 
-        uint256 snapshot = vm.snapshotState();
-        uint256 v4BalanceBefore = token1.balanceOf(address(this));
-        feeFreeTerminal.setReclaimAmounts({previewReclaim_: 0, actualReclaim_: 0});
-        jbSwapRouter.swap(key, params, 0);
-        uint256 v4Received = token1.balanceOf(address(this)) - v4BalanceBefore;
-        vm.revertToState(snapshot);
-
         uint256 grossPreview = 1.95 ether;
         uint256 netCashOut = 1.9 ether;
-        assertGt(netCashOut, v4Received, "net JB cash-out is still better than V4");
         feeFreeTerminal.setReclaimAmounts({previewReclaim_: grossPreview, actualReclaim_: netCashOut});
 
-        uint256 jbBalanceBefore = token1.balanceOf(address(this));
+        // Terminal claims it'll deliver 1.95 then only delivers 1.9. The router selected JB based on the
+        // inflated preview; the terminal-enforced `minTokensReclaimed = grossPreview` then rejects the
+        // underfill inside `cashOutTokensOf`, propagating the revert through the swap.
+        vm.expectRevert();
         jbSwapRouter.swap(key, params, 0);
-        uint256 jbReceived = token1.balanceOf(address(this)) - jbBalanceBefore;
-
-        assertEq(feeFreeTerminal.lastProjectId(), 123, "preview made the hook choose JB cash-out");
-        assertEq(jbReceived, netCashOut, "settlement should accept the better executable net cash-out");
     }
 }

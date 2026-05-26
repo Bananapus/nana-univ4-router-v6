@@ -4,6 +4,8 @@ pragma solidity 0.8.28;
 import {IJBCashOutTerminal} from "@bananapus/core-v6/src/interfaces/IJBCashOutTerminal.sol";
 import {IJBController} from "@bananapus/core-v6/src/interfaces/IJBController.sol";
 import {IJBDirectory} from "@bananapus/core-v6/src/interfaces/IJBDirectory.sol";
+import {IJBFeeTerminal} from "@bananapus/core-v6/src/interfaces/IJBFeeTerminal.sol";
+import {IJBFeelessAddresses} from "@bananapus/core-v6/src/interfaces/IJBFeelessAddresses.sol";
 import {IJBMultiTerminal} from "@bananapus/core-v6/src/interfaces/IJBMultiTerminal.sol";
 import {IJBPrices} from "@bananapus/core-v6/src/interfaces/IJBPrices.sol";
 import {IJBTerminal} from "@bananapus/core-v6/src/interfaces/IJBTerminal.sol";
@@ -263,10 +265,15 @@ contract JBUniswapV4Hook is BaseHook {
                 return 0;
             }
 
-            // Zero-tax cash-out previews should not get a blanket standard-fee haircut. Cash-out hooks receive
-            // `beneficiaryIsFeeless` in their preview context, and terminal-specific fee-free-surplus state is not
-            // exposed here; treating every zero-tax reclaim as feeable silently under-ranks executable JB cash-outs.
-            if (cashOutTaxRate == 0) return grossReclaim;
+            // Zero tax: terminal charges the standard fee only up to its `feeFreeSurplusOf` counter, and only
+            // for non-feeless beneficiaries. Read both pieces of state to compute the exact net the terminal
+            // would settle. Fall back to gross on either read failure (older terminals without the getters)
+            // to preserve the prior optimistic behavior — bias toward JB rather than under-ranking it.
+            if (cashOutTaxRate == 0) {
+                return _exactZeroTaxNet({
+                    terminal: terminal, projectId: projectId, outputToken: outputToken, grossReclaim: grossReclaim
+                });
+            }
 
             // Positive-tax standard reclaim path: core terminals charge the standard protocol fee on the full reclaim
             // amount for non-feeless beneficiaries. Use the conservative fee-discounted quote for route comparison.
@@ -808,10 +815,13 @@ contract JBUniswapV4Hook is BaseHook {
             });
 
             uint256 routeMinimum = amountOutMin;
-            if (routeViaSellSide && uniswapV4ExpectedTokens + 1 > routeMinimum) {
-                // Sell-side cash-outs can legitimately settle below the gross preview while still beating V4.
-                // Require only the user's floor plus a strict better-than-V4 bound.
-                routeMinimum = uniswapV4ExpectedTokens + 1;
+            if (routeViaSellSide && juiceboxExpectedOutput > routeMinimum) {
+                // Sell-side cash-outs must deliver at least what the terminal's `previewCashOutFrom` reported.
+                // Anything less is the terminal under-filling its own preview (fee-on-transfer behavior, a
+                // misconfigured data hook, etc.) — accepting it would let a malicious or buggy terminal win
+                // routing by over-quoting and then settling lower. The terminal enforces this floor inside
+                // `cashOutTokensOf`, so an underfilled cash-out reverts before the hook settles output.
+                routeMinimum = juiceboxExpectedOutput;
             } else if (routeViaBuySide && uniswapV4ExpectedTokens + 1 > routeMinimum) {
                 // Buy-side previews decide whether JB beats V4, but live payment can still mint fewer project tokens
                 // than previewed. Require the realized JB output to at least beat the V4 quote it displaced.
@@ -890,6 +900,51 @@ contract JBUniswapV4Hook is BaseHook {
             // forge-lint: disable-next-line(unsafe-typecast)
             deltaUnspecified: -int128(uint128(amountOut))
         });
+    }
+
+    /// @notice Computes the exact net the terminal would settle for a zero-tax cash-out by `address(this)` —
+    /// i.e., `gross - standardFee(min(gross, feeFreeSurplusOf))` for non-feeless beneficiaries, or `gross` if
+    /// the router is registered as feeless on the terminal's feeless-addresses registry.
+    /// @dev Each external read is guarded by try/catch so the routing helper degrades gracefully on terminals
+    /// that don't expose the relevant public getters — in those cases we fall back to `grossReclaim`, matching
+    /// the prior optimistic behavior (biases toward JB rather than under-ranking executable cash-outs).
+    /// @param terminal The terminal whose cash-out path is being previewed.
+    /// @param projectId The Juicebox project ID being cashed out from.
+    /// @param outputToken The token being reclaimed (already normalized to the terminal's accounting form).
+    /// @param grossReclaim The gross reclaim amount returned by `previewCashOutFrom`.
+    /// @return The exact net the terminal would deliver to the router for this cash-out under zero tax.
+    function _exactZeroTaxNet(
+        IJBTerminal terminal,
+        uint256 projectId,
+        address outputToken,
+        uint256 grossReclaim
+    )
+        internal
+        view
+        returns (uint256)
+    {
+        // If the router is registered as feeless on this terminal's registry, no fee is charged at all.
+        try IJBFeeTerminal(address(terminal)).FEELESS_ADDRESSES() returns (IJBFeelessAddresses feeless) {
+            try feeless.isFeelessFor({addr: address(this), projectId: projectId, caller: address(this)}) returns (
+                bool isFeeless
+            ) {
+                if (isFeeless) return grossReclaim;
+            } catch {
+                return grossReclaim;
+            }
+        } catch {
+            return grossReclaim;
+        }
+
+        // Non-feeless zero-tax: terminal charges the standard fee only up to `feeFreeSurplusOf` for this pair.
+        try IJBMultiTerminal(address(terminal)).feeFreeSurplusOf({projectId: projectId, token: outputToken}) returns (
+            uint256 feeFreeSurplus
+        ) {
+            uint256 feeable = grossReclaim < feeFreeSurplus ? grossReclaim : feeFreeSurplus;
+            return grossReclaim - JBFees.standardFeeAmountFrom(feeable);
+        } catch {
+            return grossReclaim;
+        }
     }
 
     /// @notice Looks up the Juicebox terminal that handles a specific token for a project. Returns address(0) if the
