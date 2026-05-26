@@ -96,7 +96,9 @@ terminal.
 
 This avoids under-ranking ordinary zero-tax cash-outs with no fee-free surplus. The residual composition risk is that
 a terminal with hidden fee-free-surplus accounting can deliver less than the gross zero-tax preview; callers should use
-`amountOutMin` for hard execution floors until a net-after-terminal-fees preview is exposed.
+`amountOutMin` for hard execution floors until a net-after-terminal-fees preview is exposed. When the hook selects the
+sell-side Juicebox route, its internal terminal minimum is the stricter of the user's floor and the amount needed to beat
+V4, not the gross preview itself.
 
 ### 8.6 Buyback hook metadata is not a route-scoring source
 
