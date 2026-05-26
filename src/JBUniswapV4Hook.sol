@@ -963,16 +963,6 @@ contract JBUniswapV4Hook is BaseHook {
         }
     }
 
-    /// @notice Return the project ID only when `token` is the project's registered ERC-20.
-    /// @dev V4 pools can only custody transferable tokens. Internal Juicebox credits are not a routable pool asset,
-    /// so a project with no registered ERC-20 should fall back to the normal V4 swap path.
-    function _projectIdForRegisteredToken(address token) internal view returns (uint256 projectId) {
-        projectId = TOKENS.projectIdOf(IJBToken(token));
-        if (projectId == 0) return 0;
-
-        return address(TOKENS.tokenOf(projectId)) == token ? projectId : 0;
-    }
-
     /// @notice Gets token decimals, defaulting to 18 if unavailable.
     /// @dev 18 is the standard for ETH and most ERC-20 tokens.
     /// @param token The token address.
@@ -986,6 +976,18 @@ contract JBUniswapV4Hook is BaseHook {
         } catch {
             return 18; // 18 is standard.
         }
+    }
+
+    /// @notice Return the project ID only when `token` is the project's registered ERC-20.
+    /// @dev V4 pools can only custody transferable tokens. Internal Juicebox credits are not a routable pool asset,
+    /// so a project with no registered ERC-20 should fall back to the normal V4 swap path.
+    /// @param token The token to check.
+    /// @return projectId The token's project ID, or 0 if the token is not the project's registered ERC-20.
+    function _projectIdForRegisteredToken(address token) internal view returns (uint256 projectId) {
+        projectId = TOKENS.projectIdOf(IJBToken(token));
+        if (projectId == 0) return 0;
+
+        return address(TOKENS.tokenOf(projectId)) == token ? projectId : 0;
     }
 
     /// @notice Computes the TWAP sqrt price over the configured lookback window. Returns 0 if the pool lacks
