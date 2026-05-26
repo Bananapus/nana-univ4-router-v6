@@ -137,7 +137,7 @@ contract BuybackCashOutMetadataIgnoredTest is JuiceboxHookTest {
         mockJBDirectory.setMockTerminal(address(metadataOnlySellTerminal));
     }
 
-    function test_metadataOnlySellPreviewRoutesThroughBetterJBPath() public {
+    function test_metadataOnlySellPreviewDoesNotRouteThroughJBPath() public {
         uint256 amountIn = 1 ether;
         uint256 liveCashOutAmount = 2 ether;
         _installMetadataOnlySellTerminal(liveCashOutAmount);
@@ -146,11 +146,7 @@ contract BuybackCashOutMetadataIgnoredTest is JuiceboxHookTest {
         uint256 previewQuote = hook.calculateExpectedOutputFromSelling(
             123, amountIn, address(token1), IJBTerminal(address(metadataOnlySellTerminal))
         );
-        // Metadata-only previews carry an already-net AMM sell amount (the sell-side hook spec has `amount = 0`,
-        // so the terminal never charges its fee). Subtracting the protocol fee here would double-discount the
-        // metadata route and silently push it below V4 quotes that pay less. The preview must equal the live
-        // executable amount.
-        assertEq(previewQuote, liveCashOutAmount, "metadata-only sell preview must surface the executable amount");
+        assertEq(previewQuote, 0, "metadata-only sell preview should not influence routing");
 
         uint256 balanceBefore = token1.balanceOf(address(this));
 
@@ -167,16 +163,18 @@ contract BuybackCashOutMetadataIgnoredTest is JuiceboxHookTest {
 
         uint256 received = token1.balanceOf(address(this)) - balanceBefore;
 
-        assertEq(metadataOnlySellTerminal.lastProjectId(), 123, "router should execute the JB sell path");
-        assertEq(received, liveCashOutAmount, "JB path should settle the metadata-backed output");
+        assertEq(metadataOnlySellTerminal.lastProjectId(), 0, "router should skip the JB metadata sell path");
+        assertGt(received, 0, "swap should fall back to V4");
+        assertLt(received, liveCashOutAmount, "metadata-only preview must not steer route choice");
     }
 
-    function test_metadataOnlySellPreviewCanSatisfyMinOutputOrder() public {
+    function test_metadataOnlySellPreviewCannotSatisfyRouterMinOutputOrder() public {
         uint256 amountIn = 1 ether;
         uint256 amountOutMin = 1.5 ether;
         _installMetadataOnlySellTerminal(2 ether);
         token0.approve(address(jbSwapRouter), amountIn);
 
+        vm.expectRevert();
         jbSwapRouter.swap(
             key,
             SwapParams({
@@ -188,25 +186,22 @@ contract BuybackCashOutMetadataIgnoredTest is JuiceboxHookTest {
             amountOutMin
         );
 
-        assertEq(metadataOnlySellTerminal.lastProjectId(), 123, "minimum order should route through the JB path");
+        assertEq(metadataOnlySellTerminal.lastProjectId(), 0, "metadata-only sell preview should remain unrouted");
     }
 
-    function test_metadataOnlySellPreviewMatchesLiveOutputAndRoutesThroughJB() public {
+    function test_metadataOnlySellPreviewStaysIneligibleEvenWhenLiveOutputWouldBeatV4() public {
         uint256 amountIn = 1 ether;
         uint256 liveCashOutAmount = 1.02 ether;
         _installMetadataOnlySellTerminal(liveCashOutAmount);
         token0.approve(address(jbSwapRouter), amountIn);
 
-        // Metadata-only previews carry an already-net AMM sell amount (the sell-side hook spec has
-        // `amount = 0`, so the terminal never charges its fee). The preview must surface the live
-        // executable amount, not subtract the protocol fee a second time.
         uint256 previewQuote = hook.calculateExpectedOutputFromSelling(
             123, amountIn, address(token1), IJBTerminal(address(metadataOnlySellTerminal))
         );
         uint256 v4Quote = hook.estimateUniswapOutput(id, key, amountIn, true);
 
-        assertEq(previewQuote, liveCashOutAmount, "metadata-only preview surfaces the executable amount");
-        assertGt(previewQuote, v4Quote, "JB preview beats V4 once the double fee discount is removed");
+        assertEq(previewQuote, 0, "metadata-only preview stays ineligible");
+        assertGt(liveCashOutAmount, v4Quote, "direct JB output would beat V4");
 
         uint256 balanceBefore = token1.balanceOf(address(this));
         jbSwapRouter.swap(
@@ -221,8 +216,8 @@ contract BuybackCashOutMetadataIgnoredTest is JuiceboxHookTest {
         );
         uint256 received = token1.balanceOf(address(this)) - balanceBefore;
 
-        assertEq(metadataOnlySellTerminal.lastProjectId(), 123, "router selected the JB hook path");
-        assertEq(received, liveCashOutAmount, "user received the executable JB hook output");
+        assertEq(metadataOnlySellTerminal.lastProjectId(), 0, "router skipped the JB hook path");
+        assertLt(received, liveCashOutAmount, "swap should use V4 despite the metadata-only preview");
     }
 
     function test_directJBCashOutCouldHaveSatisfiedTheSameMinimum() public {

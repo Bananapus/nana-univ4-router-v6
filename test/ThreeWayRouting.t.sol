@@ -274,7 +274,7 @@ contract MockJBMultiTerminal {
     }
 
     function cashOutTokensOf(
-        address,
+        address holder,
         uint256 projectId,
         uint256 cashOutCount,
         address tokenToReclaim,
@@ -303,6 +303,11 @@ contract MockJBMultiTerminal {
         }
 
         require(outputAmount >= minTokensReclaimed, "Insufficient tokens reclaimed");
+
+        address projectToken = projectTokens[projectId];
+        if (projectToken != address(0) && cashOutCount != 0) {
+            MockERC20(projectToken).burn(holder, cashOutCount);
+        }
 
         if (outputAmount > 0) {
             MockERC20(tokenToReclaim).mint(beneficiary, outputAmount);

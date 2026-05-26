@@ -14,6 +14,7 @@
 - If you touch Juicebox settlement sizing, verify that any JB-selected output still fits Uniswap V4's signed `int128` delta domain.
 - If you touch buy-side routing, verify the preview-unavailable path falls back to V4 instead of reusing static weight estimation.
 - If you touch sell-side routing, verify preview failures still degrade to V4 instead of reviving the older static reclaim estimate.
+- If you touch buyback composition, keep buyback-hook metadata out of live route scoring unless direct terminal preview amounts prove the route.
 - If you edit deployment assumptions, confirm the hook flags and immutable constructor wiring still match V4 expectations.
 - If you edit quote quality claims, re-measure large-trade drift explicitly. The linear V4 estimate is intentionally approximate.
 

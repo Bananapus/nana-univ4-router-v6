@@ -57,6 +57,7 @@ contract RegressionRegression is JuiceboxHookTest {
         mockJBTokens.setProjectId(address(dualToken1), buyProjectId);
 
         mockJBController.setWeight(buyProjectId, 5000e18);
+        mockJBMultiTerminal.setProjectToken(sellProjectId, address(dualToken0));
         mockJBMultiTerminal.setProjectToken(buyProjectId, address(dualToken1));
 
         uint32 dualToken0CurrencyId = uint32(uint160(address(dualToken0)));

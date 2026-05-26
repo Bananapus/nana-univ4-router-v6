@@ -130,7 +130,7 @@ contract BuybackMetadataPreviewIgnoredTest is PreviewPayForRoutingTest {
         mockDirectory.setDefaultTerminal(address(metadataOnlyTerminal));
     }
 
-    function test_metadataOnlyPreviewRoutesThroughBetterJBPath() public {
+    function test_metadataOnlyPreviewDoesNotRouteThroughJBPath() public {
         _installMetadataOnlyTerminal();
 
         uint256 balanceBefore = projectToken.balanceOf(address(this));
@@ -144,11 +144,16 @@ contract BuybackMetadataPreviewIgnoredTest is PreviewPayForRoutingTest {
 
         jbSwapRouter.swap(key, params, 0);
 
-        assertEq(metadataOnlyTerminal.lastPayProjectId(), 123, "hook should route through the metadata-backed JB path");
-        assertEq(projectToken.balanceOf(address(this)) - balanceBefore, 5000e18, "user should receive the JB output");
+        assertEq(metadataOnlyTerminal.lastPayProjectId(), 0, "hook should ignore metadata-only JB previews");
+        assertGt(projectToken.balanceOf(address(this)) - balanceBefore, 0, "swap should fall back to V4");
+        assertLt(
+            projectToken.balanceOf(address(this)) - balanceBefore,
+            5000e18,
+            "metadata-only preview must not steer route choice"
+        );
     }
 
-    function test_metadataOnlyPreviewCanSatisfyMinOutputOrder() public {
+    function test_metadataOnlyPreviewCannotSatisfyRouterMinOutputOrder() public {
         _installMetadataOnlyTerminal();
 
         uint256 amountOutMin = 1000e18;
@@ -159,9 +164,10 @@ contract BuybackMetadataPreviewIgnoredTest is PreviewPayForRoutingTest {
             sqrtPriceLimitX96: zeroForOne ? TickMath.MIN_SQRT_PRICE + 1 : TickMath.MAX_SQRT_PRICE - 1
         });
 
+        vm.expectRevert();
         jbSwapRouter.swap(key, params, amountOutMin);
 
-        assertEq(metadataOnlyTerminal.lastPayProjectId(), 123, "minimum order should route through the JB terminal");
+        assertEq(metadataOnlyTerminal.lastPayProjectId(), 0, "metadata-only preview should remain unrouted");
     }
 
     function test_directJBPayCouldHaveSatisfiedTheSameMinimum() public {

@@ -80,7 +80,7 @@ The hook uses spot price before enough history exists for the configured TWAP lo
 
 The hook routes sell-side cash outs through itself so it can settle back into PoolManager. This is safe only because the hook is not meant to be a feeless address on terminals.
 
-Metadata-only sell previews (where `previewCashOutFrom` returns `reclaimAmount == 0` and an executable `minimumSwapAmountOut` lives inside the buyback hook spec metadata) carry an amount that is **already net of terminal fees** — the AMM sell-side hook spec is created with `amount = 0`, so the terminal never calls `_processFee` on that path. `calculateExpectedOutputFromSelling` accordingly skips the fee deduction when `grossReclaim == 0` to avoid double-discounting the metadata route. Standard `grossReclaim > 0` previews are fee-discounted only when the terminal reports a positive cash-out tax rate.
+Metadata-only buyback hook previews are not route inputs. If `previewCashOutFrom(...)` reports `reclaimAmount == 0`, the sell-side Juicebox route is ineligible even when hook metadata contains an AMM floor. This avoids routing a user to the same pool indirectly through a buyback hook when they could have used the pool path directly. Standard non-zero reclaim previews are fee-discounted only when the terminal reports a positive cash-out tax rate.
 
 ### 8.4 Zero-tax sell-path routing can keep favoring Juicebox
 
@@ -96,13 +96,19 @@ terminal.
 
 This avoids under-ranking ordinary zero-tax cash-outs with no fee-free surplus. The residual composition risk is that
 a terminal with hidden fee-free-surplus accounting can deliver less than the gross zero-tax preview; callers should use
-`amountOutMin` for hard execution floors until a net-after-terminal-fees preview is exposed.
+`amountOutMin` for hard execution floors until a net-after-terminal-fees preview is exposed. When the hook selects the
+sell-side Juicebox route, its internal terminal minimum is the stricter of the user's floor and the amount needed to beat
+V4, not the gross preview itself.
 
-### 8.6 Price impact ignorance in large V4 trades
+### 8.6 Buyback hook metadata is not a route-scoring source
+
+The hook deliberately ignores buyback hook metadata when choosing between Juicebox and V4. Buyback metadata can describe a route that reaches the same pool through another hook layer, which is not a better direct route for a swapper. The live comparison therefore trusts only terminal-reported direct preview amounts.
+
+### 8.7 Price impact ignorance in large V4 trades
 
 `estimateUniswapOutput()` uses a linear TWAP quote without liquidity-depth simulation. For large trades in shallow pools, the actual V4 execution price may be worse than the Juicebox issuance path. A full liquidity-depth check was deemed too complex for the routing hot path. `amountOutMin` slippage protection prevents worst-case execution.
 
-### 8.7 TWAP warmup spot-price fallback
+### 8.8 TWAP warmup spot-price fallback
 
 When the TWAP oracle has insufficient observation history (newly created pools, first ~30 minutes), `estimateUniswapOutput` falls back to the manipulable spot price. During this window, routing decisions may be suboptimal. Slippage protection (`amountOutMin`) prevents worst-case execution. This is documented in code and is a bounded startup condition.
 

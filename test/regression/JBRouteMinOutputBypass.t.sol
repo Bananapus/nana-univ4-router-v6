@@ -1,17 +1,17 @@
 // SPDX-License-Identifier: MIT
 pragma solidity 0.8.28;
 
-import {BalanceDelta} from "@uniswap/v4-core/src/types/BalanceDelta.sol";
-import {Currency, CurrencyLibrary} from "@uniswap/v4-core/src/types/Currency.sol";
-import {IPoolManager} from "@uniswap/v4-core/src/interfaces/IPoolManager.sol";
+import {JBPayHookSpecification} from "@bananapus/core-v6/src/structs/JBPayHookSpecification.sol";
+import {JBRuleset} from "@bananapus/core-v6/src/structs/JBRuleset.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
-import {CurrencySettler} from "@uniswap/v4-core/test/utils/CurrencySettler.sol";
+import {IPoolManager} from "@uniswap/v4-core/src/interfaces/IPoolManager.sol";
+import {TickMath} from "@uniswap/v4-core/src/libraries/TickMath.sol";
+import {BalanceDelta} from "@uniswap/v4-core/src/types/BalanceDelta.sol";
+import {Currency, CurrencyLibrary} from "@uniswap/v4-core/src/types/Currency.sol";
 import {PoolKey} from "@uniswap/v4-core/src/types/PoolKey.sol";
 import {SwapParams} from "@uniswap/v4-core/src/types/PoolOperation.sol";
-import {TickMath} from "@uniswap/v4-core/src/libraries/TickMath.sol";
-import {JBRuleset} from "@bananapus/core-v6/src/structs/JBRuleset.sol";
-import {JBPayHookSpecification} from "@bananapus/core-v6/src/structs/JBPayHookSpecification.sol";
+import {CurrencySettler} from "@uniswap/v4-core/test/utils/CurrencySettler.sol";
 
 import {MockERC20} from "../mock/MockERC20.sol";
 import {PreviewPayForRoutingTest} from "./PreviewPayForRouting.t.sol";
@@ -32,8 +32,8 @@ contract UncheckedJuiceboxSwapRouter {
         bytes hookData;
     }
 
-    constructor(IPoolManager _poolManager) {
-        poolManager = _poolManager;
+    constructor(IPoolManager newPoolManager) {
+        poolManager = newPoolManager;
     }
 
     function msgSender() external view returns (address) {
@@ -228,5 +228,29 @@ contract JBRouteMinOutputBypassTest is PreviewPayForRoutingTest {
         uncheckedRouter.swap(key, params, 5000e18);
 
         assertEq(projectToken.balanceOf(address(this)), balanceBefore, "revert unwinds below-min output");
+    }
+
+    function test_hookRevertsWhenBuySideJBRouteUnderperformsV4Quote() public {
+        _installMaliciousTerminal();
+
+        uint256 amountIn = 1 ether;
+        uint256 v4Quote = hook.estimateUniswapOutput({poolId: id, key: key, amountIn: amountIn, zeroForOne: zeroForOne});
+        maliciousTerminal.setPreviewReturn(v4Quote + 1 ether);
+        maliciousTerminal.setActualPayAmount(v4Quote / 2);
+
+        uint256 balanceBefore = projectToken.balanceOf(address(this));
+
+        SwapParams memory params = SwapParams({
+            zeroForOne: zeroForOne,
+            // forge-lint: disable-next-line(unsafe-typecast)
+            amountSpecified: -int256(amountIn),
+            sqrtPriceLimitX96: zeroForOne ? TickMath.MIN_SQRT_PRICE + 1 : TickMath.MAX_SQRT_PRICE - 1
+        });
+
+        // PoolManager wraps hook errors, so asserting any revert here is enough to prove the route floor is enforced.
+        vm.expectRevert();
+        uncheckedRouter.swap(key, params, 0);
+
+        assertEq(projectToken.balanceOf(address(this)), balanceBefore, "revert unwinds below-v4 buy route");
     }
 }

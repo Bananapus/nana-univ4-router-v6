@@ -47,7 +47,7 @@ swap involving a project token
 
 This repo does not own the canonical treasury ledger. It owns route comparison and oracle observation state.
 
-Its route comparison is intentionally asymmetric: helper surfaces can be more permissive for offchain inspection, while live routing trusts stricter preview surfaces.
+Its route comparison is intentionally asymmetric: helper surfaces can be more permissive for offchain inspection, while live routing trusts stricter terminal preview surfaces and ignores buyback-hook metadata-only hints.
 
 ## Security Model
 

@@ -91,7 +91,8 @@ script/
 ## Risks And Notes
 
 - early pools may not have enough oracle history, which weakens TWAP-based protection
-- buy-side routing prefers `previewPayFor(...)` when a terminal is available and only falls back to static weight math in helper contexts
+- buy-side routing trusts `previewPayFor(...)` for live route decisions when a terminal is available
+- buyback-hook metadata is not used as a route-scoring source for buy or sell paths
 - the hook falls back when Juicebox-side estimation fails, so liveness and perfect observability are traded against each other
 - spot-price fallback is intentionally allowed but materially weaker than a mature TWAP
 - every Juicebox-routed swap expects `hookData` to encode at least one `uint256 amountOutMin`

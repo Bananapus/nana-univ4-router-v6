@@ -97,13 +97,8 @@ contract CodexNemesisMetadataSellTerminal {
 }
 
 contract CodexNemesisSellMetadataFeeUnderquoteTest is JuiceboxHookTest {
-    /// @notice The metadata-only buyback sell preview returns `reclaimAmount == 0` and carries the executable
-    /// `minimumSwapAmountOut` inside hook metadata. That metadata amount is ALREADY net of terminal fees because
-    /// the AMM sell-side path bypasses `_processFee` (its hook spec carries `amount = 0`). The router previously
-    /// applied the standard terminal fee on top, double-discounting the metadata route and silently making JB look
-    /// worse than V4 even when JB would have paid out more. The fix skips the fee deduction when the effective amount
-    /// came from metadata (i.e. `grossReclaim == 0`).
-    function test_metadataBackedSellRouteWinsAfterFix() public {
+    /// @notice Metadata-only buyback sell previews stay ineligible for route choice.
+    function test_metadataBackedSellRouteStaysIneligible() public {
         uint256 amountIn = 1 ether;
         uint256 liveCashOutAmount = 1.02 ether;
 
@@ -114,8 +109,8 @@ contract CodexNemesisSellMetadataFeeUnderquoteTest is JuiceboxHookTest {
             hook.calculateExpectedOutputFromSelling(123, amountIn, address(token1), IJBTerminal(address(terminal)));
         uint256 v4Quote = hook.estimateUniswapOutput(id, key, amountIn, true);
 
-        assertEq(routerPreview, liveCashOutAmount, "router preview must reflect the executable metadata amount as-is");
-        assertLt(v4Quote, routerPreview, "JB metadata route should rank ahead of V4 when it pays out more");
+        assertEq(routerPreview, 0, "metadata-only preview must not influence routing");
+        assertLt(v4Quote, liveCashOutAmount, "direct JB output would beat V4");
 
         token0.approve(address(jbSwapRouter), amountIn);
         uint256 balanceBefore = token1.balanceOf(address(this));
@@ -134,7 +129,8 @@ contract CodexNemesisSellMetadataFeeUnderquoteTest is JuiceboxHookTest {
 
         uint256 received = token1.balanceOf(address(this)) - balanceBefore;
 
-        assertEq(terminal.lastProjectId(), 123, "router must route through the JB metadata sell path");
-        assertGe(received, liveCashOutAmount, "user must receive at least the executable JB metadata amount");
+        assertEq(terminal.lastProjectId(), 0, "router must skip the JB metadata sell path");
+        assertGt(received, 0, "swap should fall back to V4");
+        assertLt(received, liveCashOutAmount, "metadata-only preview must not steer route choice");
     }
 }

@@ -13,10 +13,15 @@ import {MockERC20} from "../mock/MockERC20.sol";
 
 contract ZeroTaxNoFeeCashoutTerminal {
     uint256 internal immutable _cashOutAmount;
+    address internal _projectToken;
     uint256 public lastProjectId;
 
     constructor(uint256 cashOutAmount) {
         _cashOutAmount = cashOutAmount;
+    }
+
+    function setProjectToken(address projectToken) external {
+        _projectToken = projectToken;
     }
 
     function previewCashOutFrom(
@@ -55,7 +60,7 @@ contract ZeroTaxNoFeeCashoutTerminal {
     function cashOutTokensOf(
         address,
         uint256 projectId,
-        uint256,
+        uint256 cashOutCount,
         address tokenToReclaim,
         uint256 minTokensReclaimed,
         address payable beneficiary,
@@ -67,6 +72,11 @@ contract ZeroTaxNoFeeCashoutTerminal {
     {
         require(_cashOutAmount >= minTokensReclaimed, "under min");
         lastProjectId = projectId;
+        // Burn the input project tokens from the caller to match real-terminal semantics —
+        // `JBUniswapV4Hook` checks that the input balance dropped post-call.
+        if (_projectToken != address(0) && cashOutCount != 0) {
+            MockERC20(_projectToken).burn(msg.sender, cashOutCount);
+        }
         MockERC20(tokenToReclaim).mint(beneficiary, _cashOutAmount);
         return _cashOutAmount;
     }
@@ -78,6 +88,7 @@ contract CodexNemesisZeroTaxCashoutUnderquoteTest is JuiceboxHookTest {
         uint256 liveCashOutAmount = 1.01 ether;
 
         ZeroTaxNoFeeCashoutTerminal terminal = new ZeroTaxNoFeeCashoutTerminal(liveCashOutAmount);
+        terminal.setProjectToken(address(token0));
         mockJBDirectory.setMockTerminal(address(terminal));
 
         uint256 routerPreview = hook.calculateExpectedOutputFromSelling({
