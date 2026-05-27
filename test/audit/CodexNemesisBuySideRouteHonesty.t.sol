@@ -23,9 +23,11 @@ contract CodexNemesisBuySideRouteHonestyTest is PreviewPayForRoutingTest {
         terminal.setPreviewReturn(v4Quote + 1 ether);
         terminal.setActualPayAmount(v4Quote / 2);
 
+        // forge-lint: disable-next-line(unsafe-typecast)
+        int256 exactAmountIn = int256(amountIn);
         SwapParams memory params = SwapParams({
             zeroForOne: zeroForOne,
-            amountSpecified: -int256(amountIn),
+            amountSpecified: -exactAmountIn,
             sqrtPriceLimitX96: zeroForOne ? TickMath.MIN_SQRT_PRICE + 1 : TickMath.MAX_SQRT_PRICE - 1
         });
 
