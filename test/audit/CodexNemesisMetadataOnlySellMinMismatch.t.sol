@@ -141,11 +141,13 @@ contract CodexNemesisMetadataOnlySellMinMismatchTest is JuiceboxHookTest {
 
         token0.approve(address(jbSwapRouter), amountIn);
         uint256 balanceBefore = token1.balanceOf(address(this));
+        // forge-lint: disable-next-line(unsafe-typecast)
+        int256 exactAmountIn = int256(amountIn);
 
         jbSwapRouter.swap(
             key,
             SwapParams({
-                zeroForOne: true, amountSpecified: -int256(amountIn), sqrtPriceLimitX96: TickMath.MIN_SQRT_PRICE + 1
+                zeroForOne: true, amountSpecified: -exactAmountIn, sqrtPriceLimitX96: TickMath.MIN_SQRT_PRICE + 1
             }),
             0
         );

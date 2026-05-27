@@ -238,7 +238,7 @@ contract MockTerminalWithPreview {
         // Record the call.
         lastPayProjectId = projectId;
 
-        // Return the same count as the preview (consistent behaviour).
+        // Return the same count as the preview (consistent behavior).
         beneficiaryTokenCount = previewBeneficiaryCount;
 
         if (consumePaymentTokens && token != address(0) && amount != 0) {

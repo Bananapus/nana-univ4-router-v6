@@ -1,10 +1,10 @@
 {
   "name": "@bananapus/univ4-router-v6",
-  "version": "0.0.45",
+  "version": "0.0.46",
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/Bananapus/nana-univ4-router-v6"
+    "url": "git+https://github.com/Bananapus/nana-univ4-router-v6.git"
   },
   "files": [
     "foundry.toml",
@@ -21,7 +21,7 @@
     "coverage": "forge coverage --match-path \"./src/*.sol\" --report lcov --report summary"
   },
   "dependencies": {
-    "@bananapus/core-v6": "^0.0.69",
+    "@bananapus/core-v6": "^0.0.72",
     "@openzeppelin/contracts": "5.6.1",
     "@openzeppelin/uniswap-hooks": "1.1.1",
     "@prb/math": "4.1.1",
