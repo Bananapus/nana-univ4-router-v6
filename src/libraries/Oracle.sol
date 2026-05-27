@@ -383,9 +383,10 @@ library Oracle {
         unchecked {
             if (cardinality == 0) revert Oracle_CardinalityCannotBeZero(cardinality);
 
-            tickCumulatives = new int56[](secondsAgos.length);
-            secondsPerLiquidityCumulativeX128s = new uint160[](secondsAgos.length);
-            for (uint256 i = 0; i < secondsAgos.length; i++) {
+            uint256 secondsAgosLength = secondsAgos.length;
+            tickCumulatives = new int56[](secondsAgosLength);
+            secondsPerLiquidityCumulativeX128s = new uint160[](secondsAgosLength);
+            for (uint256 i; i < secondsAgosLength; i++) {
                 (tickCumulatives[i], secondsPerLiquidityCumulativeX128s[i]) = observeSingle({
                     self: self,
                     time: time,
