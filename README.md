@@ -2,7 +2,6 @@
 
 `@bananapus/univ4-router-v6` provides the Uniswap V4 hook and oracle surface used to compare market execution with Juicebox-native execution. It is a routing primitive for projects that want protocol-aware swaps instead of blind pool usage.
 
-Docs: <https://docs.juicebox.money>
 
 ## Documentation
 
