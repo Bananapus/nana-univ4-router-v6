@@ -2,13 +2,19 @@
 
 `@bananapus/univ4-router-v6` provides the Uniswap V4 hook and oracle surface used to compare market execution with Juicebox-native execution. It is a routing primitive for projects that want protocol-aware swaps instead of blind pool usage.
 
-Docs: <https://docs.juicebox.money>  
-Architecture: [ARCHITECTURE.md](./ARCHITECTURE.md)  
-User journeys: [USER_JOURNEYS.md](./USER_JOURNEYS.md)  
-Skills: [SKILLS.md](./SKILLS.md)  
-Risks: [RISKS.md](./RISKS.md)  
-Administration: [ADMINISTRATION.md](./ADMINISTRATION.md)  
-Audit instructions: [AUDIT_INSTRUCTIONS.md](./AUDIT_INSTRUCTIONS.md)
+Docs: <https://docs.juicebox.money>
+
+## Documentation
+
+- [ARCHITECTURE.md](./ARCHITECTURE.md) — system overview, modules, critical flows
+- [INVARIANTS.md](./INVARIANTS.md) — scoped invariants (users / operators / per-contract / cross-cutting / centralization / refs)
+- [USER_JOURNEYS.md](./USER_JOURNEYS.md) — actor-by-actor flows
+- [SKILLS.md](./SKILLS.md) — knowledge index for AI agents
+- [RISKS.md](./RISKS.md) — risk register, accepted behaviors, accepted notes
+- [ADMINISTRATION.md](./ADMINISTRATION.md) — control model (adminless)
+- [AUDIT_INSTRUCTIONS.md](./AUDIT_INSTRUCTIONS.md) — auditor entry points
+- [STYLE_GUIDE.md](./STYLE_GUIDE.md) — house Solidity conventions
+- [CHANGELOG.md](./CHANGELOG.md) — version history
 
 ## Overview
 
