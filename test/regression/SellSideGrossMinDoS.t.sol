@@ -7,7 +7,7 @@ import {ModifyLiquidityParams, SwapParams} from "@uniswap/v4-core/src/types/Pool
 import {JuiceboxHookTest} from "../JBUniswapV4Hook.t.sol";
 import {FeeFreeSurplusLikeTerminal} from "../regression/RegressionFeeFreeSurplusCashoutMisroute.t.sol";
 
-contract CodexNemesisSellSideGrossMinDoSTest is JuiceboxHookTest {
+contract SellSideGrossMinDoSTest is JuiceboxHookTest {
     function test_sellRouteRevertsWhenGrossPreviewExceedsNetExecutableCashout() public {
         FeeFreeSurplusLikeTerminal terminal = new FeeFreeSurplusLikeTerminal();
         terminal.setProjectToken(address(token0));

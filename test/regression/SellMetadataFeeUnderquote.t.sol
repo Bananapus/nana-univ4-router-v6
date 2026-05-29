@@ -5,52 +5,25 @@ import {TickMath} from "@uniswap/v4-core/src/libraries/TickMath.sol";
 import {PoolId} from "@uniswap/v4-core/src/types/PoolId.sol";
 import {SwapParams} from "@uniswap/v4-core/src/types/PoolOperation.sol";
 
+import {IJBTerminal} from "@bananapus/core-v6/src/interfaces/IJBTerminal.sol";
 import {IJBCashOutHook} from "@bananapus/core-v6/src/interfaces/IJBCashOutHook.sol";
 import {IJBRulesetApprovalHook} from "@bananapus/core-v6/src/interfaces/IJBRulesetApprovalHook.sol";
 import {JBCashOutHookSpecification} from "@bananapus/core-v6/src/structs/JBCashOutHookSpecification.sol";
-import {JBPayHookSpecification} from "@bananapus/core-v6/src/structs/JBPayHookSpecification.sol";
 import {JBRuleset} from "@bananapus/core-v6/src/structs/JBRuleset.sol";
 
 import {JuiceboxHookTest} from "../JBUniswapV4Hook.t.sol";
 import {MockERC20} from "../mock/MockERC20.sol";
-import {IJBTerminal} from "@bananapus/core-v6/src/interfaces/IJBTerminal.sol";
 
-contract CoreLikeMetadataOnlySellTerminal {
-    uint256 internal immutable _hookDeliveredAmount;
+contract MockSellTerminal {
+    uint256 internal immutable _liveCashOutAmount;
     uint256 public lastProjectId;
 
-    constructor(uint256 hookDeliveredAmount) {
-        _hookDeliveredAmount = hookDeliveredAmount;
+    constructor(uint256 liveCashOutAmount) {
+        _liveCashOutAmount = liveCashOutAmount;
     }
 
-    function previewPayFor(
-        uint256,
-        address,
-        uint256,
-        address,
-        bytes calldata
-    )
-        external
-        pure
-        returns (JBRuleset memory ruleset, uint256 beneficiaryTokenCount, uint256, JBPayHookSpecification[] memory)
-    {
-        return (ruleset, beneficiaryTokenCount, 0, new JBPayHookSpecification[](0));
-    }
-
-    function pay(
-        uint256,
-        address,
-        uint256,
-        address,
-        uint256,
-        string calldata,
-        bytes calldata
-    )
-        external
-        payable
-        returns (uint256)
-    {
-        return 0;
+    function FEE() external pure returns (uint256) {
+        return 25;
     }
 
     function previewCashOutFrom(
@@ -81,24 +54,26 @@ contract CoreLikeMetadataOnlySellTerminal {
             approvalHook: IJBRulesetApprovalHook(address(0)),
             metadata: 0
         });
-        reclaimAmount = 0;
-        cashOutTaxRate = 0;
+
         specs = new JBCashOutHookSpecification[](1);
         specs[0] = JBCashOutHookSpecification({
-            hook: IJBCashOutHook(address(0xBEEF)),
+            hook: IJBCashOutHook(address(0xB0B)),
             noop: false,
             amount: 0,
             metadata: abi.encode(
-                _hookDeliveredAmount,
+                _liveCashOutAmount,
                 uint256(0),
                 uint256(0),
                 int24(0),
                 uint128(0),
                 PoolId.wrap(bytes32(0)),
-                uint256(0),
+                _liveCashOutAmount,
                 false
             )
         });
+
+        reclaimAmount = 0;
+        cashOutTaxRate = 0;
     }
 
     function cashOutTokensOf(
@@ -112,49 +87,50 @@ contract CoreLikeMetadataOnlySellTerminal {
         uint256 /* referralProjectId */
     )
         external
-        returns (uint256 reclaimAmount)
+        returns (uint256)
     {
+        require(_liveCashOutAmount >= minTokensReclaimed, "insufficient metadata cash-out");
         lastProjectId = projectId;
-        MockERC20(tokenToReclaim).mint(beneficiary, _hookDeliveredAmount);
-
-        // Mirrors JBMultiTerminal.cashOutTokensOf(): minTokensReclaimed is checked against direct reclaimAmount,
-        // not against tokens delivered later by a cash-out hook.
-        require(reclaimAmount >= minTokensReclaimed, "UNDER_MIN_DIRECT_RECLAIM");
+        MockERC20(tokenToReclaim).mint(beneficiary, _liveCashOutAmount);
+        return _liveCashOutAmount;
     }
 }
 
-contract CodexNemesisMetadataOnlySellMinMismatchTest is JuiceboxHookTest {
-    function test_unsupportedMetadataOnlySellShapeIsIgnoredForRouting() public {
+contract SellMetadataFeeUnderquoteTest is JuiceboxHookTest {
+    /// @notice Metadata-only buyback sell previews stay ineligible for route choice.
+    function test_metadataBackedSellRouteStaysIneligible() public {
         uint256 amountIn = 1 ether;
-        uint256 hookDeliveredAmount = 2 ether;
+        uint256 liveCashOutAmount = 1.02 ether;
 
-        CoreLikeMetadataOnlySellTerminal terminal = new CoreLikeMetadataOnlySellTerminal(hookDeliveredAmount);
+        MockSellTerminal terminal = new MockSellTerminal(liveCashOutAmount);
         mockJBDirectory.setMockTerminal(address(terminal));
 
-        uint256 quote = hook.calculateExpectedOutputFromSelling({
-            projectId: 123,
-            tokenAmountIn: amountIn,
-            outputToken: address(token1),
-            terminal: IJBTerminal(address(terminal))
-        });
-        assertEq(quote, 0, "unsupported metadata shape must not influence routing");
+        uint256 routerPreview =
+            hook.calculateExpectedOutputFromSelling(123, amountIn, address(token1), IJBTerminal(address(terminal)));
+        uint256 v4Quote = hook.estimateUniswapOutput(id, key, amountIn, true);
+
+        assertEq(routerPreview, 0, "metadata-only preview must not influence routing");
+        assertLt(v4Quote, liveCashOutAmount, "direct JB output would beat V4");
 
         token0.approve(address(jbSwapRouter), amountIn);
         uint256 balanceBefore = token1.balanceOf(address(this));
-        // forge-lint: disable-next-line(unsafe-typecast)
-        int256 exactAmountIn = int256(amountIn);
 
         jbSwapRouter.swap(
             key,
             SwapParams({
-                zeroForOne: true, amountSpecified: -exactAmountIn, sqrtPriceLimitX96: TickMath.MIN_SQRT_PRICE + 1
+                zeroForOne: true,
+                // The test amount is a small constant and fits safely in int256.
+                // forge-lint: disable-next-line(unsafe-typecast)
+                amountSpecified: -int256(amountIn),
+                sqrtPriceLimitX96: TickMath.MIN_SQRT_PRICE + 1
             }),
             0
         );
 
         uint256 received = token1.balanceOf(address(this)) - balanceBefore;
 
-        assertEq(terminal.lastProjectId(), 0, "unsupported metadata-only cash-out must not be routed through JB");
-        assertGt(received, 0, "fallback V4 route should execute");
+        assertEq(terminal.lastProjectId(), 0, "router must skip the JB metadata sell path");
+        assertGt(received, 0, "swap should fall back to V4");
+        assertLt(received, liveCashOutAmount, "metadata-only preview must not steer route choice");
     }
 }
