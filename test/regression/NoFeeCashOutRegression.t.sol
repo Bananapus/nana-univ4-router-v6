@@ -116,7 +116,7 @@ contract RegressionRegression is JuiceboxHookTest {
         assertEq(mockJBMultiTerminal.lastProjectId(), sellProjectId, "routing should select the sell-side project");
     }
 
-    /// @dev After remediation, FEE() is wrapped in try-catch.
+    /// @dev FEE() is wrapped in try-catch.
     /// A terminal that lacks IJBFeeTerminal no longer bricks the swap;
     /// fee defaults to 0 and the swap routes through V4 instead of reverting.
     function test_Regression_SellSideGracefullyFallsBackWhenTerminalLacksFeeInterface() public {

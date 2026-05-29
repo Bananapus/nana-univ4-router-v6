@@ -7,7 +7,7 @@ import {TickMath} from "@uniswap/v4-core/src/libraries/TickMath.sol";
 import {MockTerminalIgnoringMin} from "../regression/JBRouteMinOutputBypass.t.sol";
 import {PreviewPayForRoutingTest} from "../regression/PreviewPayForRouting.t.sol";
 
-contract CodexNemesisBuySideRouteHonestyTest is PreviewPayForRoutingTest {
+contract BuySideRouteHonestyTest is PreviewPayForRoutingTest {
     /// @notice A terminal that inflates `previewPayFor` to win the routing decision and then mints fewer project
     /// tokens at `pay` time must not be able to silently settle below the V4 quote it displaced. The router's
     /// strict `routeMinimum >= uniswapV4ExpectedTokens + 1` floor rejects the under-fill via

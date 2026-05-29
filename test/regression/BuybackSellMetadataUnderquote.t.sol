@@ -7,7 +7,7 @@ import {IJBTerminal} from "@bananapus/core-v6/src/interfaces/IJBTerminal.sol";
 
 import {BuybackCashOutMetadataIgnoredTest} from "../regression/BuybackCashOutMetadataIgnored.t.sol";
 
-contract CodexNemesisBuybackSellMetadataUnderquoteTest is BuybackCashOutMetadataIgnoredTest {
+contract BuybackSellMetadataUnderquoteTest is BuybackCashOutMetadataIgnoredTest {
     /// @notice Metadata-only sell previews are ignored for route choice even when a direct terminal call would pay
     /// more.
     function test_metadataBackedSellRouteStaysIneligible() public {

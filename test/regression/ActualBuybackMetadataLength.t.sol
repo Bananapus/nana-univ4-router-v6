@@ -2,26 +2,23 @@
 pragma solidity 0.8.28;
 
 import {IJBTerminal} from "@bananapus/core-v6/src/interfaces/IJBTerminal.sol";
+import {IJBCashOutHook} from "@bananapus/core-v6/src/interfaces/IJBCashOutHook.sol";
 import {IJBRulesetApprovalHook} from "@bananapus/core-v6/src/interfaces/IJBRulesetApprovalHook.sol";
 import {JBCashOutHookSpecification} from "@bananapus/core-v6/src/structs/JBCashOutHookSpecification.sol";
 import {JBRuleset} from "@bananapus/core-v6/src/structs/JBRuleset.sol";
+import {PoolId} from "@uniswap/v4-core/src/types/PoolId.sol";
 import {SwapParams} from "@uniswap/v4-core/src/types/PoolOperation.sol";
 import {TickMath} from "@uniswap/v4-core/src/libraries/TickMath.sol";
 
 import {JuiceboxHookTest} from "../JBUniswapV4Hook.t.sol";
 import {MockERC20} from "../mock/MockERC20.sol";
 
-contract ZeroTaxNoFeeCashoutTerminal {
-    uint256 internal immutable _cashOutAmount;
-    address internal _projectToken;
+contract ActualBuybackMetadataLengthTerminal {
+    uint256 internal immutable _liveCashOutAmount;
     uint256 public lastProjectId;
 
-    constructor(uint256 cashOutAmount) {
-        _cashOutAmount = cashOutAmount;
-    }
-
-    function setProjectToken(address projectToken) external {
-        _projectToken = projectToken;
+    constructor(uint256 liveCashOutAmount) {
+        _liveCashOutAmount = liveCashOutAmount;
     }
 
     function previewCashOutFrom(
@@ -52,15 +49,32 @@ contract ZeroTaxNoFeeCashoutTerminal {
             approvalHook: IJBRulesetApprovalHook(address(0)),
             metadata: 0
         });
-        reclaimAmount = _cashOutAmount;
+
+        specs = new JBCashOutHookSpecification[](1);
+        specs[0] = JBCashOutHookSpecification({
+            hook: IJBCashOutHook(address(0xB0B)),
+            noop: false,
+            amount: 0,
+            metadata: abi.encode(
+                _liveCashOutAmount,
+                uint256(1 ether),
+                uint256(0),
+                int24(0),
+                uint128(0),
+                PoolId.wrap(bytes32(0)),
+                _liveCashOutAmount,
+                false
+            )
+        });
+
+        reclaimAmount = 0;
         cashOutTaxRate = 0;
-        specs = new JBCashOutHookSpecification[](0);
     }
 
     function cashOutTokensOf(
         address,
         uint256 projectId,
-        uint256 cashOutCount,
+        uint256,
         address tokenToReclaim,
         uint256 minTokensReclaimed,
         address payable beneficiary,
@@ -70,28 +84,22 @@ contract ZeroTaxNoFeeCashoutTerminal {
         external
         returns (uint256)
     {
-        require(_cashOutAmount >= minTokensReclaimed, "under min");
+        require(_liveCashOutAmount >= minTokensReclaimed, "insufficient metadata cash-out");
         lastProjectId = projectId;
-        // Burn the input project tokens from the caller to match real-terminal semantics —
-        // `JBUniswapV4Hook` checks that the input balance dropped post-call.
-        if (_projectToken != address(0) && cashOutCount != 0) {
-            MockERC20(_projectToken).burn(msg.sender, cashOutCount);
-        }
-        MockERC20(tokenToReclaim).mint(beneficiary, _cashOutAmount);
-        return _cashOutAmount;
+        MockERC20(tokenToReclaim).mint(beneficiary, _liveCashOutAmount);
+        return _liveCashOutAmount;
     }
 }
 
-contract CodexNemesisZeroTaxCashoutUnderquoteTest is JuiceboxHookTest {
-    function test_zeroTaxCashoutWithoutFeeFreeSurplusRoutesThroughJBWhenItPaysMore() public {
+contract ActualBuybackMetadataLengthTest is JuiceboxHookTest {
+    function test_actualEightWordBuybackSellMetadataIsIgnoredForRouting() public {
         uint256 amountIn = 1 ether;
-        uint256 liveCashOutAmount = 1.01 ether;
+        uint256 liveCashOutAmount = 1.02 ether;
 
-        ZeroTaxNoFeeCashoutTerminal terminal = new ZeroTaxNoFeeCashoutTerminal(liveCashOutAmount);
-        terminal.setProjectToken(address(token0));
+        ActualBuybackMetadataLengthTerminal terminal = new ActualBuybackMetadataLengthTerminal(liveCashOutAmount);
         mockJBDirectory.setMockTerminal(address(terminal));
 
-        uint256 routerPreview = hook.calculateExpectedOutputFromSelling({
+        uint256 preview = hook.calculateExpectedOutputFromSelling({
             projectId: 123,
             tokenAmountIn: amountIn,
             outputToken: address(token1),
@@ -99,9 +107,8 @@ contract CodexNemesisZeroTaxCashoutUnderquoteTest is JuiceboxHookTest {
         });
         uint256 v4Quote = hook.estimateUniswapOutput({poolId: id, key: key, amountIn: amountIn, zeroForOne: true});
 
-        assertEq(routerPreview, liveCashOutAmount, "zero-tax router preview should not subtract a blanket fee");
-        assertGt(routerPreview, v4Quote, "router should rank the better JB cash-out higher");
-        assertGt(liveCashOutAmount, v4Quote, "the executable zero-tax cashout would pay more than V4");
+        assertEq(preview, 0, "router ignores current 8-word buyback metadata");
+        assertLt(v4Quote, liveCashOutAmount, "direct JB output would beat V4");
 
         token0.approve(address(jbSwapRouter), amountIn);
         uint256 balanceBefore = token1.balanceOf(address(this));
@@ -118,7 +125,8 @@ contract CodexNemesisZeroTaxCashoutUnderquoteTest is JuiceboxHookTest {
         );
 
         uint256 received = token1.balanceOf(address(this)) - balanceBefore;
-        assertEq(terminal.lastProjectId(), 123, "router should use the better JB cash-out");
-        assertEq(received, liveCashOutAmount, "user should receive the no-fee JB cash-out amount");
+        assertEq(terminal.lastProjectId(), 0, "router must skip the JB metadata sell route");
+        assertGt(received, 0, "swap should fall back to V4");
+        assertLt(received, liveCashOutAmount, "metadata-only preview must not steer route choice");
     }
 }

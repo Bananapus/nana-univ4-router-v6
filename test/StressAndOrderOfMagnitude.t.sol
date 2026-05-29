@@ -529,7 +529,7 @@ contract StressAndOrderOfMagnitudeTest is Test {
     // ──────────────────────────────────────────────────────────────────────
     // 2. Test estimateUniswapOutput with sqrtPriceX96 near MAX_SQRT_PRICE
     //
-    //    FINDING: estimateUniswapOutput uses `uint256(sqrtPriceX96) * sqrtPriceX96`
+    //    estimateUniswapOutput uses `uint256(sqrtPriceX96) * sqrtPriceX96`
     //    at line 350 which overflows for sqrtPriceX96 > ~type(uint128).max.
     //    MAX_SQRT_PRICE (~1.46e48) squared is ~2.13e96, exceeding uint256.max (~1.16e77).
     //
