@@ -97,6 +97,8 @@ script/
 
 - early pools may not have enough oracle history, which weakens TWAP-based protection
 - buy-side routing trusts `previewPayFor(...)` for live route decisions when a terminal is available
+- sell-side routing is only for registered project ERC-20s; hook-held internal credits are claimed into the ERC-20
+  before the hook checks exact-input settlement
 - buyback-hook metadata is not used as a route-scoring source for buy or sell paths
 - the hook falls back when Juicebox-side estimation fails, so liveness and perfect observability are traded against each other
 - spot-price fallback is intentionally allowed but materially weaker than a mature TWAP

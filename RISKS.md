@@ -37,6 +37,10 @@ This file focuses on the routing, oracle, and composition risks in `JBUniswapV4H
 - **V4 estimates are approximate.** Large trades can diverge materially from the linearized V4 quote.
 - **Buy-side estimates depend on preview availability.** If the terminal cannot provide a usable preview, the hook intentionally makes the Juicebox buy path ineligible.
 - **Sell-side estimates are conservative.** If `previewCashOutFrom(...)` is unavailable or reverts, the hook intentionally declines JB sell routing instead of reviving older static reclaim math.
+- **Sell-side routing is ERC-20 only, with credit normalization.** The hook only routes sell-side Juicebox cash-outs for
+  registered project ERC-20s. Before measuring its exact-input ERC-20 balance, it claims any internal project-token
+  credits it already holds into that ERC-20 so core's credit-first burn ordering cannot leave the user's routed input
+  stranded.
 - **Zero-tax sell previews rely on terminal/data-hook semantics.** Cash-out hooks receive `beneficiaryIsFeeless` in
   their preview context, and the hook does not apply a blanket protocol-fee haircut to zero-tax previews. Final
   settlement still measures the actual token balance delivered by the terminal.
@@ -79,6 +83,10 @@ The hook uses spot price before enough history exists for the configured TWAP lo
 ### 8.3 Sell-side beneficiary substitution is accepted under the documented fee model
 
 The hook routes sell-side cash outs through itself so it can settle back into PoolManager. This is safe only because the hook is not meant to be a feeless address on terminals.
+
+The sell path is still limited to registered project ERC-20s. If the hook address has internal credits for that project,
+the hook first claims those credits into the ERC-20 before pulling the user's input from PoolManager. This keeps core's
+combined credit/ERC-20 burn ordering from changing the exact-input balance check.
 
 Metadata-only buyback hook previews are not route inputs. If `previewCashOutFrom(...)` reports `reclaimAmount == 0`, the sell-side Juicebox route is ineligible even when hook metadata contains an AMM floor. This avoids routing a user to the same pool indirectly through a buyback hook when they could have used the pool path directly. Standard non-zero reclaim previews are fee-discounted only when the terminal reports a positive cash-out tax rate.
 
