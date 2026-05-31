@@ -43,6 +43,10 @@ contract MockJBTokensReentrancy {
         projectIdOf[token] = projectId;
         if (projectId != 0) tokenOf[projectId] = token;
     }
+
+    function creditBalanceOf(address, uint256) external pure returns (uint256) {
+        return 0;
+    }
 }
 
 /// @notice Mock JBDirectory that returns configurable terminal and controller addresses.

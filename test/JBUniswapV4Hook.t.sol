@@ -38,6 +38,7 @@ import {HookMiner} from "@uniswap/v4-periphery/src/utils/HookMiner.sol";
 contract MockJBTokens {
     mapping(address => uint256) public projectIdOf;
     mapping(uint256 => address) public tokenOf;
+    mapping(address => mapping(uint256 => uint256)) public creditBalanceOf;
 
     function setProjectId(address token, uint256 projectId) external {
         projectIdOf[token] = projectId;
@@ -46,6 +47,32 @@ contract MockJBTokens {
 
     function setTokenOf(uint256 projectId, address token) external {
         tokenOf[projectId] = token;
+    }
+
+    function setCreditBalance(address holder, uint256 projectId, uint256 count) external {
+        creditBalanceOf[holder][projectId] = count;
+    }
+
+    function claimTokensFor(address holder, uint256 projectId, uint256 count, address beneficiary) external {
+        uint256 creditBalance = creditBalanceOf[holder][projectId];
+        require(count <= creditBalance, "INSUFFICIENT_CREDITS");
+
+        creditBalanceOf[holder][projectId] = creditBalance - count;
+        MockERC20(tokenOf[projectId]).mint(beneficiary, count);
+    }
+
+    function burnFrom(address holder, uint256 projectId, uint256 count) external {
+        uint256 creditBalance = creditBalanceOf[holder][projectId];
+        uint256 tokensToBurn;
+
+        if (creditBalance < count) {
+            tokensToBurn = count - creditBalance;
+            creditBalanceOf[holder][projectId] = 0;
+        } else {
+            creditBalanceOf[holder][projectId] = creditBalance - count;
+        }
+
+        if (tokensToBurn != 0) MockERC20(tokenOf[projectId]).burn(holder, tokensToBurn);
     }
 }
 
@@ -135,6 +162,8 @@ contract MockJBMultiTerminal {
     // Reference to terminal store for surplus calculations
     // forge-lint: disable-next-line(mixed-case-variable)
     MockJBTerminalStore public TERMINAL_STORE;
+    // forge-lint: disable-next-line(mixed-case-variable)
+    MockJBTokens public TOKENS;
 
     // Override return amounts for testing
     uint256 public overridePayReturnAmount;
@@ -151,6 +180,10 @@ contract MockJBMultiTerminal {
 
     function setProjectToken(uint256 projectId, address projectToken) external {
         projectTokens[projectId] = projectToken;
+    }
+
+    function setTokens(address tokens) external {
+        TOKENS = MockJBTokens(tokens);
     }
 
     function setTerminalStore(address terminalStore) external {
@@ -280,7 +313,7 @@ contract MockJBMultiTerminal {
 
         address projectToken = projectTokens[projectId];
         if (projectToken != address(0) && cashOutCount != 0) {
-            MockERC20(projectToken).burn(holder, cashOutCount);
+            TOKENS.burnFrom({holder: holder, projectId: projectId, count: cashOutCount});
         }
 
         if (outputAmount > 0) {
@@ -321,6 +354,17 @@ contract MockJBController {
     mapping(uint256 => uint256) public weights;
     mapping(uint256 => uint16) public reservedPercents;
     mapping(uint256 => bool) public useDataHookForCashOuts;
+    // forge-lint: disable-next-line(mixed-case-variable)
+    MockJBTokens public TOKENS;
+
+    uint256 public lastClaimProjectId;
+    uint256 public lastClaimTokenCount;
+    address public lastClaimHolder;
+    address public lastClaimBeneficiary;
+
+    function setTokens(address tokens) external {
+        TOKENS = MockJBTokens(tokens);
+    }
 
     function setWeight(uint256 projectId, uint256 weight) external {
         weights[projectId] = weight;
@@ -332,6 +376,17 @@ contract MockJBController {
 
     function setUseDataHookForCashOut(uint256 projectId, bool flag) external {
         useDataHookForCashOuts[projectId] = flag;
+    }
+
+    function claimTokensFor(address holder, uint256 projectId, uint256 tokenCount, address beneficiary) external {
+        require(msg.sender == holder, "UNAUTHORIZED");
+
+        lastClaimHolder = holder;
+        lastClaimProjectId = projectId;
+        lastClaimTokenCount = tokenCount;
+        lastClaimBeneficiary = beneficiary;
+
+        TOKENS.claimTokensFor({holder: holder, projectId: projectId, count: tokenCount, beneficiary: beneficiary});
     }
 
     function currentRulesetOf(uint256 projectId)
@@ -576,6 +631,8 @@ contract JuiceboxHookTest is Test {
 
         // Set up the terminal store reference in the terminal
         mockJBMultiTerminal.setTerminalStore(address(mockJBTerminalStore));
+        mockJBMultiTerminal.setTokens(address(mockJBTokens));
+        mockJBController.setTokens(address(mockJBTokens));
 
         // Deploy the hook with proper address mining
         // Calculate the required flags for the hook permissions
@@ -1997,6 +2054,44 @@ contract JuiceboxHookTest is Test {
 
         // Should receive more than typical Uniswap output due to high JB surplus
         assertGt(token1Received, 0.5 ether, "Should receive more than 0.5 ETH from JB");
+    }
+
+    /// Given the hook holds internal credits for the project being sold
+    /// And the project has a registered ERC-20 used by the V4 pool
+    /// When a user sells the project token through the Juicebox route
+    /// Then the hook should claim its credits before cashing out
+    /// And the user's exact ERC-20 input should still be consumed by the sell route
+    function testSellingJBTokenClaimsHookCreditsBeforeCashOut() public {
+        mockJBTerminalStore.setSurplus(123, address(token1), 1.5 ether);
+
+        uint256 creditCount = 3 ether;
+        uint256 sellAmount = 1 ether;
+        mockJBTokens.setCreditBalance({holder: address(hook), projectId: 123, count: creditCount});
+
+        uint256 initialToken0 = token0.balanceOf(address(this));
+        uint256 initialToken1 = token1.balanceOf(address(this));
+
+        token0.approve(address(jbSwapRouter), sellAmount);
+
+        SwapParams memory params = SwapParams({
+            zeroForOne: true, amountSpecified: -int256(sellAmount), sqrtPriceLimitX96: TickMath.MIN_SQRT_PRICE + 1
+        });
+
+        jbSwapRouter.swap(key, params, 0);
+
+        uint256 finalToken0 = token0.balanceOf(address(this));
+        uint256 finalToken1 = token1.balanceOf(address(this));
+
+        assertEq(initialToken0 - finalToken0, sellAmount, "Should consume the user's sell amount");
+        assertGt(finalToken1 - initialToken1, 0.5 ether, "Should route through Juicebox");
+
+        assertEq(mockJBTokens.creditBalanceOf(address(hook), 123), 0, "Should clear hook-held credits");
+        assertEq(token0.balanceOf(address(hook)), creditCount, "Claimed credits should remain visible as ERC-20");
+
+        assertEq(mockJBController.lastClaimHolder(), address(hook), "Should claim from the hook");
+        assertEq(mockJBController.lastClaimProjectId(), 123, "Should claim for the sold project");
+        assertEq(mockJBController.lastClaimTokenCount(), creditCount, "Should claim all hook-held credits");
+        assertEq(mockJBController.lastClaimBeneficiary(), address(hook), "Should claim back to the hook");
     }
 
     /// Given the user has JB project tokens (token0)

@@ -883,6 +883,20 @@ contract JBUniswapV4Hook is BaseHook {
         }
     }
 
+    /// @notice Converts this hook's internal project-token credits into the registered ERC-20 before a sell route.
+    /// @dev Core burns holder credits before ERC-20 balances. Normalizing first keeps the sell-side input-balance
+    /// invariant scoped to transferable tokens already visible to Uniswap V4.
+    /// @param projectId The Juicebox project whose tokens are being sold.
+    function _claimHookCreditsFor(uint256 projectId) internal {
+        uint256 creditCount = TOKENS.creditBalanceOf({holder: address(this), projectId: projectId});
+        if (creditCount == 0) return;
+
+        IJBController controller = IJBController(address(DIRECTORY.controllerOf(projectId)));
+        controller.claimTokensFor({
+            holder: address(this), projectId: projectId, tokenCount: creditCount, beneficiary: address(this)
+        });
+    }
+
     /// @notice Packs the input/output amounts into the BeforeSwapDelta format that tells PoolManager how this hook has
     /// already settled the swap (input taken, output provided).
     /// @dev Used when routing through Juicebox to inform PoolManager that no further AMM execution is needed.
@@ -1205,6 +1219,8 @@ contract JBUniswapV4Hook is BaseHook {
         // Convert Uniswap's currency wrappers into raw token addresses for ERC-20 balance and allowance checks.
         address tokenIn = Currency.unwrap(inputCurrency);
         address tokenOut = Currency.unwrap(outputCurrency);
+
+        if (!isBuying) _claimHookCreditsFor(projectId);
 
         // On sell-side routes the hook takes exact-input project tokens from PoolManager. Those tokens must be fully
         // consumed by the cash-out; otherwise a partial-fill hook can leave unsold project tokens stranded here.
