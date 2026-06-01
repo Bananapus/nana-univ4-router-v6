@@ -9,6 +9,11 @@ This repo was not part of the deployed v5 ecosystem that the top-level changelog
 - `JBUniswapV4Hook`
 - `Oracle`
 
+## 0.0.50 — Raise dependency floors; document conventions
+
+- Raise dependency floors to the latest published versions.
+- Document NatSpec, comment, and lint conventions in `STYLE_GUIDE.md`.
+
 ## 0.0.31 — Bump nana-core-v6 to 0.0.52
 
 `nana-core-v6@0.0.52` centralized the protocol fee constant into `JBConstants.FEE` and dropped `IJBFeeTerminal.FEE()`. Updated `JBUniswapV4Hook` accordingly:
