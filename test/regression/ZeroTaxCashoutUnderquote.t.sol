@@ -64,8 +64,7 @@ contract ZeroTaxNoFeeCashoutTerminal {
         address tokenToReclaim,
         uint256 minTokensReclaimed,
         address payable beneficiary,
-        bytes calldata,
-        uint256
+        bytes calldata
     )
         external
         returns (uint256)
