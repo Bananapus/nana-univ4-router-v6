@@ -127,8 +127,7 @@ contract FeeFreeSurplusLikeTerminal {
         address tokenToReclaim,
         uint256 minTokensReclaimed,
         address payable beneficiary,
-        bytes calldata,
-        uint256 /* referralProjectId */
+        bytes calldata
     )
         external
         returns (uint256)

@@ -1273,8 +1273,7 @@ contract JBUniswapV4Hook is BaseHook {
                 tokenToReclaim: normalizedTokenOut, // Native ETH → JB_NATIVE_TOKEN
                 minTokensReclaimed: amountOutMin, // Minimum tokens required (enforced by JB terminal)
                 beneficiary: payable(address(this)), // beneficiary (hook)
-                metadata: bytes(""), // Empty metadata
-                referralProjectId: 0
+                metadata: bytes("") // Empty metadata
             });
         }
 

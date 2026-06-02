@@ -207,8 +207,7 @@ contract MockJBMultiTerminalInv {
         address,
         uint256,
         address payable,
-        bytes calldata,
-        uint256 /* referralProjectId */
+        bytes calldata
     )
         external
         pure
