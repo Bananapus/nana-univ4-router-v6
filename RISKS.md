@@ -6,7 +6,7 @@ This file focuses on the routing, oracle, and composition risks in `JBUniswapV4H
 
 - Read `Priority risks` first.
 - Use the detailed sections to separate oracle-quality problems from route-selection problems.
-- Treat `Accepted Behaviors` and `Invariants to Verify` as the line between intentional fallback and actual defects.
+- Treat `Accepted behaviors` and `Invariants to verify` as the line between intentional fallback and actual defects.
 
 ## Priority risks
 
@@ -16,21 +16,21 @@ This file focuses on the routing, oracle, and composition risks in `JBUniswapV4H
 | P1 | Oracle warmup and low-history fallback | New or thin pools weaken TWAP-based protection and can fall back to spot pricing. | Operational warmup guidance, explicit fallback behavior, and `amountOutMin` enforcement. |
 | P1 | Buyback-hook recursion | Same-pool composition with `nana-buyback-hook-v6` can recurse if the routing guard breaks. | Reentrancy guard plus fail-closed fallback into minting. |
 
-## 1. Trust Assumptions
+## 1. Trust assumptions
 
 - **PoolManager and V4 callbacks.** The hook trusts Uniswap V4 callback ordering and signed-delta semantics.
 - **Juicebox preview surfaces.** Buy-side routing trusts `previewPayFor(...)` when available. Sell-side routing trusts `previewCashOutFrom(...)` when available.
 - **Project-selected terminals.** The hook trusts the project's primary terminal as the protocol-side execution target.
 - **Oracle readers.** Downstream systems may treat `observe(...)` as a real guardrail even though this is still pool-local oracle state.
 
-## 2. Oracle Risks
+## 2. Oracle risks
 
 - **Warmup spot fallback.** During the early life of a pool, routing can rely on spot price instead of a mature TWAP.
 - **Observation cardinality growth.** Oracle growth costs are borne by the caller that crosses a capacity boundary.
 - **Fixed TWAP period.** The 30-minute lookback is compile-time behavior. If conditions change, the fix is redeployment, not admin retuning.
 - **Mature-oracle failures are fail-closed.** Once the hook expects TWAP to be available, broken observation reads can revert the swap instead of degrading back to spot.
 
-## 3. Routing Risks
+## 3. Routing risks
 
 - **Three-way routing.** The hook may compare V4 with minting, cash out, or both, depending on which side is the project token.
 - **Slippage protection depends on `hookData`.** The first 32 bytes must encode `amountOutMin`.
@@ -45,24 +45,24 @@ This file focuses on the routing, oracle, and composition risks in `JBUniswapV4H
   their preview context, and the hook does not apply a blanket protocol-fee haircut to zero-tax previews. Final
   settlement still measures the actual token balance delivered by the terminal.
 
-## 4. MEV Surface
+## 4. MEV surface
 
 - **Spot-fallback sandwich window.** During warmup, attackers can manipulate spot price to influence route choice.
 - **TWAP manipulation cost.** Sustained manipulation is much more expensive than single-block spot manipulation, but it is not impossible.
 
-## 5. Composition Risks
+## 5. Composition risks
 
 - **Same-pool composition with `JBBuybackHook`.** The hook is meant to serve as both V4 pool hook and oracle source for the buyback hook. If recursion guards break, the composition becomes unsafe.
 - **Static-helper versus live-routing differences.** Some helper functions remain more permissive than the live routing path. Documentation and integrator expectations must keep that distinction clear.
 - **Feeless hook deployment would be dangerous on sells.** If the hook were ever registered as feeless on a terminal, traders routing sells through it would inherit that fee exemption.
 
-## 6. Deployment Risks
+## 6. Deployment risks
 
 - **Hook-address mining.** V4 hooks encode permission flags in their address bits. A bad deployment means callbacks silently do not fire as intended.
 - **Immutable constructor wiring.** Wrong directory, prices, or token assumptions require redeployment and pool migration.
 - **Singleton blast radius.** One hook contract can serve many pools. A bug in the hook affects all of them.
 
-## 7. Invariants to Verify
+## 7. Invariants to verify
 
 - TWAP dampens manipulation more than spot once the oracle is mature.
 - Observation timestamps progress correctly and same-block writes remain no-ops.
@@ -70,7 +70,7 @@ This file focuses on the routing, oracle, and composition risks in `JBUniswapV4H
 - External Juicebox-call failures usually degrade to V4 instead of inventing new routing semantics.
 - Mature-oracle failures are intentionally distinct from early warmup fallback.
 
-## 8. Accepted Behaviors
+## 8. Accepted behaviors
 
 ### 8.1 JB routing can bypass V4 price discovery
 
@@ -122,54 +122,40 @@ When the TWAP oracle has insufficient observation history (newly created pools, 
 
 ---
 
-## 9. Accepted Notes
+## 9. Accepted risks and notes
 
-The following notes were reviewed and accepted.
+These are standing properties of the system. They describe behavior that is intentional, bounded, or otherwise tolerated, along with the reasoning that makes each one acceptable.
 
-### Oracle Notes
+### Oracle behavior
 
-#### Post-action oracle observation backfills TWAP with post-swap tick *(Major)*
+#### Post-action observations backfill TWAP with the post-swap tick
 
-`Oracle.transform` records the post-swap tick as `tickCumulative` for the entire elapsed time since the last observation, retroactively projecting the post-swap price backwards in time. This corrupts TWAP for large swaps with infrequent observations.
+`Oracle.transform` records the post-swap tick as `tickCumulative` for the entire elapsed time since the last observation, projecting the post-swap price backwards across that interval. For large swaps with infrequent observations, this skews the TWAP. The behavior mirrors Uniswap V3's native oracle; splitting observations would double gas cost and diverge from V3 semantics. Downstream consumers apply their own slippage and oracle-quality checks.
 
-**Accepted.** Same behavior as Uniswap V3's native oracle. Splitting observations would double gas cost and deviate from V3 semantics. Downstream consumers should apply their own slippage and oracle-quality checks.
+#### A single observation returns the spot tick as the TWAP
 
-#### Single observation returns spot tick as TWAP *(Minor)*
+With fewer than two observations, `observeTWAP` returns the current spot tick as the TWAP. Internal routing is bounded by the 15% fixed slippage tolerance that applies when no TWAP is available, and external callers check the observation count before trusting the value.
 
-When the oracle has < 2 observations, `observeTWAP` returns the current spot tick as TWAP.
+#### Insufficient history falls back to the manipulable spot price
 
-**Accepted.** Internal routing mitigated by 15% fixed slippage when no TWAP available. External callers should check observation count before trusting the value.
+When too few observations exist, the oracle returns the spot price, which is manipulable via JIT liquidity. The 15% fixed slippage tolerance bounds the impact on routing, and external consumers verify TWAP quality before relying on it.
 
-#### Insufficient TWAP falls back to manipulable spot price *(Medium)*
+#### Observation growth is synchronous
 
-When insufficient observations exist, the oracle returns spot price which is manipulable via JIT liquidity.
+`increaseOracleCardinalityNext` initializes oracle slots synchronously, so growing by a large amount in one call costs significant gas. Growth is bounded by `MAX_TWAP_CARDINALITY = 1024` and is idempotent: once a slot is grown, it cannot be grown again at the same size, so the cost is paid once.
 
-**Accepted.** Mitigated by 15% fixed slippage tolerance. External consumers should verify TWAP quality.
+### Swap routing behavior
 
-#### Synchronous TWAP observation growth enables gas-griefing *(Medium)*
+#### `_beforeSwap` ignores the caller's `sqrtPriceLimitX96`
 
-`increaseOracleCardinalityNext` initializes oracle slots synchronously. Growing by large amounts costs significant gas.
+When routing through Juicebox, `_beforeSwap` does not apply the caller's `sqrtPriceLimitX96` because no AMM ticks are crossed. For V4-path swaps, the PoolManager applies the limit normally. The hook's own slippage protection via `amountOutMin` governs the Juicebox path.
 
-**Accepted.** Bounded by `MAX_TWAP_CARDINALITY = 1024` and idempotent — once grown, cannot be re-griefed at the same size. One-time cost.
+#### A terminal fee above `MAX_FEE` makes the sell-side estimate ineligible
 
-### Swap Routing Notes
+`calculateExpectedOutputFromSelling` returns `0` when the terminal reports a fee above `JBConstants.MAX_FEE`, treating the Juicebox sell path as ineligible so the swap degrades to V4 rather than reverting on underflow. The `_settleOutput` path wraps terminal calls in try/catch, so the estimation path and the settlement path agree on degrading to V4.
 
-#### `_beforeSwap` ignores caller's `sqrtPriceLimitX96` *(Minor)*
+### Other notes
 
-The hook's `_beforeSwap` doesn't use the caller's `sqrtPriceLimitX96` when routing through Juicebox because no AMM ticks are crossed. For V4-path swaps, the PoolManager applies the limit normally.
+#### The buy helper truncates currency IDs to `uint32`
 
-**Accepted.** The hook has independent slippage protection via `amountOutMin`.
-
-#### Terminal fee exceeding MAX_FEE could underflow sell-side estimate *(Medium)*
-
-Fee computation in `calculateExpectedOutputFromSelling` could underflow when the terminal reports a fee exceeding `JBConstants.MAX_FEE`, making the JB sell path revert instead of falling back to V4.
-
-**Fixed.** `calculateExpectedOutputFromSelling` now returns 0 when the fee exceeds `MAX_FEE`, treating the JB sell path as ineligible so the swap degrades to V4. The `_settleOutput` path already wraps terminal calls in try-catch; this fix closes the estimation counterpart.
-
-### Minor Notes
-
-#### Buy helper truncates currency IDs to `uint32` *(Minor)*
-
-`_getBuyHelper` uses `uint32(uint160(paymentToken))` for currency comparison. Collision probability (~0.001% with ~10k active tokens) is negligible.
-
-**Accepted.** Even a collision only affects the view-only preview estimation, not actual swap execution.
+`_getBuyHelper` uses `uint32(uint160(paymentToken))` for currency comparison. The collision probability (~0.001% with ~10k active tokens) is negligible, and a collision would affect only the view-only preview estimation, not actual swap execution.

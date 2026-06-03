@@ -8,6 +8,10 @@ pragma solidity 0.8.28;
 /// length 1 and can be expanded by calling `grow()`. Pass 0 seconds to `observe()` to get the current cumulative
 /// values.
 library Oracle {
+    //*********************************************************************//
+    // --------------------------- custom errors ------------------------- //
+    //*********************************************************************//
+
     /// @notice Thrown when trying to interact with an Oracle of a non-initialized pool
     /// @param cardinality The invalid observation cardinality.
     error Oracle_CardinalityCannotBeZero(uint16 cardinality);
@@ -17,18 +21,29 @@ library Oracle {
     /// @param targetTimestamp Invalid timestamp targeted to be observed
     error Oracle_TargetPredatesOldestObservation(uint32 oldestTimestamp, uint32 targetTimestamp);
 
+    //*********************************************************************//
+    // ------------------------------ structs ---------------------------- //
+    //*********************************************************************//
+
+    /// @notice A single tick and liquidity snapshot recorded at a point in time.
     /// @dev Tightly packed into a single 256-bit slot: 32 + 56 + 160 + 8 = 256.
     /// The `int56 tickCumulative` matches Uniswap V3's width, allowing ~1.4 years at max tick (887272).
+    /// @custom:member blockTimestamp The block timestamp of the observation.
+    /// @custom:member tickCumulative The tick accumulator, i.e. tick * time elapsed since the pool was first
+    /// initialized.
+    /// @custom:member secondsPerLiquidityCumulativeX128 The seconds per liquidity, i.e. seconds elapsed /
+    /// max(1, liquidity) since the pool was first initialized.
+    /// @custom:member initialized Whether the observation is initialized.
     struct Observation {
-        // the block timestamp of the observation
         uint32 blockTimestamp;
-        // the tick accumulator, i.e. tick * time elapsed since the pool was first initialized
         int56 tickCumulative;
-        // the seconds per liquidity, i.e. seconds elapsed / max(1, liquidity) since the pool was first initialized
         uint160 secondsPerLiquidityCumulativeX128;
-        // whether or not the observation is initialized
         bool initialized;
     }
+
+    //*********************************************************************//
+    // -------------------------- internal functions -------------------- //
+    //*********************************************************************//
 
     /// @notice Transforms a previous observation into a new observation, given the passage of time and the current tick
     /// and liquidity values.

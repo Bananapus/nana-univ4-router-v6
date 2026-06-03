@@ -1,6 +1,6 @@
 # Administration
 
-## At A Glance
+## At a glance
 
 | Item | Details |
 | --- | --- |
@@ -13,7 +13,7 @@
 
 `univ4-router-v6` is intentionally almost adminless. The important fact is not who owns it, but that nobody can retune or pause it after deployment and that pool creators permanently opt into it when they initialize hooked pools.
 
-## Control Model
+## Control model
 
 - No owner
 - No governance
@@ -30,26 +30,26 @@
 | Swap caller | Per swap | Per transaction | Supplies `hookData` and participates in routing |
 | PoolManager | Constructor immutable | Global | The only caller of hook callbacks |
 
-## Privileged Surfaces
+## Privileged surfaces
 
 There are no owner-only or governance-only functions.
 
 The only effectively privileged runtime paths are the Uniswap V4 hook callbacks, which are callable only by the configured `PoolManager`.
 
-## Immutable And One-Way
+## Immutable and one-way
 
 - Constructor references to pool manager, tokens, directory, and prices are immutable.
 - Hook behavior is fixed at deployment.
 - Pools that initialize with this hook are permanently bound to it.
 
-## Operational Notes
+## Operational notes
 
 - Validate constructor wiring before deployment because there is no later patch surface.
 - Validate `hookData` expectations in integrators because callers supply the swap-level minimum-output encoding.
 - Treat pool initialization as the real administrative commitment for using this hook.
 - Be explicit about quote quality for newly initialized or shallow pools.
 
-## Machine Notes
+## Machine notes
 
 - Do not search for owner or governance roles; there are none.
 - Treat constructor args and PoolManager-only callback guards as the full control model.
@@ -61,13 +61,13 @@ The only effectively privileged runtime paths are the Uniswap V4 hook callbacks,
 - Recovery means a new hook deployment and new pools using that replacement.
 - There is no emergency shutdown path on the live hook.
 
-## Admin Boundaries
+## Admin boundaries
 
 - Nobody can retune oracle windows or routing logic after deployment.
 - Nobody can pause swaps on already hooked pools through this contract.
 - Nobody can extract persistent balances because the hook is not a treasury surface.
 
-## Source Map
+## Source map
 
 - `src/JBUniswapV4Hook.sol`
 - `src/libraries/Oracle.sol`

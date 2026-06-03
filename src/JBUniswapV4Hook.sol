@@ -67,43 +67,43 @@ contract JBUniswapV4Hook is BaseHook {
     // --------------------------- custom errors ------------------------- //
     //*********************************************************************//
 
-    /// @notice Reverts when amountOutMin is not provided in hookData.
+    /// @notice Thrown when amountOutMin is not provided in hookData.
     /// @param hookDataLength The length of the hook data that was provided.
     error JBUniswapV4Hook_AmountOutMinRequired(uint256 hookDataLength);
 
-    /// @notice Reverts when an exact-output swap is attempted.
+    /// @notice Thrown when an exact-output swap is attempted.
     /// @dev Only exact-input swaps are supported.
     /// @param amountSpecified The positive exact-output amount that was requested.
     error JBUniswapV4Hook_ExactOutputSwapsNotSupported(int256 amountSpecified);
 
-    /// @notice Reverts when a Juicebox input cannot fit inside Uniswap V4's signed delta accounting.
+    /// @notice Thrown when a Juicebox input cannot fit inside Uniswap V4's signed delta accounting.
     /// @param amount The oversized input amount.
     error JBUniswapV4Hook_InputExceedsV4DeltaLimit(uint256 amount);
 
-    /// @notice Reverts when swap output is below minimum required amount.
+    /// @notice Thrown when swap output is below minimum required amount.
     /// @param amount The amount that would be delivered.
     /// @param minimum The minimum amount required by the caller.
     error JBUniswapV4Hook_InsufficientOutput(uint256 amount, uint256 minimum);
 
-    /// @notice Reverts when a nonzero Juicebox sell cash-out delivers no reclaim token.
+    /// @notice Thrown when a nonzero Juicebox sell cash-out delivers no reclaim token.
     error JBUniswapV4Hook_JuiceboxSellDidNotDeliver(address inputToken, address outputToken, uint256 amountIn);
 
-    /// @notice Reverts when a Juicebox sell route returns or fails to consume exact-input project tokens.
+    /// @notice Thrown when a Juicebox sell route returns or fails to consume exact-input project tokens.
     error JBUniswapV4Hook_SellInputReturned(address token, uint256 balanceBefore, uint256 balanceAfter);
 
-    /// @notice Reverts when a Juicebox output cannot fit inside Uniswap V4's signed delta accounting.
+    /// @notice Thrown when a Juicebox output cannot fit inside Uniswap V4's signed delta accounting.
     /// @param amount The oversized output amount.
     error JBUniswapV4Hook_OutputExceedsV4DeltaLimit(uint256 amount);
 
-    /// @notice Reverts when a reentrant swap is detected during Juicebox routing.
+    /// @notice Thrown when a reentrant swap is detected during Juicebox routing.
     /// @param caller The account that attempted the reentrant route.
     error JBUniswapV4Hook_ReentrantRouting(address caller);
 
-    /// @notice Reverts when secondsAgo is zero in observeTWAP().
+    /// @notice Thrown when secondsAgo is zero in observeTWAP().
     /// @param secondsAgo The invalid lookback window.
     error JBUniswapV4Hook_SecondsAgoCannotBeZero(uint32 secondsAgo);
 
-    /// @notice Reverts when a temporary terminal allowance was not fully consumed.
+    /// @notice Thrown when a temporary terminal allowance was not fully consumed.
     error JBUniswapV4Hook_TemporaryAllowanceNotConsumed(address token, address spender, uint256 allowance);
 
     //*********************************************************************//
@@ -163,9 +163,11 @@ contract JBUniswapV4Hook is BaseHook {
     //*********************************************************************//
 
     /// @notice The list of observations for a given pool ID
+    /// @custom:param poolId The ID of the pool the observations belong to.
     mapping(PoolId => Oracle.Observation[65_535]) public observations;
 
     /// @notice The current observation array state for the given pool ID
+    /// @custom:param poolId The ID of the pool the observation state belongs to.
     mapping(PoolId => ObservationState) public states;
 
     //*********************************************************************//
@@ -182,10 +184,17 @@ contract JBUniswapV4Hook is BaseHook {
     //*********************************************************************//
 
     /// @notice Emitted when a routing decision is made
+    /// @param poolId The ID of the pool the swap is routed through.
+    /// @param useJuicebox Whether the swap is routed through Juicebox (true) or settled on Uniswap v4 (false).
+    /// @param expectedTokens The expected output token amount for the chosen route.
+    /// @param caller The address that initiated the swap.
     event RouteSelected(PoolId indexed poolId, bool useJuicebox, uint256 expectedTokens, address caller);
 
     /// @notice Emitted when the best route is selected among v4 and Juicebox
+    /// @param poolId The ID of the pool the swap is routed through.
     /// @param routeType 0 = v4, 1 = juicebox
+    /// @param expectedTokens The expected output token amount for the selected best route.
+    /// @param caller The address that initiated the swap.
     event BestRouteSelected(PoolId indexed poolId, uint8 routeType, uint256 expectedTokens, address caller);
 
     //*********************************************************************//
@@ -267,8 +276,8 @@ contract JBUniswapV4Hook is BaseHook {
 
             // Zero tax: terminal charges the standard fee only up to its `feeFreeSurplusOf` counter, and only
             // for non-feeless beneficiaries. Read both pieces of state to compute the exact net the terminal
-            // would settle. Fall back to gross on either read failure (older terminals without the getters)
-            // to preserve the prior optimistic behavior — bias toward JB rather than under-ranking it.
+            // would settle. Fall back to gross on either read failure (terminals without the getters)
+            // to bias toward JB rather than under-ranking it.
             if (cashOutTaxRate == 0) {
                 return _exactZeroTaxNet({
                     terminal: terminal, projectId: projectId, outputToken: outputToken, grossReclaim: grossReclaim
@@ -921,8 +930,8 @@ contract JBUniswapV4Hook is BaseHook {
     /// i.e., `gross - standardFee(min(gross, feeFreeSurplusOf))` for non-feeless beneficiaries, or `gross` if
     /// the router is registered as feeless on the terminal's feeless-addresses registry.
     /// @dev Each external read is guarded by try/catch so the routing helper degrades gracefully on terminals
-    /// that don't expose the relevant public getters — in those cases we fall back to `grossReclaim`, matching
-    /// the prior optimistic behavior (biases toward JB rather than under-ranking executable cash-outs).
+    /// that don't expose the relevant public getters — in those cases we fall back to `grossReclaim`, which
+    /// biases toward JB rather than under-ranking executable cash-outs.
     /// @param terminal The terminal whose cash-out path is being previewed.
     /// @param projectId The Juicebox project ID being cashed out from.
     /// @param outputToken The token being reclaimed (already normalized to the terminal's accounting form).

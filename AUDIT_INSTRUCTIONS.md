@@ -2,7 +2,7 @@
 
 This repo is the Uniswap V4 hook that compares V4 execution against Juicebox execution and routes to the better outcome. It also maintains the TWAP oracle used by other repos.
 
-## Audit Objective
+## Audit objective
 
 There is a billion dollars of well-meaning projects' money in the Juicebox Money Engine, growing exponentially. Your job is to hack it before anyone else. Whoever hacks it first saves/steals the money, and you are obsessed with being this winner, while also being a steward of the protocol and wanting it to keep growing safely.
 
@@ -28,13 +28,13 @@ Key dependencies:
 - Uniswap V4
 - consumers such as `nana-buyback-hook-v6` and `univ4-lp-split-hook-v6`
 
-## Start Here
+## Start here
 
 1. `src/JBUniswapV4Hook.sol`
 2. `src/libraries/Oracle.sol`
 3. deployment wiring in `script/`
 
-## Security Model
+## Security model
 
 On swaps involving a Juicebox project token, the hook:
 
@@ -48,7 +48,7 @@ It is also an oracle surface:
 - pools using it depend on its observation ring buffer
 - other repos may call `observe()` and trust its output as a pricing guardrail
 
-## Roles And Privileges
+## Roles and privileges
 
 | Role | Powers | How constrained |
 |------|--------|-----------------|
@@ -56,7 +56,7 @@ It is also an oracle surface:
 | Hook contract | Override V4 execution and maintain oracle state | Must satisfy Uniswap flash-accounting and slippage semantics |
 | Downstream consumer | Trust TWAP observations for routing or bounds | Must tolerate conservative or fail-closed behavior |
 
-## Integration Assumptions
+## Integration assumptions
 
 | Dependency | Assumption | What breaks if wrong |
 |------------|------------|----------------------|
@@ -64,7 +64,7 @@ It is also an oracle surface:
 | Uniswap V4 pool manager | Delta conventions and callback lifecycle are honored | Settlement or flash accounting breaks |
 | `nana-buyback-hook-v6` | Recursive composition expects a fail-closed routing guard | Infinite recursion or unsafe fallback |
 
-## Critical Invariants
+## Critical invariants
 
 1. Route selection is honest. The hook must compare like-for-like outputs.
 2. Settlement deltas are signed correctly. Override paths must satisfy Uniswap delta conventions and the user's minimum-out expectation.
@@ -72,7 +72,7 @@ It is also an oracle surface:
 4. Warmup behavior stays explicit. Spot fallback must remain distinguishable from mature TWAP behavior.
 5. Composition with the buyback hook remains recursion-safe.
 
-## Attack Surfaces
+## Attack surfaces
 
 - TWAP warmup and spot fallback
 - route-comparison math
@@ -81,7 +81,7 @@ It is also an oracle surface:
 - recursive composition with buyback routing
 - hook-address mining and permission-bit deployment
 
-## Accepted Risks Or Behaviors
+## Accepted risks or behaviors
 
 - Some quote paths intentionally degrade to V4 rather than block trading when Juicebox-side estimation fails.
 - Warmup-period spot fallback is an accepted but weaker safety window.
