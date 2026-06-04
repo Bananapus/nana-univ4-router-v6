@@ -13,7 +13,7 @@ Scope: the Uniswap V4 hook surface that serves Juicebox-aware routing and oracle
 
 ---
 
-# Section A — Guarantees to Paying Users (Swappers)
+## Section A — Guarantees to paying users (swappers)
 
 ## A.0 Routing matrix
 
@@ -26,7 +26,7 @@ Scope: the Uniswap V4 hook surface that serves Juicebox-aware routing and oracle
 
 JB-token detection requires the project to have a **registered ERC-20** (`JBTokens.tokenOf(projectId) == token`); credit-only projects never engage JB routing. (`JBUniswapV4Hook.sol:1090-1100`)
 
-## A.1 Routing & best-execution
+## A.1 Routing and best-execution
 
 - Every swap that touches a Juicebox project's registered ERC-20 is route-compared: the hook computes a V4-pool quote (`estimateUniswapOutput`) AND a Juicebox-side quote (`previewPayFor` on buys, `previewCashOutFrom` on sells) and routes through whichever yields more output. (`JBUniswapV4Hook.sol:734-803`)
 - The swapper **never receives fewer output tokens than `amountOutMin`** declared in `hookData[:32]`. The first 32 bytes of `hookData` are required; calls with shorter `hookData` revert `JBUniswapV4Hook_AmountOutMinRequired`. (`JBUniswapV4Hook.sol:688-693`)
@@ -37,7 +37,7 @@ JB-token detection requires the project to have a **registered ERC-20** (`JBToke
 - Buyback-hook metadata-only preview hints are **deliberately ignored** by live routing; only terminal-direct `previewPayFor` / `previewCashOutFrom` amounts count. Prevents same-pool indirect routing via composed hooks.
 - Quotes that exceed Uniswap V4's signed-delta capacity (`MAX_V4_DELTA = type(int128).max`) are treated as ineligible so the swap falls back to V4 instead of reverting during settlement. (`JBUniswapV4Hook.sol:135-137, 792-794`)
 
-## A.2 Reentrancy & recursion safety
+## A.2 Reentrancy and recursion safety
 
 - The hook is designed to compose with `JBBuybackHook` on the **same V4 pool**. The transient `_routing` flag is set before `_routeThroughJuicebox` and re-entered swaps revert `JBUniswapV4Hook_ReentrantRouting`. Composed `buyback hook -> V4 pool -> this hook -> JB terminal -> buyback hook` cycles cannot recurse. (`JBUniswapV4Hook.sol:178, 682-683, 1203, 1304`)
 - The flag survives across the `poolManager.unlock` boundary because it lives in regular storage with read-then-write semantics inside the same transaction. Custom flag (not OZ `ReentrancyGuard`) avoids colliding with PoolManager's own unlock lock.
@@ -60,15 +60,15 @@ JB-token detection requires the project to have a **registered ERC-20** (`JBToke
 - Swap-fee normalization happens **before** the price-ratio conversion inside `estimateUniswapOutput`, mirroring V4 swap math so the estimator's rounding matches actual execution rounding (avoids off-by-one drift at typical fee tiers for small inputs). (`JBUniswapV4Hook.sol:418-445`)
 - The TWAP arithmetic-mean tick is rounded toward negative infinity for negative tick deltas (Uniswap V3 convention), avoiding silent truncation bias on bearish moves. (`JBUniswapV4Hook.sol:1080-1087`)
 
-## A.5 Currency / token handling
+## A.5 Currency and token handling
 
 - Native ETH is normalized via `_normalizeToken`: Uniswap's `address(0)` maps to Juicebox's `JB_NATIVE_TOKEN` (`0xEEee...EEeE`) before terminal lookup and preview calls. Both sides of the swap are normalized consistently. (`JBUniswapV4Hook.sol:1033-1039`)
 - Token decimals are read with `try IERC20Metadata.decimals()`; failures default to `18`. Tokens advertising more than `77` decimals are treated as unsupported (would overflow `10**decimals`) and the route degrades to `0`. (`JBUniswapV4Hook.sol:330-333, 966-979`)
-- Currency-ID collisions on `uint32(uint160(token))` are bounded to view-only preview helpers and never affect live execution path selection (collision rate ~0.001% at ~10k active tokens; see `RISKS.md §9 Minor Notes`).
+- Currency-ID collisions on `uint32(uint160(token))` are bounded to view-only preview helpers and never affect live execution path selection (collision rate ~0.001% at ~10k active tokens; see `RISKS.md §9 Accepted risks and notes`).
 
 ---
 
-# Section B — Guarantees to Operators / Integrators
+## Section B — Guarantees to operators and integrators
 
 ## B.1 Powers no party retains
 
@@ -94,7 +94,7 @@ There are no operator powers on this hook. After deployment:
 
 ---
 
-# Section C — Per-Contract Operation Inventory
+## Section C — Per-contract operation inventory
 
 ## C.1 `JBUniswapV4Hook` — `src/JBUniswapV4Hook.sol`
 
@@ -148,7 +148,7 @@ Library, no external surface. Used only by `JBUniswapV4Hook`.
 - **`write(self, index, blockTimestamp, tick, liquidity, cardinality, cardinalityNext) → (indexUpdated, cardinalityUpdated)`** — appends a new observation. **Same-block writes are no-ops** (returns prior index unchanged).
 - **`grow(self, current, next) → uint16`** — initializes new slots with sentinel `{blockTimestamp:1, initialized:false}` so unwritten slots are distinguishable from real observations.
 - **`observe(self, time, secondsAgos[], tick, index, liquidity, cardinality) view → (int56[], uint160[])`** — batch lookup with binary search. Reverts `Oracle_TargetPredatesOldestObservation` when the target is older than the oldest stored observation; reverts `Oracle_CardinalityCannotBeZero` if called before initialization.
-- **`transform(last, blockTimestamp, tick, liquidity) private pure`** — post-action backfill of `tickCumulative` over `delta = blockTimestamp - last.blockTimestamp` using the post-swap tick. Same behavior as Uniswap V3's native oracle (see `RISKS.md §9 Oracle Notes`).
+- **`transform(last, blockTimestamp, tick, liquidity) private pure`** — post-action backfill of `tickCumulative` over `delta = blockTimestamp - last.blockTimestamp` using the post-swap tick. Same behavior as Uniswap V3's native oracle (see `RISKS.md §9 Accepted risks and notes`).
 
 **Library invariants:**
 - Observations are append-only and overwrite oldest-first when at capacity.
@@ -169,7 +169,7 @@ There is no `setChainSpecificConstants` one-shot binder pattern on this contract
 
 ---
 
-# Section D — Cross-Cutting Invariants
+## Section D — Cross-cutting invariants
 
 1. **Best-execution floor.** `amountOutMin` (first 32 bytes of `hookData`) is enforced on the actual settlement balance delta — not on the terminal's return value. Applies to both `_beforeSwap` (JB-routed) and `_afterSwap` (V4-routed). Fee-on-transfer output tokens cannot silently undercut.
 
@@ -203,7 +203,7 @@ There is no `setChainSpecificConstants` one-shot binder pattern on this contract
 
 ---
 
-# Section E — Out-of-Scope Centralization Caveats
+## Section E — Out-of-scope centralization caveats
 
 This repo holds **no privileged role** of its own. All implied centralization flows through dependencies whose authority is documented in the top-level `INVARIANTS.md`:
 
@@ -216,7 +216,7 @@ This repo holds **no privileged role** of its own. All implied centralization fl
 
 ---
 
-# Section F — Key Code References
+## Section F — Key code references
 
 - Reentrancy guard set/check: `src/JBUniswapV4Hook.sol:178, 682-683, 1203, 1304`
 - `amountOutMin` required: `src/JBUniswapV4Hook.sol:688-693`

@@ -1,17 +1,17 @@
 # User Journeys
 
-## Repo Purpose
+## Repo purpose
 
 This repo is the UniV4 hook and oracle primitive for Juicebox-aware swaps. It owns hook-level best-execution decisions and observation history for project-token pools. It does not decide whether a project should use market-aware routing in the first place.
 
-## Primary Actors
+## Primary actors
 
 - projects that want UniV4 swaps to respect Juicebox mint and cash-out economics
 - traders whose best route may be the pool or the protocol depending on direction and price
 - integrators reading the per-pool oracle this hook maintains
 - auditors reviewing oracle maturity, reentrancy, and path-selection assumptions
 
-## Key Surfaces
+## Key surfaces
 
 - `JBUniswapV4Hook`: hook-level routing and oracle observation recording
 - `Oracle`: observation ring and TWAP lookup logic
@@ -19,7 +19,7 @@ This repo is the UniV4 hook and oracle primitive for Juicebox-aware swaps. It ow
 - `estimateUniswapOutput(...)`: estimation path used during route comparison
 - buy-versus-mint and sell-versus-cash-out routing inside the hook's swap callbacks
 
-## Journey 1: Deploy The V4 Routing Hook For A Juicebox-Aware Pool
+## Journey 1: Deploy the V4 routing hook for a Juicebox-aware pool
 
 **Actor:** deployer or operator.
 
@@ -45,7 +45,7 @@ This repo is the UniV4 hook and oracle primitive for Juicebox-aware swaps. It ow
 
 - a Juicebox-aware V4 hook and pool exist with the intended constructor assumptions
 
-## Journey 2: Let Traders Swap Through The Better Route
+## Journey 2: Let traders swap through the better route
 
 **Actor:** trader or integrator routing a trade.
 
@@ -75,7 +75,7 @@ This repo is the UniV4 hook and oracle primitive for Juicebox-aware swaps. It ow
 
 - the trade uses whichever route the hook judges superior under current pool and Juicebox conditions
 
-## Journey 3: Provide Oracle Data To Other Protocol Components
+## Journey 3: Provide oracle data to other protocol components
 
 **Actor:** downstream contract or integrator.
 
@@ -100,7 +100,7 @@ This repo is the UniV4 hook and oracle primitive for Juicebox-aware swaps. It ow
 
 - downstream components can read time-weighted observation history instead of relying on spot only
 
-## Journey 4: Warm Up The Oracle Before Trusting It For Safety-Critical Routing
+## Journey 4: Warm up the oracle before trusting it for safety-critical routing
 
 **Actor:** operator or auditor.
 
@@ -127,13 +127,13 @@ This repo is the UniV4 hook and oracle primitive for Juicebox-aware swaps. It ow
 
 - operators know whether the oracle is still in warmup or can be trusted for the configured lookback window
 
-## Trust Boundaries
+## Trust boundaries
 
 - this repo trusts Juicebox terminal previews and cash-out semantics for protocol-side comparison
 - this repo is itself part of the market-side trust surface for buyback and LP integrations
 - immutable constructor wiring makes deployment correctness operationally critical
 
-## Hand-Offs
+## Hand-offs
 
 - Use [nana-buyback-hook-v6](../nana-buyback-hook-v6/USER_JOURNEYS.md) when the question is project-level buyback routing rather than the hook-level swap primitive.
 - Use [univ4-lp-split-hook-v6](../univ4-lp-split-hook-v6/USER_JOURNEYS.md) when the question is about deploying reserved tokens into liquidity instead of choosing swap execution paths.

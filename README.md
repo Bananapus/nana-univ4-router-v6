@@ -9,7 +9,7 @@
 - [INVARIANTS.md](./INVARIANTS.md) — scoped invariants (users / operators / per-contract / cross-cutting / centralization / refs)
 - [USER_JOURNEYS.md](./USER_JOURNEYS.md) — actor-by-actor flows
 - [SKILLS.md](./SKILLS.md) — knowledge index for AI agents
-- [RISKS.md](./RISKS.md) — risk register, accepted behaviors, accepted notes
+- [RISKS.md](./RISKS.md) — risk register, accepted behaviors, accepted risks and notes
 - [ADMINISTRATION.md](./ADMINISTRATION.md) — control model (adminless)
 - [AUDIT_INSTRUCTIONS.md](./AUDIT_INSTRUCTIONS.md) — auditor entry points
 - [STYLE_GUIDE.md](./STYLE_GUIDE.md) — house Solidity conventions
@@ -27,14 +27,7 @@ It also maintains per-pool observation history that other contracts can query th
 
 Use this repo when swap routing should be aware of Juicebox-native issuance and redemption. Do not use it as a generic Uniswap utility package.
 
-## Key Contracts
-
-| Contract | Role |
-| --- | --- |
-| `JBUniswapV4Hook` | Main Uniswap V4 hook that performs routing decisions and records oracle observations. |
-| `Oracle` | Observation-ring library used for TWAP accounting and lookup. |
-
-## Mental Model
+## Mental model
 
 This repo owns two things:
 
@@ -43,20 +36,27 @@ This repo owns two things:
 
 It is infrastructure, but infrastructure with direct economic consequences.
 
-## Read These Files First
+## Key contracts
+
+| Contract | Role |
+| --- | --- |
+| `JBUniswapV4Hook` | Main Uniswap V4 hook that performs routing decisions and records oracle observations. |
+| `Oracle` | Observation-ring library used for TWAP accounting and lookup. |
+
+## Read these files first
 
 1. `src/JBUniswapV4Hook.sol`
 2. `src/libraries/Oracle.sol`
 3. `nana-buyback-hook-v6/src/JBBuybackHook.sol` if you are reviewing the composed buyback path
 
-## Integration Traps
+## Integration traps
 
 - this hook can choose between market and protocol-native execution, so pool state alone does not determine the path
 - oracle maturity matters; early or thin pools weaken protection even if swaps still execute
 - hook-data encoding is part of the trusted interface
 - the composed buyback path inherits assumptions from both this repo and `nana-buyback-hook-v6`
 
-## Where State Lives
+## Where state lives
 
 - routing and swap decision logic live in `JBUniswapV4Hook`
 - observation history and TWAP support live in `Oracle`
@@ -76,11 +76,11 @@ forge build --deny notes
 forge test --deny notes
 ```
 
-## Deployment Notes
+## Deployment notes
 
 This repo is commonly paired with the buyback hook and the UniV4 LP split hook. Hook instances are constructor-configured and non-upgradeable, so bad deployment wiring is expensive to fix.
 
-## Repository Layout
+## Repository layout
 
 ```text
 src/
@@ -93,7 +93,7 @@ script/
   helpers/
 ```
 
-## Risks And Notes
+## Risks and notes
 
 - early pools may not have enough oracle history, which weakens TWAP-based protection
 - buy-side routing trusts `previewPayFor(...)` for live route decisions when a terminal is available
@@ -105,8 +105,10 @@ script/
 - every Juicebox-routed swap expects `hookData` to encode at least one `uint256 amountOutMin`
 - composition with `nana-buyback-hook-v6` depends on the router's recursion guard to fail closed into minting
 
-## For AI Agents
+## For AI agents
 
 - Describe this repo as the Uniswap V4 hook and oracle primitive for Juicebox-aware routing.
 - Read the routing, oracle, and slippage tests before claiming a path is preferred or safe.
 - If the question is about per-project hook selection, move to `nana-buyback-hook-v6`.
+
+If a swap touches a Juicebox project token, it flows through this hook first.

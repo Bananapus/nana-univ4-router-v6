@@ -4,11 +4,11 @@
 
 `univ4-router-v6` is a Uniswap V4 hook that compares live pool execution against Juicebox-native mint or cash-out routes whenever a project token is traded. It also maintains the TWAP oracle surface that other repos, especially `nana-buyback-hook-v6`, rely on.
 
-## System Overview
+## System overview
 
 `JBUniswapV4Hook` is the runtime hook that inspects swaps, estimates both market and protocol routes, and can override settlement when the protocol path is better. `Oracle` maintains the observation ring buffer used for TWAP lookup and interpolation. The deployment is intentionally immutable after construction.
 
-## Core Invariants
+## Core invariants
 
 - The oracle must stay queryable and sufficiently manipulation-resistant for routing decisions.
 - Routing recursion with buyback integrations must stay impossible.
@@ -23,15 +23,15 @@
 | `JBUniswapV4Hook` | Routing-aware Uniswap V4 hook and settlement override logic | Immutable runtime core |
 | `Oracle` | Observation ring buffer and TWAP interpolation | Quote-critical |
 
-## Trust Boundaries
+## Trust boundaries
 
 - Juicebox still owns minting and cash-out execution when the protocol path is selected.
 - Pool state and hook entrypoints come from Uniswap V4.
 - Downstream integrations such as `nana-buyback-hook-v6` depend on this repo's oracle and routing semantics.
 
-## Critical Flows
+## Critical flows
 
-### Swap With Routing
+### Swap with routing
 
 ```text
 swap involving a project token
@@ -43,13 +43,13 @@ swap involving a project token
   -> afterSwap and liquidity callbacks record new observations
 ```
 
-## Accounting Model
+## Accounting model
 
 This repo does not own the canonical treasury ledger. It owns route comparison and oracle observation state.
 
 Its route comparison is intentionally asymmetric: helper surfaces can be more permissive for offchain inspection, while live routing trusts stricter terminal preview surfaces and ignores buyback-hook metadata-only hints.
 
-## Security Model
+## Security model
 
 - Oracle upkeep and routing are tightly coupled.
 - Warmup behavior matters because low-history pools fall back toward spot pricing.
@@ -57,14 +57,14 @@ Its route comparison is intentionally asymmetric: helper surfaces can be more pe
 - Conservative underestimation is part of the safety model. The hook may prefer V4 over a risky Juicebox route.
 - Because the deployment is immutable, constructor mistakes are expensive to fix.
 
-## Safe Change Guide
+## Safe change guide
 
 - Treat routing and oracle logic as one system.
 - Review changes under standalone swaps, buyback-hook integration, and low-history warmup conditions.
 - If estimation logic changes, keep the distinction between offchain helpers and live-routing trust surfaces explicit.
 - Resist mutable-config creep. Constructor-configured behavior is the design goal.
 
-## Canonical Checks
+## Canonical checks
 
 - oracle observation depth and TWAP interpolation:
   `test/OracleDeepTest.t.sol`
@@ -73,7 +73,7 @@ Its route comparison is intentionally asymmetric: helper surfaces can be more pe
 - sell-path safety under hostile callback conditions:
   `test/regression/SellPathReentrancy.t.sol`
 
-## Source Map
+## Source map
 
 - `src/JBUniswapV4Hook.sol`
 - `src/libraries/Oracle.sol`

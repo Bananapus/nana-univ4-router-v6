@@ -1,11 +1,11 @@
 # Juicebox UniV4 Router
 
-## Use This File For
+## Use this file for
 
 - Use this file when the task involves the V4 router hook, route selection between Uniswap and Juicebox, TWAP observations, or hook-permission-bit deployment requirements.
 - Start here, then decide whether the issue is buy-side routing, sell-side routing, oracle history, or deployment and flag setup.
 
-## Read This Next
+## Read this next
 
 | If you need... | Open this next |
 |---|---|
@@ -17,7 +17,7 @@
 | Routing invariants and slippage behavior | [`test/Invariant.t.sol`](./test/Invariant.t.sol), [`test/SlippageTolerance.t.sol`](./test/SlippageTolerance.t.sol), [`test/ThreeWayRouting.t.sol`](./test/ThreeWayRouting.t.sol), [`test/JBUniswapV4HookFork.t.sol`](./test/JBUniswapV4HookFork.t.sol) |
 | Structural edge cases and pinned notes | [`test/StressAndOrderOfMagnitude.t.sol`](./test/StressAndOrderOfMagnitude.t.sol), [`test/TestStructuralArbitrage.t.sol`](./test/TestStructuralArbitrage.t.sol), [`test/JBUniswapV4Hook.t.sol`](./test/JBUniswapV4Hook.t.sol), [`test/TestRegressionGaps.sol`](./test/TestRegressionGaps.sol) |
 
-## Repo Map
+## Repo map
 
 | Area | Where to look |
 |---|---|
@@ -30,17 +30,17 @@
 
 Uniswap V4 hook and oracle surface for Juicebox-aware swaps. This repo compares market execution against Juicebox-native mint or cash-out execution and records per-pool observations for TWAP-aware routing.
 
-## Reference Files
+## Reference files
 
 - Open [`references/runtime.md`](./references/runtime.md) for the swap decision path, oracle write and read behavior, and the main economic invariants.
 - Open [`references/operations.md`](./references/operations.md) for deployment constraints, hook-data expectations, and common stale assumptions around fallback and TWAP quality.
 
-## Working Rules
+## Working rules
 
 - Start in [`src/JBUniswapV4Hook.sol`](./src/JBUniswapV4Hook.sol) for routing behavior, but verify oracle assumptions in [`src/libraries/Oracle.sol`](./src/libraries/Oracle.sol) before changing quote logic.
 - This hook is designed to compose with the buyback hook on the same pool. Treat composition limits and recursion guards as first-class behavior.
 - Treat exact-input assumptions, fallback-to-V4 behavior, and slippage checks as high-risk.
-- Buy-side routing now trusts `previewPayFor(...)` for live decisions when it is available.
+- Buy-side routing trusts `previewPayFor(...)` for live decisions when it is available.
 - Sell-side routing depends on `previewCashOutFrom(...)` and intentionally falls back to V4 rather than reviving stale static reclaim math.
 - The V4 quote model is intentionally approximate. Do not oversell estimates as execution guarantees.
 - Uniswap V4 signed-delta limits are a real routing boundary. Oversized Juicebox outputs must degrade to V4.
