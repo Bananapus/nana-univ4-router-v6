@@ -228,8 +228,7 @@ library Oracle {
         }
     }
 
-    /// @notice Fetches the observations beforeOrAt and atOrAfter a given target, i.e. where [beforeOrAt, atOrAfter] is
-    /// satisfied.
+    /// @notice Fetches the observations around a target, where [beforeOrAt, atOrAfter] is satisfied.
     /// @dev Assumes there is at least 1 initialized observation.
     /// Used by observeSingle() to compute the counterfactual accumulator values as of a given block timestamp.
     /// @param self The stored oracle array
@@ -369,8 +368,7 @@ library Oracle {
         }
     }
 
-    /// @notice Returns the accumulator values as of each time seconds ago from the given time in the array of
-    /// `secondsAgos`.
+    /// @notice Returns accumulator values as of each `secondsAgos` offset from the given time.
     /// @dev Reverts if `secondsAgos` > oldest observation
     /// @param self The stored oracle array
     /// @param time The current block.timestamp
