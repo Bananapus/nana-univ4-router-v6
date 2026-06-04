@@ -49,8 +49,7 @@ import {Oracle} from "./libraries/Oracle.sol";
 /// the user more tokens. Uses a 30-minute TWAP oracle to resist price manipulation when comparing routes.
 /// @dev Compares V4 TWAP-based estimates against Juicebox terminal previews for both buy-side (pay) and sell-side
 /// (cash out) swaps. Provides IGeomeanOracle-compatible `observe()` for TWAP queries by external contracts.
-/// @dev COMPOSITION WARNING — This hook is designed to serve as the ORACLE_HOOK for JBBuybackHook on the same V4
-/// pool.
+/// @dev COMPOSITION WARNING — This hook can serve as JBBuybackHook's ORACLE_HOOK for the same V4 pool.
 /// When the buyback hook attempts a swap, it flows through this hook's `_beforeSwap` routing logic. Live routing only
 /// trusts direct terminal preview outputs. Buyback-hook metadata is ignored because it can send users through the same
 /// pool indirectly. Static weight math remains only an offchain/reference helper, so deployers must not treat it as
@@ -238,8 +237,7 @@ contract JBUniswapV4Hook is BaseHook {
     /// If previewing is unavailable or reverts, this helper intentionally returns `0` and makes the JB sell route
     /// ineligible. That conservative degrade rule avoids routing through JB on a stale static reclaim estimate that
     /// may disagree with the terminal's live cash-out path.
-    /// @dev NOTE: Fee calls are best-effort. If the terminal does not expose `FEE()`, the estimate falls back to the
-    /// raw preview.
+    /// @dev NOTE: Fee calls are best-effort. If the terminal does not expose `FEE()`, this falls back to raw preview.
     /// @param projectId The Juicebox project ID
     /// @param tokenAmountIn The amount of JB tokens to sell
     /// @param outputToken The token to receive (e.g., ETH, USDC)

@@ -13,7 +13,7 @@
 - [ADMINISTRATION.md](./ADMINISTRATION.md) — control model (adminless)
 - [AUDIT_INSTRUCTIONS.md](./AUDIT_INSTRUCTIONS.md) — auditor entry points
 - [STYLE_GUIDE.md](./STYLE_GUIDE.md) — house Solidity conventions
-- [CHANGELOG.md](./CHANGELOG.md) — version history
+- [CHANGELOG.md](./CHANGELOG.md) - V5 to V6 migration changelog
 
 ## Overview
 
