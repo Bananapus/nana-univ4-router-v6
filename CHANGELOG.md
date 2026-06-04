@@ -1,45 +1,74 @@
-# Changelog
+# V5 to V6 Changelog
 
 ## Scope
 
-This repo was not part of the deployed v5 ecosystem that the top-level changelog measures, so it is excluded from the ecosystem delta.
+This is a V5-to-V6 migration changelog, not a package release log or commit history. The closest V5 source comparison is `nana-uni-v4-util-v5` in `../../v5/evm`; the current repo is the V6 Uniswap V4 router/oracle hook package.
 
-## Current v6 surface
+## Current V6 Surface
 
 - `JBUniswapV4Hook`
 - `Oracle`
 
-## 0.0.50 — Raise dependency floors; document conventions
-
-- Raise dependency floors to the latest published versions.
-- Document NatSpec, comment, and lint conventions in `STYLE_GUIDE.md`.
-
-## 0.0.31 — Bump nana-core-v6 to 0.0.52
-
-`nana-core-v6@0.0.52` centralized the protocol fee constant into `JBConstants.FEE` and dropped `IJBFeeTerminal.FEE()`. Updated `JBUniswapV4Hook` accordingly:
-
-- `calculateExpectedOutputFromSelling` no longer does `try IJBFeeTerminal(terminal).FEE()` + fallback to 0 — it reads the compile-time constant `JBConstants.FEE` directly. The previous fallback and the `fee > MAX_FEE` guard are now both dead (constant is `25`, `MAX_FEE` is `1000`), so they're removed.
-- Dropped the `IJBFeeTerminal` import (no longer referenced).
-- Deleted `test/regression/RegressionInvalidFeeSellDoS.t.sol` — it specifically tested the "terminal-reported FEE > MAX_FEE" failure mode, which is no longer reachable because the fee is no longer a per-terminal value.
-- Added `pauseCrossProjectFeeFreeInflows: false` to all `JBRulesetMetadata` literals across `test/` for the new ruleset field added in core 0.0.52.
-
 ## Summary
 
-- This repo is a dedicated Uniswap v4 hook package for the v6 stack rather than a deployed v5 migration target.
-- The current codebase is tightly connected to the v6 buyback and preview-routing model, with tests that exercise preview paths, oracle logic, swap estimates, slippage handling, and structural arbitrage scenarios.
-- The repo mixes exact and ranged pragmas across files, but the main runtime contract is on the v6 `0.8.28` baseline.
+- The hook is now built for the V6 core preview model. Buy-side routing relies on `previewPayFor(...)`; sell-side routing relies on `previewCashOutFrom(...)`.
+- V5 utility code considered V3, V4, and Juicebox routes. V6 removes V3 factory/WETH constructor dependencies from this package and focuses on V4/Juicebox route selection.
+- Route events now use numeric route types and include `caller`.
+- The hook adds stronger runtime guards for exact-output swaps, V4 signed-delta limits, temporary allowances, sell-side input handling, and reentrant Juicebox routing.
+- The V6 hook also exposes oracle behavior used by other V6 packages such as the buyback hook.
 
-## Migration notes
+## ABI, Event, and Error Changes
 
-- Do not count this repo in the deployed v5-to-v6 ecosystem summary.
-- If you are integrating it, use the current v6 sources and tests as the source of truth rather than trying to map it onto the older deployed ecosystem.
+- Constructor inputs changed:
+  - V5 took V3 factory and wrapped native token inputs.
+  - V6 constructor takes `poolManager`, `tokens`, `directory`, and `prices`.
+- Removed V5 assumptions:
+  - no V3 swap callback interface on the V6 hook
+  - no V3 route type string in `BestRouteSelected`
+- Changed events:
+  - `RouteSelected(PoolId,bool,uint256,address)`
+  - `BestRouteSelected(PoolId,uint8,uint256,address)`
+- Added or changed errors:
+  - `JBUniswapV4Hook_InputExceedsV4DeltaLimit`
+  - `JBUniswapV4Hook_OutputExceedsV4DeltaLimit`
+  - `JBUniswapV4Hook_JuiceboxSellDidNotDeliver`
+  - `JBUniswapV4Hook_SellInputReturned`
+  - `JBUniswapV4Hook_ReentrantRouting`
+  - `JBUniswapV4Hook_TemporaryAllowanceNotConsumed`
+- Oracle errors are defined in `Oracle` and should be regenerated with the V6 ABI/types.
 
-## Routing and oracle hardening
+## Machine-Checked ABI Coverage
 
-- JB quotes that exceed Uniswap V4's signed `int128` delta capacity are now treated as ineligible, so swaps fall back to V4 instead of reverting during settlement.
-- `_beforeSwap` and `_afterSwap` now agree on hook-data parsing: the first 32 bytes are `amountOutMin`, and extra trailing metadata is tolerated.
-- Buy-side live routing now trusts `previewPayFor()` only. Preview failures, missing buy terminals, and extreme token-decimal metadata all degrade to a `0` JB quote so V4 stays live.
-- Sell-side live routing now treats `previewCashOutFrom()` as authoritative. If that preview surface is unavailable or reverts, the JB sell quote intentionally degrades to `0` so the router does not rely on a stale static reclaim estimate.
-- Large-trade V4 quote drift remains a documented limitation of the current linear estimator; fork tests pin sample small-trade and large-trade drift envelopes for operators.
-- `calculateExpectedOutputFromSelling` now returns 0 when the terminal fee exceeds `JBConstants.MAX_FEE`, so the swap degrades to V4 instead of reverting on an arithmetic underflow.
-- Live routing ignores buyback-hook metadata-only preview hints. Buy and sell decisions use the terminal-reported `previewPayFor(...)` and `previewCashOutFrom(...)` amounts only; if those direct preview amounts are zero, the Juicebox side is ineligible and the swap stays on V4.
+Generated from Foundry `out/**/*.json` artifacts, filtered to this repo's own runtime source roots and excluding tests, scripts, and dependencies.
+
+- V5 comparison package: `nana-uni-v4-util-v5`.
+- Own-source ABI artifacts compared: V6 `2`, V5 `5`.
+- Contract/interface coverage: `0` added, `3` removed, `2` shared names with ABI changes, `0` shared names ABI-identical.
+- Shared-name ABI item deltas: `19` added, `25` removed, `2` modified.
+
+Removed V5 ABI artifacts:
+- `IUniswapV3Factory` from `src/interfaces/IUniswapV3Factory.sol`: `3` functions, `0` events, `0` errors.
+- `IUniswapV3Pool` from `src/interfaces/IUniswapV3Pool.sol`: `13` functions, `0` events, `0` errors.
+- `IWETH` from `src/interfaces/IWETH.sol`: `2` functions, `0` events, `0` errors.
+
+Shared ABI artifacts with changes:
+- `JBUniswapV4Hook`: `17` added, `23` removed, `2` modified ABI items.
+- `Oracle`: `2` added, `2` removed, `0` modified ABI items.
+
+Generated event/error name deltas:
+- Event names added:
+  - `BestRouteSelected`, `RouteSelected`.
+- Event names removed or replaced:
+  - `BestRouteSelected`, `RouteSelected`.
+- Error names added:
+  - `JBUniswapV4Hook_AmountOutMinRequired`, `JBUniswapV4Hook_ExactOutputSwapsNotSupported`, `JBUniswapV4Hook_InputExceedsV4DeltaLimit`, `JBUniswapV4Hook_InsufficientOutput`, `JBUniswapV4Hook_JuiceboxSellDidNotDeliver`, `JBUniswapV4Hook_OutputExceedsV4DeltaLimit`, `JBUniswapV4Hook_ReentrantRouting`, `JBUniswapV4Hook_SecondsAgoCannotBeZero`.
+  - `JBUniswapV4Hook_SellInputReturned`, `JBUniswapV4Hook_TemporaryAllowanceNotConsumed`, `Oracle_CardinalityCannotBeZero`, `Oracle_TargetPredatesOldestObservation`.
+- Error names removed or replaced:
+  - `AddressEmptyCode`, `AddressInsufficientBalance`, `FailedInnerCall`, `JBUniswapV4Hook_AmountOutMinRequired`, `JBUniswapV4Hook_ExactOutputSwapsNotSupported`, `JBUniswapV4Hook_InsufficientOutput`, `JBUniswapV4Hook_InvalidCallback`, `JBUniswapV4Hook_NoSwap`.
+  - `JBUniswapV4Hook_ObservationCardinalityZero`, `JBUniswapV4Hook_SecondsAgoCannotBeZero`, `JBUniswapV4Hook_V3PoolLocked`, `JBUniswapV4Hook_V3PoolNotFound`, `OracleCardinalityCannotBeZero`, `TargetPredatesOldestObservation`.
+
+## Migration Notes
+
+- Rebuild hook deployment scripts around the V6 constructor.
+- Re-index route events with the V6 payloads; V5 string route-type decoding is no longer correct.
+- Use V6 core preview surfaces for route estimates instead of reconstructing V5 static terminal math.
