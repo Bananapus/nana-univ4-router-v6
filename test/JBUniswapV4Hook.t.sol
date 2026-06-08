@@ -2065,6 +2065,7 @@ contract JuiceboxHookTest is Test {
 
         uint256 creditCount = 3 ether;
         uint256 sellAmount = 1 ether;
+        int256 amountSpecified = -1 ether;
         mockJBTokens.setCreditBalance({holder: address(hook), projectId: 123, count: creditCount});
 
         uint256 initialToken0 = token0.balanceOf(address(this));
@@ -2073,7 +2074,7 @@ contract JuiceboxHookTest is Test {
         token0.approve(address(jbSwapRouter), sellAmount);
 
         SwapParams memory params = SwapParams({
-            zeroForOne: true, amountSpecified: -int256(sellAmount), sqrtPriceLimitX96: TickMath.MIN_SQRT_PRICE + 1
+            zeroForOne: true, amountSpecified: amountSpecified, sqrtPriceLimitX96: TickMath.MIN_SQRT_PRICE + 1
         });
 
         jbSwapRouter.swap(key, params, 0);

@@ -70,6 +70,7 @@ contract MetadataOnlyPreviewTerminal {
                 address(0),
                 uint256(0),
                 uint256(0),
+                uint256(0),
                 int24(0),
                 uint128(0),
                 PoolId.wrap(bytes32(0)),
