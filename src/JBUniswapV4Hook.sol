@@ -1034,6 +1034,63 @@ contract JBUniswapV4Hook is BaseHook {
         return TickMath.getSqrtPriceAtTick(arithmeticMeanTick);
     }
 
+    /// @notice Normalizes a token address to Juicebox's native token representation
+    /// @dev Maps Uniswap's native ETH (address(0)) to Juicebox's native token constant
+    /// @param token The token address to normalize
+    /// @return The normalized token address (JB_NATIVE_TOKEN for native ETH, unchanged otherwise)
+    function _normalizeToken(address token) internal pure returns (address) {
+        return token == UNISWAP_NATIVE_ETH ? JB_NATIVE_TOKEN : token;
+    }
+
+    /// @notice Internal TWAP tick computation, avoiding external self-call overhead.
+    /// @param poolId The pool ID
+    /// @param secondsAgo Seconds in the past to calculate TWAP from
+    /// @param tick Current tick
+    /// @param index Current observation index
+    /// @param liquidity Current liquidity
+    /// @param cardinality Current cardinality
+    /// @return arithmeticMeanTick The time-weighted average tick
+    // forge-lint: disable-next-line(mixed-case-function)
+    function _observeTWAP(
+        PoolId poolId,
+        uint32 secondsAgo,
+        int24 tick,
+        uint16 index,
+        uint128 liquidity,
+        uint16 cardinality
+    )
+        internal
+        view
+        returns (int24 arithmeticMeanTick)
+    {
+        if (secondsAgo == 0) {
+            revert JBUniswapV4Hook_SecondsAgoCannotBeZero({secondsAgo: secondsAgo});
+        }
+
+        // Batch both observations into a single call to avoid redundant binary searches.
+        uint32[] memory secondsAgos = new uint32[](2);
+        secondsAgos[0] = 0;
+        secondsAgos[1] = secondsAgo;
+
+        (int56[] memory tickCumulatives,) = observations[poolId].observe({
+            time: uint32(block.timestamp),
+            secondsAgos: secondsAgos,
+            tick: tick,
+            index: index,
+            liquidity: liquidity,
+            cardinality: cardinality
+        });
+
+        // Calculate arithmetic mean tick
+        int56 tickCumulativeDelta = tickCumulatives[0] - tickCumulatives[1];
+        // forge-lint: disable-next-line(unsafe-typecast)
+        arithmeticMeanTick = int24(tickCumulativeDelta / int56(uint56(secondsAgo)));
+        // Round toward negative infinity for negative ticks (Solidity truncates toward zero).
+        if (tickCumulativeDelta < 0 && (tickCumulativeDelta % int56(uint56(secondsAgo)) != 0)) {
+            arithmeticMeanTick--;
+        }
+    }
+
     /// @notice Converts an input amount into an expected V4 output using a given sqrt price, mirroring V4 swap math.
     /// @dev Shared by `estimateUniswapOutput` (which may pass a spot-fallback price) and `_twapProtectionFloor`
     /// (which passes a strict TWAP price). Applies the combined swap fee (protocol fee + LP fee) to the input BEFORE
@@ -1099,103 +1156,6 @@ contract JBUniswapV4Hook is BaseHook {
             } else {
                 estimatedOut = FullMath.mulDiv({a: amountInAfterFee, b: 1 << 128, denominator: ratioX128});
             }
-        }
-    }
-
-    /// @notice Derives a manipulation-resistant minimum-output floor from the pool's TWAP, for swaps that omit an
-    /// explicit `amountOutMin`.
-    /// @dev Strict TWAP only — this helper NEVER falls back to spot price. If `_getTWAPSqrtPrice` returns 0 (oracle
-    /// not
-    /// warm: fewer than 2 observations, or no observation old enough), this returns 0 and the caller imposes NO
-    /// hook-level floor (the swap proceeds under the caller's own slippage protection). The hook cannot build a
-    /// manipulation-resistant floor without a TWAP, so a cold pool yields no floor rather than a revert. The returned
-    /// floor is the TWAP quote discounted by the fixed `TWAP_SLIPPAGE_TOLERANCE`, the same fixed tolerance the hook's
-    /// risk model already documents for TWAP routing.
-    /// @param poolId The pool ID
-    /// @param key The pool key
-    /// @param amountIn The input amount
-    /// @param zeroForOne Whether swapping token0 for token1
-    /// @return floor The TWAP-derived minimum output, or 0 if no trustworthy TWAP is available.
-    // forge-lint: disable-next-line(mixed-case-function)
-    function _twapProtectionFloor(
-        PoolId poolId,
-        PoolKey memory key,
-        uint256 amountIn,
-        bool zeroForOne
-    )
-        internal
-        view
-        returns (uint256 floor)
-    {
-        // Strict TWAP only — no spot fallback. A zero price means the oracle is not warm enough to trust.
-        uint160 sqrtPriceX96twap = _getTWAPSqrtPrice(poolId);
-        if (sqrtPriceX96twap == 0) return 0;
-
-        uint256 twapOutput =
-            _outputForSqrtPrice({key: key, amountIn: amountIn, zeroForOne: zeroForOne, sqrtPriceX96: sqrtPriceX96twap});
-
-        // Discount the TWAP quote by the fixed slippage tolerance to form the execution floor.
-        floor = FullMath.mulDiv({
-            a: twapOutput,
-            b: TWAP_SLIPPAGE_DENOMINATOR - TWAP_SLIPPAGE_TOLERANCE,
-            denominator: TWAP_SLIPPAGE_DENOMINATOR
-        });
-    }
-
-    /// @notice Normalizes a token address to Juicebox's native token representation
-    /// @dev Maps Uniswap's native ETH (address(0)) to Juicebox's native token constant
-    /// @param token The token address to normalize
-    /// @return The normalized token address (JB_NATIVE_TOKEN for native ETH, unchanged otherwise)
-    function _normalizeToken(address token) internal pure returns (address) {
-        return token == UNISWAP_NATIVE_ETH ? JB_NATIVE_TOKEN : token;
-    }
-
-    /// @notice Internal TWAP tick computation, avoiding external self-call overhead.
-    /// @param poolId The pool ID
-    /// @param secondsAgo Seconds in the past to calculate TWAP from
-    /// @param tick Current tick
-    /// @param index Current observation index
-    /// @param liquidity Current liquidity
-    /// @param cardinality Current cardinality
-    /// @return arithmeticMeanTick The time-weighted average tick
-    // forge-lint: disable-next-line(mixed-case-function)
-    function _observeTWAP(
-        PoolId poolId,
-        uint32 secondsAgo,
-        int24 tick,
-        uint16 index,
-        uint128 liquidity,
-        uint16 cardinality
-    )
-        internal
-        view
-        returns (int24 arithmeticMeanTick)
-    {
-        if (secondsAgo == 0) {
-            revert JBUniswapV4Hook_SecondsAgoCannotBeZero({secondsAgo: secondsAgo});
-        }
-
-        // Batch both observations into a single call to avoid redundant binary searches.
-        uint32[] memory secondsAgos = new uint32[](2);
-        secondsAgos[0] = 0;
-        secondsAgos[1] = secondsAgo;
-
-        (int56[] memory tickCumulatives,) = observations[poolId].observe({
-            time: uint32(block.timestamp),
-            secondsAgos: secondsAgos,
-            tick: tick,
-            index: index,
-            liquidity: liquidity,
-            cardinality: cardinality
-        });
-
-        // Calculate arithmetic mean tick
-        int56 tickCumulativeDelta = tickCumulatives[0] - tickCumulatives[1];
-        // forge-lint: disable-next-line(unsafe-typecast)
-        arithmeticMeanTick = int24(tickCumulativeDelta / int56(uint56(secondsAgo)));
-        // Round toward negative infinity for negative ticks (Solidity truncates toward zero).
-        if (tickCumulativeDelta < 0 && (tickCumulativeDelta % int56(uint56(secondsAgo)) != 0)) {
-            arithmeticMeanTick--;
         }
     }
 
@@ -1433,6 +1393,45 @@ contract JBUniswapV4Hook is BaseHook {
         // burn = false since we're transferring ERC-20 tokens, not burning ERC-6909 tokens
         CurrencySettler.settle({
             currency: outputCurrency, poolManager: poolManager, payer: address(this), amount: amount, burn: false
+        });
+    }
+
+    /// @notice Derives a manipulation-resistant minimum-output floor from the pool's TWAP, for swaps that omit an
+    /// explicit `amountOutMin`.
+    /// @dev Strict TWAP only — this helper never falls back to spot price. If `_getTWAPSqrtPrice` returns 0 (the
+    /// oracle
+    /// is not warm: fewer than 2 observations, or no observation old enough), it returns 0 and the caller imposes no
+    /// hook-level floor, letting the swap proceed under the caller's own slippage protection. Without a TWAP the hook
+    /// cannot build a manipulation-resistant floor, so a cold pool yields no floor. The returned floor is the TWAP
+    /// quote discounted by the fixed `TWAP_SLIPPAGE_TOLERANCE` (the same tolerance the hook applies to TWAP routing).
+    /// @param poolId The pool ID
+    /// @param key The pool key
+    /// @param amountIn The input amount
+    /// @param zeroForOne Whether swapping token0 for token1
+    /// @return floor The TWAP-derived minimum output, or 0 if no trustworthy TWAP is available.
+    // forge-lint: disable-next-line(mixed-case-function)
+    function _twapProtectionFloor(
+        PoolId poolId,
+        PoolKey memory key,
+        uint256 amountIn,
+        bool zeroForOne
+    )
+        internal
+        view
+        returns (uint256 floor)
+    {
+        // Strict TWAP only — no spot fallback. A zero price means the oracle is not warm enough to trust.
+        uint160 sqrtPriceX96twap = _getTWAPSqrtPrice(poolId);
+        if (sqrtPriceX96twap == 0) return 0;
+
+        uint256 twapOutput =
+            _outputForSqrtPrice({key: key, amountIn: amountIn, zeroForOne: zeroForOne, sqrtPriceX96: sqrtPriceX96twap});
+
+        // Discount the TWAP quote by the fixed slippage tolerance to form the execution floor.
+        floor = FullMath.mulDiv({
+            a: twapOutput,
+            b: TWAP_SLIPPAGE_DENOMINATOR - TWAP_SLIPPAGE_TOLERANCE,
+            denominator: TWAP_SLIPPAGE_DENOMINATOR
         });
     }
 }
