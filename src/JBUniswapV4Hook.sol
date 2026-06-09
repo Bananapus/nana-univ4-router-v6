@@ -66,10 +66,6 @@ contract JBUniswapV4Hook is BaseHook {
     // --------------------------- custom errors ------------------------- //
     //*********************************************************************//
 
-    /// @notice Thrown when amountOutMin is not provided in hookData.
-    /// @param hookDataLength The length of the hook data that was provided.
-    error JBUniswapV4Hook_AmountOutMinRequired(uint256 hookDataLength);
-
     /// @notice Thrown when an exact-output swap is attempted.
     /// @dev Only exact-input swaps are supported.
     /// @param amountSpecified The positive exact-output amount that was requested.
@@ -140,6 +136,14 @@ contract JBUniswapV4Hook is BaseHook {
 
     /// @notice The denominator used when calculating TWAP slippage percent values.
     uint256 public constant TWAP_SLIPPAGE_DENOMINATOR = 10_000;
+
+    /// @notice The fixed slippage tolerance (in `TWAP_SLIPPAGE_DENOMINATOR` units) applied to the TWAP-derived output
+    /// floor when a swap does not supply its own explicit `amountOutMin`.
+    /// @dev 1_500 / 10_000 = 15%. This is the same fixed tolerance the hook's risk model already documents for
+    /// TWAP-based routing protection; generic V4 integrations (aggregators, Universal Router, wallets) that omit JB's
+    /// `amountOutMin`
+    /// hookData are protected by a floor of `twapQuote * (DENOMINATOR - TOLERANCE) / DENOMINATOR`.
+    uint256 public constant TWAP_SLIPPAGE_TOLERANCE = 1500;
 
     /// @notice Native ETH address representation
     address public constant UNISWAP_NATIVE_ETH = address(0);
@@ -418,59 +422,14 @@ contract JBUniswapV4Hook is BaseHook {
         // NOTE: Spot price is used as a fallback for newly created pools that lack sufficient TWAP history.
         // In this state, the estimate is susceptible to spot-price manipulation. Once the pool accumulates
         // enough observations for TWAP, this fallback is no longer used.
+        // This spot fallback is for route *comparison* only. The protection floor (`_twapProtectionFloor`)
+        // never falls back to spot and instead fails closed.
         if (sqrtPriceX96twap == 0) {
             (sqrtPriceX96twap,,,) = poolManager.getSlot0(poolId);
         }
 
-        // Apply the combined swap fee (protocol fee + LP fee) to the input amount BEFORE the price-ratio
-        // conversion, mirroring Uniswap V4's swap math so this estimator's floor rounding matches V4's
-        // execution rounding (small inputs at typical fees would otherwise diverge by one unit).
-        uint256 amountInAfterFee = amountIn;
-        {
-            // Read protocol fee from slot0 (directional: lower 12 bits = zeroForOne, upper 12 bits = oneForZero)
-            (,, uint24 protocolFee, uint24 slot0LpFee) = poolManager.getSlot0(PoolIdLibrary.toId(key));
-
-            // Determine the LP fee: use key.fee for static pools, slot0LpFee for dynamic pools
-            uint24 lpFee;
-            if (LPFeeLibrary.isDynamicFee(key.fee)) {
-                lpFee = slot0LpFee;
-            } else {
-                lpFee = key.fee;
-            }
-
-            // Extract the directional protocol fee and compose with LP fee.
-            uint16 directionalProtocolFee = zeroForOne ? protocolFee.getZeroForOneFee() : protocolFee.getOneForZeroFee();
-            uint24 swapFee = directionalProtocolFee == 0 ? lpFee : directionalProtocolFee.calculateSwapFee(lpFee);
-
-            if (swapFee > 0) {
-                amountInAfterFee = FullMath.mulDiv({
-                    a: amountIn,
-                    b: ProtocolFeeLibrary.PIPS_DENOMINATOR - swapFee,
-                    denominator: ProtocolFeeLibrary.PIPS_DENOMINATOR
-                });
-            }
-        }
-
-        // Calculate price ratio from sqrtPriceX96, handling overflow for large values.
-        // When sqrtPriceX96 <= type(uint128).max, we can square it directly (fits in uint256).
-        // Otherwise, use FullMath.mulDiv to avoid overflow, at the cost of reduced precision.
-        if (sqrtPriceX96twap <= type(uint128).max) {
-            uint256 ratioX192 = uint256(sqrtPriceX96twap) * sqrtPriceX96twap;
-            if (zeroForOne) {
-                estimatedOut = FullMath.mulDiv({a: amountInAfterFee, b: ratioX192, denominator: 1 << 192});
-            } else {
-                estimatedOut = FullMath.mulDiv({a: amountInAfterFee, b: 1 << 192, denominator: ratioX192});
-            }
-        } else {
-            uint256 ratioX128 = FullMath.mulDiv({a: sqrtPriceX96twap, b: sqrtPriceX96twap, denominator: 1 << 64});
-            if (zeroForOne) {
-                estimatedOut = FullMath.mulDiv({a: amountInAfterFee, b: ratioX128, denominator: 1 << 128});
-            } else {
-                estimatedOut = FullMath.mulDiv({a: amountInAfterFee, b: 1 << 128, denominator: ratioX128});
-            }
-        }
-
-        return estimatedOut;
+        return
+            _outputForSqrtPrice({key: key, amountIn: amountIn, zeroForOne: zeroForOne, sqrtPriceX96: sqrtPriceX96twap});
     }
 
     /// @notice Declares which Uniswap V4 lifecycle callbacks this hook uses (afterInitialize, afterSwap,
@@ -640,26 +599,42 @@ contract JBUniswapV4Hook is BaseHook {
         // In _afterSwap, use >= 32 (not == 32 as in _beforeSwap) because external V4 swaps may include
         // additional hookData beyond the amountOutMin prefix. _beforeSwap requires exactly 32 bytes for
         // Juicebox-routed swaps; _afterSwap is more permissive to support arbitrary external swap metadata.
-        if (hookData.length >= 32) {
-            uint256 amountOutMin = abi.decode(hookData, (uint256));
-            if (amountOutMin > 0) {
-                // Extract output amount from delta based on swap direction.
-                // In V4's convention, output amounts are negative (credits owed to the user),
-                // so we negate to get the absolute output amount for comparison.
-                int128 rawOutput =
-                    params.zeroForOne ? BalanceDeltaLibrary.amount1(delta) : BalanceDeltaLibrary.amount0(delta);
+        uint256 amountOutMin = hookData.length >= 32 ? abi.decode(hookData, (uint256)) : 0;
 
-                // Only validate if there is a real V4 swap (non-zero output or non-zero delta).
-                // For Juicebox-routed swaps, both rawOutput and delta are zero and slippage was already validated
-                // in _beforeSwap. A dust swap may have rawOutput==0 but a non-zero delta (input side is non-zero).
-                if (rawOutput != 0 || BalanceDelta.unwrap(delta) != 0) {
-                    // Output is negative in V4 convention; negate to get the positive amount received.
-                    // forge-lint: disable-next-line(unsafe-typecast)
-                    uint256 outputAmount = rawOutput < 0 ? uint256(int256(-rawOutput)) : uint256(int256(rawOutput));
-                    if (outputAmount < amountOutMin) {
-                        revert JBUniswapV4Hook_InsufficientOutput({amount: outputAmount, minimum: amountOutMin});
-                    }
-                }
+        // Extract output amount from delta based on swap direction.
+        // In V4's convention, output amounts are negative (credits owed to the user),
+        // so we negate to get the absolute output amount for comparison.
+        int128 rawOutput = params.zeroForOne ? BalanceDeltaLibrary.amount1(delta) : BalanceDeltaLibrary.amount0(delta);
+
+        // Only validate if there is a real V4 swap (non-zero output or non-zero delta).
+        // For Juicebox-routed swaps, both rawOutput and delta are zero and slippage was already validated
+        // in _beforeSwap. A dust swap may have rawOutput==0 but a non-zero delta (input side is non-zero).
+        bool realV4Swap = rawOutput != 0 || BalanceDelta.unwrap(delta) != 0;
+
+        // When the caller supplied no explicit floor, derive one from the pool's TWAP so generic V4 integrations
+        // (DEX aggregators, Universal Router, wallets) that omit JB's hookData are still protected. This applies only
+        // to pure-V4 settlements (`realV4Swap`); JB-routed swaps return a custom delta in `_beforeSwap` and carry
+        // their own routing floor there, so they are not re-floored. ALLOW COLD POOLS: when the pool's TWAP is not yet
+        // warm, `_twapProtectionFloor` returns 0 and no hook-level floor is imposed — the swap proceeds under the
+        // caller's own slippage protection (the aggregator's min-out or V4's price limit). Without a TWAP the hook
+        // cannot derive a manipulation-resistant floor, so reverting would only deny service, not add safety; only the
+        // swapper that chose a zero floor bears the risk, never the pool, project, or other holders.
+        if (amountOutMin == 0 && realV4Swap) {
+            // amountSpecified is negative for the exact-input swaps this hook supports.
+            uint256 amountIn = params.amountSpecified < 0 ? uint256(-params.amountSpecified) : 0;
+            if (amountIn != 0) {
+                amountOutMin = _twapProtectionFloor({
+                    poolId: key.toId(), key: key, amountIn: amountIn, zeroForOne: params.zeroForOne
+                });
+            }
+        }
+
+        if (amountOutMin > 0 && realV4Swap) {
+            // Output is negative in V4 convention; negate to get the positive amount received.
+            // forge-lint: disable-next-line(unsafe-typecast)
+            uint256 outputAmount = rawOutput < 0 ? uint256(int256(-rawOutput)) : uint256(int256(rawOutput));
+            if (outputAmount < amountOutMin) {
+                revert JBUniswapV4Hook_InsufficientOutput({amount: outputAmount, minimum: amountOutMin});
             }
         }
 
@@ -692,11 +667,12 @@ contract JBUniswapV4Hook is BaseHook {
         // Decode amountOutMin from the first 32-byte word of hookData.
         // Pure V4 integrations may append extra metadata after this prefix, so `_beforeSwap` must accept the same
         // payload family that `_afterSwap` already supports.
+        // Generic V4 integrations (DEX aggregators, Universal Router, wallets) that do not know JB's hookData
+        // convention either omit it entirely or pass a zero floor. Rather than reverting (which would lock them out)
+        // or running unprotected, such swaps are protected by a TWAP-derived floor computed below.
         uint256 amountOutMin;
         if (hookData.length >= 32) {
             amountOutMin = abi.decode(hookData[:32], (uint256));
-        } else {
-            revert JBUniswapV4Hook_AmountOutMinRequired({hookDataLength: hookData.length});
         }
         PoolId poolId = key.toId();
 
@@ -782,10 +758,17 @@ contract JBUniswapV4Hook is BaseHook {
         }
 
         if (!isBuyingJbToken && !isSellingJbToken) {
-            // No JB token involved, proceed with normal Uniswap swap
+            // No JB token involved, proceed with normal Uniswap swap.
+            // Slippage (explicit or TWAP-derived) is enforced for this V4 settlement in `_afterSwap`.
             emit RouteSelected({poolId: poolId, useJuicebox: false, expectedTokens: 0, caller: msg.sender});
             return (BaseHook.beforeSwap.selector, BeforeSwapDeltaLibrary.ZERO_DELTA, 0);
         }
+
+        // NOTE: JB-routed swaps are NOT re-floored against the TWAP here. This path already derives its own
+        // manipulation-resistant floor below (`routeMinimum` is raised to the deterministic JB cash-out preview on the
+        // sell side, or to "must beat the displaced V4 quote" on the buy side), and the JB mint/cash-out leg is
+        // deterministic from the project's ruleset — not movable by a sandwicher. Imposing an extra TWAP floor here
+        // would be redundant and would brick JB-routed swaps on fresh pools that have no TWAP history yet.
 
         // Calculate how many tokens we'd get from Uniswap v4
         uint256 uniswapV4ExpectedTokens =
@@ -1049,6 +1032,114 @@ contract JBUniswapV4Hook is BaseHook {
 
         // Convert tick to sqrtPriceX96
         return TickMath.getSqrtPriceAtTick(arithmeticMeanTick);
+    }
+
+    /// @notice Converts an input amount into an expected V4 output using a given sqrt price, mirroring V4 swap math.
+    /// @dev Shared by `estimateUniswapOutput` (which may pass a spot-fallback price) and `_twapProtectionFloor`
+    /// (which passes a strict TWAP price). Applies the combined swap fee (protocol fee + LP fee) to the input BEFORE
+    /// the price-ratio conversion so the estimate's floor rounding matches V4's execution rounding.
+    /// @param key The pool key
+    /// @param amountIn The input amount
+    /// @param zeroForOne Whether swapping token0 for token1
+    /// @param sqrtPriceX96 The price (spot or TWAP) to value the swap at
+    /// @return estimatedOut The estimated output amount
+    function _outputForSqrtPrice(
+        PoolKey memory key,
+        uint256 amountIn,
+        bool zeroForOne,
+        uint160 sqrtPriceX96
+    )
+        internal
+        view
+        returns (uint256 estimatedOut)
+    {
+        // Apply the combined swap fee (protocol fee + LP fee) to the input amount BEFORE the price-ratio
+        // conversion, mirroring Uniswap V4's swap math so this estimator's floor rounding matches V4's
+        // execution rounding (small inputs at typical fees would otherwise diverge by one unit).
+        uint256 amountInAfterFee = amountIn;
+        {
+            // Read protocol fee from slot0 (directional: lower 12 bits = zeroForOne, upper 12 bits = oneForZero)
+            (,, uint24 protocolFee, uint24 slot0LpFee) = poolManager.getSlot0(PoolIdLibrary.toId(key));
+
+            // Determine the LP fee: use key.fee for static pools, slot0LpFee for dynamic pools
+            uint24 lpFee;
+            if (LPFeeLibrary.isDynamicFee(key.fee)) {
+                lpFee = slot0LpFee;
+            } else {
+                lpFee = key.fee;
+            }
+
+            // Extract the directional protocol fee and compose with LP fee.
+            uint16 directionalProtocolFee = zeroForOne ? protocolFee.getZeroForOneFee() : protocolFee.getOneForZeroFee();
+            uint24 swapFee = directionalProtocolFee == 0 ? lpFee : directionalProtocolFee.calculateSwapFee(lpFee);
+
+            if (swapFee > 0) {
+                amountInAfterFee = FullMath.mulDiv({
+                    a: amountIn,
+                    b: ProtocolFeeLibrary.PIPS_DENOMINATOR - swapFee,
+                    denominator: ProtocolFeeLibrary.PIPS_DENOMINATOR
+                });
+            }
+        }
+
+        // Calculate price ratio from sqrtPriceX96, handling overflow for large values.
+        // When sqrtPriceX96 <= type(uint128).max, we can square it directly (fits in uint256).
+        // Otherwise, use FullMath.mulDiv to avoid overflow, at the cost of reduced precision.
+        if (sqrtPriceX96 <= type(uint128).max) {
+            uint256 ratioX192 = uint256(sqrtPriceX96) * sqrtPriceX96;
+            if (zeroForOne) {
+                estimatedOut = FullMath.mulDiv({a: amountInAfterFee, b: ratioX192, denominator: 1 << 192});
+            } else {
+                estimatedOut = FullMath.mulDiv({a: amountInAfterFee, b: 1 << 192, denominator: ratioX192});
+            }
+        } else {
+            uint256 ratioX128 = FullMath.mulDiv({a: sqrtPriceX96, b: sqrtPriceX96, denominator: 1 << 64});
+            if (zeroForOne) {
+                estimatedOut = FullMath.mulDiv({a: amountInAfterFee, b: ratioX128, denominator: 1 << 128});
+            } else {
+                estimatedOut = FullMath.mulDiv({a: amountInAfterFee, b: 1 << 128, denominator: ratioX128});
+            }
+        }
+    }
+
+    /// @notice Derives a manipulation-resistant minimum-output floor from the pool's TWAP, for swaps that omit an
+    /// explicit `amountOutMin`.
+    /// @dev Strict TWAP only — this helper NEVER falls back to spot price. If `_getTWAPSqrtPrice` returns 0 (oracle
+    /// not
+    /// warm: fewer than 2 observations, or no observation old enough), this returns 0 and the caller imposes NO
+    /// hook-level floor (the swap proceeds under the caller's own slippage protection). The hook cannot build a
+    /// manipulation-resistant floor without a TWAP, so a cold pool yields no floor rather than a revert. The returned
+    /// floor is the TWAP quote discounted by the fixed `TWAP_SLIPPAGE_TOLERANCE`, the same fixed tolerance the hook's
+    /// risk model already documents for TWAP routing.
+    /// @param poolId The pool ID
+    /// @param key The pool key
+    /// @param amountIn The input amount
+    /// @param zeroForOne Whether swapping token0 for token1
+    /// @return floor The TWAP-derived minimum output, or 0 if no trustworthy TWAP is available.
+    // forge-lint: disable-next-line(mixed-case-function)
+    function _twapProtectionFloor(
+        PoolId poolId,
+        PoolKey memory key,
+        uint256 amountIn,
+        bool zeroForOne
+    )
+        internal
+        view
+        returns (uint256 floor)
+    {
+        // Strict TWAP only — no spot fallback. A zero price means the oracle is not warm enough to trust.
+        uint160 sqrtPriceX96twap = _getTWAPSqrtPrice(poolId);
+        if (sqrtPriceX96twap == 0) return 0;
+
+        uint256 twapOutput =
+            _outputForSqrtPrice({key: key, amountIn: amountIn, zeroForOne: zeroForOne, sqrtPriceX96: sqrtPriceX96twap});
+
+        // Discount the TWAP quote by the fixed slippage tolerance to form the execution floor.
+        floor = FullMath.mulDiv({
+            a: twapOutput,
+            b: TWAP_SLIPPAGE_DENOMINATOR - TWAP_SLIPPAGE_TOLERANCE,
+            denominator: TWAP_SLIPPAGE_DENOMINATOR
+        });
     }
 
     /// @notice Normalizes a token address to Juicebox's native token representation
