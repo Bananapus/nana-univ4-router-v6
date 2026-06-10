@@ -137,12 +137,13 @@ contract JBUniswapV4Hook is BaseHook {
     /// @notice The denominator used when calculating TWAP slippage percent values.
     uint256 public constant TWAP_SLIPPAGE_DENOMINATOR = 10_000;
 
-    /// @notice The default slippage tolerance (in `TWAP_SLIPPAGE_DENOMINATOR` units) of the TWAP-derived output floor
-    /// applied to a swap that omits its own explicit `amountOutMin`.
-    /// @dev `1_500 / 10_000` = 15%. A generic V4 integration (aggregator, Universal Router, wallet) that omits JB's
-    /// `amountOutMin` hookData is protected by a floor of `twapQuote * (DENOMINATOR - TOLERANCE) / DENOMINATOR`. This
-    /// is the floor's own tolerance; the route-comparison path applies no slippage tolerance of its own.
-    uint256 public constant TWAP_SLIPPAGE_TOLERANCE = 1500;
+    /// @notice The 4-byte prefix that marks `hookData` as carrying a Juicebox `amountOutMin`.
+    /// @dev `hookData` is only read as an explicit minimum when it begins with this tag and is at least 36 bytes
+    /// (`tag ++ abi.encode(amountOutMin)`). Any other payload — empty, or another protocol's metadata forwarded by a
+    /// generic router — carries no minimum, so its first word is never mis-decoded as one. A JB-aware caller that
+    /// wants
+    /// a minimum enforced must prefix it: `abi.encodePacked(JB_HOOK_DATA_TAG, abi.encode(amountOutMin))`.
+    bytes4 public constant JB_HOOK_DATA_TAG = bytes4(keccak256("JBUniswapV4Hook.amountOutMin.v1"));
 
     /// @notice Native ETH address representation
     address public constant UNISWAP_NATIVE_ETH = address(0);
@@ -417,19 +418,17 @@ contract JBUniswapV4Hook is BaseHook {
         // Get TWAP price instead of spot price to prevent manipulation
         uint160 sqrtPriceX96twap = _getTWAPSqrtPrice(poolId);
 
-        // If TWAP is not available (not enough observations), fallback to spot price.
-        // NOTE: Spot price is used as a fallback for newly created pools that lack sufficient TWAP history.
-        // In this state, the estimate is susceptible to spot-price manipulation. Once the pool accumulates
-        // enough observations for TWAP, this fallback is no longer used.
-        // This spot fallback is for route *comparison* only. The protection floor (`_twapProtectionFloor`)
-        // never falls back to spot and instead fails closed.
+        // If TWAP is not available (not enough observations), fall back to spot price for the route comparison.
+        // A newly created pool that lacks sufficient TWAP history is priced at spot here, which is susceptible to
+        // spot-price manipulation; once the pool accumulates enough observations the TWAP is used instead. A buy-side
+        // route that leans on this cold-pool spot quote as its floor is bounded by a tagged `amountOutMin` if the
+        // caller supplied one (see the buy-side note in `_beforeSwap`).
         if (sqrtPriceX96twap == 0) {
             (sqrtPriceX96twap,,,) = poolManager.getSlot0(poolId);
         }
 
-        return _outputForSqrtPrice({
-            poolId: poolId, key: key, amountIn: amountIn, zeroForOne: zeroForOne, sqrtPriceX96: sqrtPriceX96twap
-        });
+        return
+            _outputForSqrtPrice({key: key, amountIn: amountIn, zeroForOne: zeroForOne, sqrtPriceX96: sqrtPriceX96twap});
     }
 
     /// @notice Declares which Uniswap V4 lifecycle callbacks this hook uses (afterInitialize, afterSwap,
@@ -594,45 +593,27 @@ contract JBUniswapV4Hook is BaseHook {
         returns (bytes4, int128)
     {
         // Slippage protection for the V4-settled portion of a swap. A JB-routed swap returns its custom delta in
-        // `_beforeSwap` and is validated there, so it is skipped here. The swapper's minimum output is read from the
-        // first 32 bytes of `hookData` when present; an explicit minimum — including an explicit zero, a deliberate
-        // take-any-price opt-out — is honored as given. A swap that omits `hookData` entirely (a generic integration
-        // that does not speak JB's encoding) instead gets a TWAP-derived floor so it is not left unprotected.
+        // `_beforeSwap` and is validated there, so it is skipped here. A minimum is enforced only when the caller
+        // tagged one into `hookData` (`_amountOutMinFrom`); an untagged payload — empty, or a generic integration's
+        // own metadata — carries no minimum, and the swap proceeds under the caller's own protection (its router
+        // min-out or `sqrtPriceLimitX96`). The hook imposes no floor of its own.
+        (bool hasExplicitMin, uint256 amountOutMin) = _amountOutMinFrom(hookData);
         PoolId poolId = key.toId();
-        bool hasExplicitMin = hookData.length >= 32;
-        uint256 amountOutMin = hasExplicitMin ? abi.decode(hookData, (uint256)) : 0;
 
-        // A real V4 settlement owes the swapper an output (the negative side of `delta`) or moved input (a non-zero
-        // delta). A JB-routed swap leaves both at zero, so record the observation and return without flooring.
-        int128 rawOutput = params.zeroForOne ? BalanceDeltaLibrary.amount1(delta) : BalanceDeltaLibrary.amount0(delta);
-        if (rawOutput == 0 && BalanceDelta.unwrap(delta) == 0) {
-            _recordObservation(poolId);
-            return (BaseHook.afterSwap.selector, 0);
-        }
-
-        // Output is negative in V4's convention (a credit owed to the swapper); negate for the comparison.
-        // forge-lint: disable-next-line(unsafe-typecast)
-        uint256 outputAmount = rawOutput < 0 ? uint256(int256(-rawOutput)) : uint256(int256(rawOutput));
-
-        // Without an explicit minimum, derive a TWAP floor against the input that was ACTUALLY consumed. V4 partial-
-        // fills when a swap reaches its `sqrtPriceLimitX96`, so flooring against the full requested input would reject
-        // a fair partial fill (consumed `f` of input yields about `f` of the full-input quote). A cold pool yields no
-        // floor (`_twapProtectionFloor` returns 0), letting the swap proceed under the caller's own protection rather
-        // than denying service the hook cannot safely backstop without a manipulation-resistant reference.
-        if (!hasExplicitMin) {
-            int128 rawInput =
-                params.zeroForOne ? BalanceDeltaLibrary.amount0(delta) : BalanceDeltaLibrary.amount1(delta);
-            // forge-lint: disable-next-line(unsafe-typecast)
-            uint256 consumedIn = rawInput < 0 ? uint256(int256(-rawInput)) : uint256(int256(rawInput));
-            if (consumedIn != 0) {
-                amountOutMin = _twapProtectionFloor({
-                    poolId: poolId, key: key, amountIn: consumedIn, zeroForOne: params.zeroForOne
-                });
+        // Only a real V4 settlement (an output owed to the swapper, or any non-zero delta) is validated; a JB-routed
+        // swap leaves the delta at zero. The minimum, when tagged, is enforced against the actual settled output.
+        if (hasExplicitMin) {
+            int128 rawOutput =
+                params.zeroForOne ? BalanceDeltaLibrary.amount1(delta) : BalanceDeltaLibrary.amount0(delta);
+            if (rawOutput != 0 || BalanceDelta.unwrap(delta) != 0) {
+                // The output leg's delta is positive in V4's convention (a credit owed to the swapper); take the
+                // magnitude defensively so the comparison holds regardless of sign.
+                // forge-lint: disable-next-line(unsafe-typecast)
+                uint256 outputAmount = rawOutput < 0 ? uint256(int256(-rawOutput)) : uint256(int256(rawOutput));
+                if (outputAmount < amountOutMin) {
+                    revert JBUniswapV4Hook_InsufficientOutput({amount: outputAmount, minimum: amountOutMin});
+                }
             }
-        }
-
-        if (amountOutMin != 0 && outputAmount < amountOutMin) {
-            revert JBUniswapV4Hook_InsufficientOutput({amount: outputAmount, minimum: amountOutMin});
         }
 
         _recordObservation(poolId);
@@ -661,16 +642,12 @@ contract JBUniswapV4Hook is BaseHook {
         // Prevent recursive routing: if we're already routing through Juicebox, block reentrant swaps.
         if (_routing) revert JBUniswapV4Hook_ReentrantRouting(msg.sender);
 
-        // Decode amountOutMin from the first 32-byte word of hookData.
-        // Pure V4 integrations may append extra metadata after this prefix, so `_beforeSwap` must accept the same
-        // payload family that `_afterSwap` already supports.
-        // Generic V4 integrations (DEX aggregators, Universal Router, wallets) that do not know JB's hookData
-        // convention either omit it entirely or pass a zero floor. Rather than reverting (which would lock them out)
-        // or running unprotected, such swaps are protected by a TWAP-derived floor computed below.
-        uint256 amountOutMin;
-        if (hookData.length >= 32) {
-            amountOutMin = abi.decode(hookData[:32], (uint256));
-        }
+        // Read the caller's explicit minimum only from tagged hookData (`_amountOutMinFrom`). An untagged payload —
+        // empty, or a generic integration's own metadata — carries no minimum (`amountOutMin == 0`); a generic swap
+        // is
+        // never reverted for omitting JB's encoding, and a JB-routed leg falls back to the routing floor derived below
+        // (`routeMinimum`). The minimum is not re-interpreted as a hook-imposed floor here.
+        (, uint256 amountOutMin) = _amountOutMinFrom(hookData);
         PoolId poolId = key.toId();
 
         // Only support exact-input swaps (amountSpecified < 0)
@@ -761,12 +738,6 @@ contract JBUniswapV4Hook is BaseHook {
             return (BaseHook.beforeSwap.selector, BeforeSwapDeltaLibrary.ZERO_DELTA, 0);
         }
 
-        // JB-routed swaps are not re-floored against the TWAP here: this path already derives its own
-        // manipulation-resistant floor below (`routeMinimum` is raised to the deterministic JB cash-out preview on the
-        // sell side, or to "must beat the displaced V4 quote" on the buy side), and the JB mint/cash-out leg is
-        // deterministic from the project's ruleset — not movable by a sandwicher. Imposing an extra TWAP floor here
-        // would be redundant and would brick JB-routed swaps on fresh pools that have no TWAP history yet.
-
         // Calculate how many tokens we'd get from Uniswap v4
         uint256 uniswapV4ExpectedTokens =
             estimateUniswapOutput({poolId: poolId, key: key, amountIn: amountIn, zeroForOne: params.zeroForOne});
@@ -802,18 +773,25 @@ contract JBUniswapV4Hook is BaseHook {
                 poolId: poolId, useJuicebox: true, expectedTokens: juiceboxExpectedOutput, caller: msg.sender
             });
 
+            // The JB-routed leg carries its own floor (a tagged explicit `amountOutMin`, raised as below). The mint /
+            // cash-out itself is ruleset-deterministic, so it is not sandwichable; the only manipulable input is the
+            // V4 quote used as the buy-side floor, and only while the pool's TWAP is cold (see the buy-side note).
             uint256 routeMinimum = amountOutMin;
             if (routeViaSellSide && juiceboxExpectedOutput > routeMinimum) {
-                // Sell-side cash-outs must deliver at least what the terminal's `previewCashOutFrom` reported.
-                // Anything less is the terminal under-filling its own preview (fee-on-transfer behavior, a
-                // misconfigured data hook, etc.) — accepting it would let a malicious or buggy terminal win
-                // routing by over-quoting and then settling lower. The terminal enforces this floor inside
-                // `cashOutTokensOf`, so an underfilled cash-out reverts before the hook settles output.
+                // Sell-side cash-outs must deliver at least what the terminal's `previewCashOutFrom` reported (a
+                // ruleset-deterministic amount). Anything less is the terminal under-filling its own preview
+                // (fee-on-transfer behavior, a misconfigured data hook, etc.) — accepting it would let a malicious or
+                // buggy terminal win routing by over-quoting and then settling lower. The terminal enforces this floor
+                // inside `cashOutTokensOf`, so an underfilled cash-out reverts before the hook settles output.
                 routeMinimum = juiceboxExpectedOutput;
             } else if (routeViaBuySide && uniswapV4ExpectedTokens + 1 > routeMinimum) {
                 // Buy-side previews decide whether JB beats V4, but live payment can still mint fewer project tokens
                 // than previewed. Require the realized JB output to at least beat the V4 quote it displaced.
                 // The `+ 1` is the strict better-than-V4 floor; eligible quotes are already bounded below MAX_V4_DELTA.
+                // NOTE: `uniswapV4ExpectedTokens` comes from `estimateUniswapOutput`, which falls back to spot when the
+                // pool's TWAP is cold. On a cold pool an in-block spot crash can drive this floor toward 0, so a
+                // tagged `amountOutMin` is the only manipulation-resistant buy-side floor until the TWAP warms; the
+                // mint itself is still ruleset-priced, so the loss is opportunity cost, not principal.
                 routeMinimum = uniswapV4ExpectedTokens + 1;
             }
             uint256 outputReceived = _routeThroughJuicebox({
@@ -867,6 +845,19 @@ contract JBUniswapV4Hook is BaseHook {
             // Two-step calculation: first multiply by weight, then apply price conversion
             uint256 intermediate = FullMath.mulDiv({a: tokensPerBaseCurrency, b: paymentAmount18, denominator: 1e18});
             expectedTokens = FullMath.mulDiv({a: intermediate, b: baseCurrencyPerPaymentToken, denominator: 1e18});
+        }
+    }
+
+    /// @notice Reads an explicit `amountOutMin` from `hookData` when it carries the Juicebox tag.
+    /// @dev Returns `(false, 0)` for empty, short, or untagged `hookData` (a generic integration's own payload), so a
+    /// foreign first word is never mis-decoded as a minimum. Returns `(true, min)` only for tagged data
+    /// (`JB_HOOK_DATA_TAG ++ abi.encode(min)`, length >= 36); any trailing bytes after the minimum are ignored.
+    /// @param hookData The swap's hook data.
+    /// @return present Whether the caller supplied a tagged explicit minimum.
+    /// @return amountOutMin The explicit minimum output (0 when none is present).
+    function _amountOutMinFrom(bytes calldata hookData) internal pure returns (bool present, uint256 amountOutMin) {
+        if (hookData.length >= 36 && bytes4(hookData[:4]) == JB_HOOK_DATA_TAG) {
+            return (true, uint256(bytes32(hookData[4:36])));
         }
     }
 
@@ -1089,17 +1080,15 @@ contract JBUniswapV4Hook is BaseHook {
     }
 
     /// @notice Converts an input amount into an expected V4 output using a given sqrt price, mirroring V4 swap math.
-    /// @dev Shared by `estimateUniswapOutput` (which may pass a spot-fallback price) and `_twapProtectionFloor`
-    /// (which passes a strict TWAP price). Applies the combined swap fee (protocol fee + LP fee) to the input BEFORE
-    /// the price-ratio conversion so the estimate's floor rounding matches V4's execution rounding.
-    /// @param poolId The pool ID (must equal `key.toId()`); passed in so callers reuse the value they already hold.
+    /// @dev Used by `estimateUniswapOutput` to value a swap at a chosen price. Applies the combined swap fee
+    /// (protocol fee + LP fee) to the input BEFORE the price-ratio conversion so the estimate's floor rounding matches
+    /// V4's execution rounding. The fee is read for `key.toId()` so the fee always matches the priced pool.
     /// @param key The pool key
     /// @param amountIn The input amount
     /// @param zeroForOne Whether swapping token0 for token1
     /// @param sqrtPriceX96 The price (spot or TWAP) to value the swap at
     /// @return estimatedOut The estimated output amount
     function _outputForSqrtPrice(
-        PoolId poolId,
         PoolKey memory key,
         uint256 amountIn,
         bool zeroForOne,
@@ -1115,7 +1104,7 @@ contract JBUniswapV4Hook is BaseHook {
         uint256 amountInAfterFee = amountIn;
         {
             // Read protocol fee from slot0 (directional: lower 12 bits = zeroForOne, upper 12 bits = oneForZero)
-            (,, uint24 protocolFee, uint24 slot0LpFee) = poolManager.getSlot0(poolId);
+            (,, uint24 protocolFee, uint24 slot0LpFee) = poolManager.getSlot0(PoolIdLibrary.toId(key));
 
             // Determine the LP fee: use key.fee for static pools, slot0LpFee for dynamic pools
             uint24 lpFee;
@@ -1392,44 +1381,6 @@ contract JBUniswapV4Hook is BaseHook {
         // burn = false since we're transferring ERC-20 tokens, not burning ERC-6909 tokens
         CurrencySettler.settle({
             currency: outputCurrency, poolManager: poolManager, payer: address(this), amount: amount, burn: false
-        });
-    }
-
-    /// @notice Derives a manipulation-resistant minimum-output floor from the pool's TWAP, for swaps that omit an
-    /// explicit `amountOutMin`.
-    /// @dev Strict TWAP only — this helper never falls back to spot price. If `_getTWAPSqrtPrice` returns 0 (the
-    /// oracle
-    /// is not warm: fewer than 2 observations, or no observation old enough), it returns 0 and the caller imposes no
-    /// hook-level floor, letting the swap proceed under the caller's own slippage protection. The returned floor is the
-    /// TWAP quote discounted by the fixed `TWAP_SLIPPAGE_TOLERANCE`.
-    /// @param poolId The pool ID (must equal `key.toId()`).
-    /// @param key The pool key
-    /// @param amountIn The input amount
-    /// @param zeroForOne Whether swapping token0 for token1
-    /// @return floor The TWAP-derived minimum output, or 0 if no trustworthy TWAP is available.
-    function _twapProtectionFloor(
-        PoolId poolId,
-        PoolKey memory key,
-        uint256 amountIn,
-        bool zeroForOne
-    )
-        internal
-        view
-        returns (uint256 floor)
-    {
-        // Strict TWAP only — no spot fallback. A zero price means the oracle is not warm enough to trust.
-        uint160 sqrtPriceX96twap = _getTWAPSqrtPrice(poolId);
-        if (sqrtPriceX96twap == 0) return 0;
-
-        uint256 twapOutput = _outputForSqrtPrice({
-            poolId: poolId, key: key, amountIn: amountIn, zeroForOne: zeroForOne, sqrtPriceX96: sqrtPriceX96twap
-        });
-
-        // Discount the TWAP quote by the fixed slippage tolerance to form the execution floor.
-        floor = FullMath.mulDiv({
-            a: twapOutput,
-            b: TWAP_SLIPPAGE_DENOMINATOR - TWAP_SLIPPAGE_TOLERANCE,
-            denominator: TWAP_SLIPPAGE_DENOMINATOR
         });
     }
 }

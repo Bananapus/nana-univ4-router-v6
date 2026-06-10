@@ -23,6 +23,8 @@ contract UncheckedJuiceboxSwapRouter {
 
     IPoolManager public immutable poolManager;
 
+    bytes4 private immutable _hookDataTag;
+
     address private _msgSender;
 
     struct CallbackData {
@@ -32,8 +34,9 @@ contract UncheckedJuiceboxSwapRouter {
         bytes hookData;
     }
 
-    constructor(IPoolManager newPoolManager) {
+    constructor(IPoolManager newPoolManager, bytes4 hookDataTag) {
         poolManager = newPoolManager;
+        _hookDataTag = hookDataTag;
     }
 
     function msgSender() external view returns (address) {
@@ -51,7 +54,8 @@ contract UncheckedJuiceboxSwapRouter {
     {
         _msgSender = msg.sender;
 
-        bytes memory hookData = abi.encode(amountOutMin);
+        // JB-aware caller: tag the minimum so the hook reads and enforces it.
+        bytes memory hookData = abi.encodePacked(_hookDataTag, abi.encode(amountOutMin));
         delta = abi.decode(
             poolManager.unlock(
                 abi.encode(CallbackData({sender: msg.sender, key: key, params: params, hookData: hookData}))
@@ -207,7 +211,7 @@ contract JBRouteMinOutputBypassTest is PreviewPayForRoutingTest {
 
         mockDirectory.setDefaultTerminal(address(maliciousTerminal));
 
-        uncheckedRouter = new UncheckedJuiceboxSwapRouter(manager);
+        uncheckedRouter = new UncheckedJuiceboxSwapRouter(manager, hook.JB_HOOK_DATA_TAG());
         projectToken.approve(address(uncheckedRouter), type(uint256).max);
         paymentToken.approve(address(uncheckedRouter), type(uint256).max);
     }
