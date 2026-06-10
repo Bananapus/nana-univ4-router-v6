@@ -1,0 +1,8 @@
+{
+  "lib/forge-std": {
+    "rev": "04ee608913e6c334973649b2b1a2976260647c1b"
+  },
+  "lib/hookmate": {
+    "rev": "6c43b0ea438a09782c808a7508f94aaae912ad5f"
+  }
+}
