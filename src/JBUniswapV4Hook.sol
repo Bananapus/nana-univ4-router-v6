@@ -42,6 +42,7 @@ import {PoolId, PoolIdLibrary} from "@uniswap/v4-core/src/types/PoolId.sol";
 import {SwapParams, ModifyLiquidityParams} from "@uniswap/v4-core/src/types/PoolOperation.sol";
 import {BaseHook} from "@uniswap/v4-periphery/src/utils/BaseHook.sol";
 
+import {JBUniswapV4HookData} from "./libraries/JBUniswapV4HookData.sol";
 import {Oracle} from "./libraries/Oracle.sol";
 
 /// @title JBUniswapV4Hook
@@ -65,10 +66,6 @@ contract JBUniswapV4Hook is BaseHook {
     //*********************************************************************//
     // --------------------------- custom errors ------------------------- //
     //*********************************************************************//
-
-    /// @notice Thrown when amountOutMin is not provided in hookData.
-    /// @param hookDataLength The length of the hook data that was provided.
-    error JBUniswapV4Hook_AmountOutMinRequired(uint256 hookDataLength);
 
     /// @notice Thrown when an exact-output swap is attempted.
     /// @dev Only exact-input swaps are supported.
@@ -140,6 +137,14 @@ contract JBUniswapV4Hook is BaseHook {
 
     /// @notice The denominator used when calculating TWAP slippage percent values.
     uint256 public constant TWAP_SLIPPAGE_DENOMINATOR = 10_000;
+
+    /// @notice The 4-byte prefix that marks `hookData` as carrying a Juicebox `amountOutMin`.
+    /// @dev Mirrors `JBUniswapV4HookData.TAG` (the canonical source, importable by downstream contracts at compile
+    /// time). `hookData` is only read as an explicit minimum when it begins with this tag and is at least 36 bytes
+    /// (`tag ++ abi.encode(amountOutMin)`). Any other payload — empty, or another protocol's metadata forwarded by a
+    /// generic router — carries no minimum, so its first word is never mis-decoded as one. A JB-aware caller prefixes
+    /// it: `abi.encodePacked(JBUniswapV4HookData.TAG, abi.encode(amountOutMin))`.
+    bytes4 public constant JB_HOOK_DATA_TAG = JBUniswapV4HookData.TAG;
 
     /// @notice Native ETH address representation
     address public constant UNISWAP_NATIVE_ETH = address(0);
@@ -414,63 +419,17 @@ contract JBUniswapV4Hook is BaseHook {
         // Get TWAP price instead of spot price to prevent manipulation
         uint160 sqrtPriceX96twap = _getTWAPSqrtPrice(poolId);
 
-        // If TWAP is not available (not enough observations), fallback to spot price.
-        // NOTE: Spot price is used as a fallback for newly created pools that lack sufficient TWAP history.
-        // In this state, the estimate is susceptible to spot-price manipulation. Once the pool accumulates
-        // enough observations for TWAP, this fallback is no longer used.
+        // If TWAP is not available (not enough observations), fall back to spot price for the route comparison.
+        // A newly created pool that lacks sufficient TWAP history is priced at spot here, which is susceptible to
+        // spot-price manipulation; once the pool accumulates enough observations the TWAP is used instead. A buy-side
+        // route that leans on this cold-pool spot quote as its floor is bounded by a tagged `amountOutMin` if the
+        // caller supplied one (see the buy-side note in `_beforeSwap`).
         if (sqrtPriceX96twap == 0) {
             (sqrtPriceX96twap,,,) = poolManager.getSlot0(poolId);
         }
 
-        // Apply the combined swap fee (protocol fee + LP fee) to the input amount BEFORE the price-ratio
-        // conversion, mirroring Uniswap V4's swap math so this estimator's floor rounding matches V4's
-        // execution rounding (small inputs at typical fees would otherwise diverge by one unit).
-        uint256 amountInAfterFee = amountIn;
-        {
-            // Read protocol fee from slot0 (directional: lower 12 bits = zeroForOne, upper 12 bits = oneForZero)
-            (,, uint24 protocolFee, uint24 slot0LpFee) = poolManager.getSlot0(PoolIdLibrary.toId(key));
-
-            // Determine the LP fee: use key.fee for static pools, slot0LpFee for dynamic pools
-            uint24 lpFee;
-            if (LPFeeLibrary.isDynamicFee(key.fee)) {
-                lpFee = slot0LpFee;
-            } else {
-                lpFee = key.fee;
-            }
-
-            // Extract the directional protocol fee and compose with LP fee.
-            uint16 directionalProtocolFee = zeroForOne ? protocolFee.getZeroForOneFee() : protocolFee.getOneForZeroFee();
-            uint24 swapFee = directionalProtocolFee == 0 ? lpFee : directionalProtocolFee.calculateSwapFee(lpFee);
-
-            if (swapFee > 0) {
-                amountInAfterFee = FullMath.mulDiv({
-                    a: amountIn,
-                    b: ProtocolFeeLibrary.PIPS_DENOMINATOR - swapFee,
-                    denominator: ProtocolFeeLibrary.PIPS_DENOMINATOR
-                });
-            }
-        }
-
-        // Calculate price ratio from sqrtPriceX96, handling overflow for large values.
-        // When sqrtPriceX96 <= type(uint128).max, we can square it directly (fits in uint256).
-        // Otherwise, use FullMath.mulDiv to avoid overflow, at the cost of reduced precision.
-        if (sqrtPriceX96twap <= type(uint128).max) {
-            uint256 ratioX192 = uint256(sqrtPriceX96twap) * sqrtPriceX96twap;
-            if (zeroForOne) {
-                estimatedOut = FullMath.mulDiv({a: amountInAfterFee, b: ratioX192, denominator: 1 << 192});
-            } else {
-                estimatedOut = FullMath.mulDiv({a: amountInAfterFee, b: 1 << 192, denominator: ratioX192});
-            }
-        } else {
-            uint256 ratioX128 = FullMath.mulDiv({a: sqrtPriceX96twap, b: sqrtPriceX96twap, denominator: 1 << 64});
-            if (zeroForOne) {
-                estimatedOut = FullMath.mulDiv({a: amountInAfterFee, b: ratioX128, denominator: 1 << 128});
-            } else {
-                estimatedOut = FullMath.mulDiv({a: amountInAfterFee, b: 1 << 128, denominator: ratioX128});
-            }
-        }
-
-        return estimatedOut;
+        return
+            _outputForSqrtPrice({key: key, amountIn: amountIn, zeroForOne: zeroForOne, sqrtPriceX96: sqrtPriceX96twap});
     }
 
     /// @notice Declares which Uniswap V4 lifecycle callbacks this hook uses (afterInitialize, afterSwap,
@@ -634,36 +593,31 @@ contract JBUniswapV4Hook is BaseHook {
         override
         returns (bytes4, int128)
     {
-        // Validate slippage protection for V4 swaps
-        // Note: For Juicebox routes, slippage is already validated in _beforeSwap
-        // For V4 swaps (where we returned ZERO_DELTA), this validates the actual swap output
-        // In _afterSwap, use >= 32 (not == 32 as in _beforeSwap) because external V4 swaps may include
-        // additional hookData beyond the amountOutMin prefix. _beforeSwap requires exactly 32 bytes for
-        // Juicebox-routed swaps; _afterSwap is more permissive to support arbitrary external swap metadata.
-        if (hookData.length >= 32) {
-            uint256 amountOutMin = abi.decode(hookData, (uint256));
-            if (amountOutMin > 0) {
-                // Extract output amount from delta based on swap direction.
-                // In V4's convention, output amounts are negative (credits owed to the user),
-                // so we negate to get the absolute output amount for comparison.
-                int128 rawOutput =
-                    params.zeroForOne ? BalanceDeltaLibrary.amount1(delta) : BalanceDeltaLibrary.amount0(delta);
+        // Slippage protection for the V4-settled portion of a swap. A JB-routed swap returns its custom delta in
+        // `_beforeSwap` and is validated there, so it is skipped here. A minimum is enforced only when the caller
+        // tagged one into `hookData` (`_amountOutMinFrom`); an untagged payload — empty, or a generic integration's
+        // own metadata — carries no minimum, and the swap proceeds under the caller's own protection (its router
+        // min-out or `sqrtPriceLimitX96`). The hook imposes no floor of its own.
+        (bool hasExplicitMin, uint256 amountOutMin) = _amountOutMinFrom(hookData);
+        PoolId poolId = key.toId();
 
-                // Only validate if there is a real V4 swap (non-zero output or non-zero delta).
-                // For Juicebox-routed swaps, both rawOutput and delta are zero and slippage was already validated
-                // in _beforeSwap. A dust swap may have rawOutput==0 but a non-zero delta (input side is non-zero).
-                if (rawOutput != 0 || BalanceDelta.unwrap(delta) != 0) {
-                    // Output is negative in V4 convention; negate to get the positive amount received.
-                    // forge-lint: disable-next-line(unsafe-typecast)
-                    uint256 outputAmount = rawOutput < 0 ? uint256(int256(-rawOutput)) : uint256(int256(rawOutput));
-                    if (outputAmount < amountOutMin) {
-                        revert JBUniswapV4Hook_InsufficientOutput({amount: outputAmount, minimum: amountOutMin});
-                    }
+        // Only a real V4 settlement (an output owed to the swapper, or any non-zero delta) is validated; a JB-routed
+        // swap leaves the delta at zero. The minimum, when tagged, is enforced against the actual settled output.
+        if (hasExplicitMin) {
+            int128 rawOutput =
+                params.zeroForOne ? BalanceDeltaLibrary.amount1(delta) : BalanceDeltaLibrary.amount0(delta);
+            if (rawOutput != 0 || BalanceDelta.unwrap(delta) != 0) {
+                // The output leg's delta is positive in V4's convention (a credit owed to the swapper); take the
+                // magnitude defensively so the comparison holds regardless of sign.
+                // forge-lint: disable-next-line(unsafe-typecast)
+                uint256 outputAmount = rawOutput < 0 ? uint256(int256(-rawOutput)) : uint256(int256(rawOutput));
+                if (outputAmount < amountOutMin) {
+                    revert JBUniswapV4Hook_InsufficientOutput({amount: outputAmount, minimum: amountOutMin});
                 }
             }
         }
 
-        _recordObservation(key.toId());
+        _recordObservation(poolId);
         return (BaseHook.afterSwap.selector, 0);
     }
 
@@ -689,15 +643,12 @@ contract JBUniswapV4Hook is BaseHook {
         // Prevent recursive routing: if we're already routing through Juicebox, block reentrant swaps.
         if (_routing) revert JBUniswapV4Hook_ReentrantRouting(msg.sender);
 
-        // Decode amountOutMin from the first 32-byte word of hookData.
-        // Pure V4 integrations may append extra metadata after this prefix, so `_beforeSwap` must accept the same
-        // payload family that `_afterSwap` already supports.
-        uint256 amountOutMin;
-        if (hookData.length >= 32) {
-            amountOutMin = abi.decode(hookData[:32], (uint256));
-        } else {
-            revert JBUniswapV4Hook_AmountOutMinRequired({hookDataLength: hookData.length});
-        }
+        // Read the caller's explicit minimum only from tagged hookData (`_amountOutMinFrom`). An untagged payload —
+        // empty, or a generic integration's own metadata — carries no minimum (`amountOutMin == 0`); a generic swap
+        // is
+        // never reverted for omitting JB's encoding, and a JB-routed leg falls back to the routing floor derived below
+        // (`routeMinimum`). The minimum is not re-interpreted as a hook-imposed floor here.
+        (, uint256 amountOutMin) = _amountOutMinFrom(hookData);
         PoolId poolId = key.toId();
 
         // Only support exact-input swaps (amountSpecified < 0)
@@ -782,7 +733,8 @@ contract JBUniswapV4Hook is BaseHook {
         }
 
         if (!isBuyingJbToken && !isSellingJbToken) {
-            // No JB token involved, proceed with normal Uniswap swap
+            // No JB token involved, proceed with normal Uniswap swap.
+            // Slippage (explicit or TWAP-derived) is enforced for this V4 settlement in `_afterSwap`.
             emit RouteSelected({poolId: poolId, useJuicebox: false, expectedTokens: 0, caller: msg.sender});
             return (BaseHook.beforeSwap.selector, BeforeSwapDeltaLibrary.ZERO_DELTA, 0);
         }
@@ -822,18 +774,25 @@ contract JBUniswapV4Hook is BaseHook {
                 poolId: poolId, useJuicebox: true, expectedTokens: juiceboxExpectedOutput, caller: msg.sender
             });
 
+            // The JB-routed leg carries its own floor (a tagged explicit `amountOutMin`, raised as below). The mint /
+            // cash-out itself is ruleset-deterministic, so it is not sandwichable; the only manipulable input is the
+            // V4 quote used as the buy-side floor, and only while the pool's TWAP is cold (see the buy-side note).
             uint256 routeMinimum = amountOutMin;
             if (routeViaSellSide && juiceboxExpectedOutput > routeMinimum) {
-                // Sell-side cash-outs must deliver at least what the terminal's `previewCashOutFrom` reported.
-                // Anything less is the terminal under-filling its own preview (fee-on-transfer behavior, a
-                // misconfigured data hook, etc.) — accepting it would let a malicious or buggy terminal win
-                // routing by over-quoting and then settling lower. The terminal enforces this floor inside
-                // `cashOutTokensOf`, so an underfilled cash-out reverts before the hook settles output.
+                // Sell-side cash-outs must deliver at least what the terminal's `previewCashOutFrom` reported (a
+                // ruleset-deterministic amount). Anything less is the terminal under-filling its own preview
+                // (fee-on-transfer behavior, a misconfigured data hook, etc.) — accepting it would let a malicious or
+                // buggy terminal win routing by over-quoting and then settling lower. The terminal enforces this floor
+                // inside `cashOutTokensOf`, so an underfilled cash-out reverts before the hook settles output.
                 routeMinimum = juiceboxExpectedOutput;
             } else if (routeViaBuySide && uniswapV4ExpectedTokens + 1 > routeMinimum) {
                 // Buy-side previews decide whether JB beats V4, but live payment can still mint fewer project tokens
                 // than previewed. Require the realized JB output to at least beat the V4 quote it displaced.
                 // The `+ 1` is the strict better-than-V4 floor; eligible quotes are already bounded below MAX_V4_DELTA.
+                // NOTE: `uniswapV4ExpectedTokens` comes from `estimateUniswapOutput`, which falls back to spot when the
+                // pool's TWAP is cold. On a cold pool an in-block spot crash can drive this floor toward 0, so a
+                // tagged `amountOutMin` is the only manipulation-resistant buy-side floor until the TWAP warms; the
+                // mint itself is still ruleset-priced, so the loss is opportunity cost, not principal.
                 routeMinimum = uniswapV4ExpectedTokens + 1;
             }
             uint256 outputReceived = _routeThroughJuicebox({
@@ -887,6 +846,19 @@ contract JBUniswapV4Hook is BaseHook {
             // Two-step calculation: first multiply by weight, then apply price conversion
             uint256 intermediate = FullMath.mulDiv({a: tokensPerBaseCurrency, b: paymentAmount18, denominator: 1e18});
             expectedTokens = FullMath.mulDiv({a: intermediate, b: baseCurrencyPerPaymentToken, denominator: 1e18});
+        }
+    }
+
+    /// @notice Reads an explicit `amountOutMin` from `hookData` when it carries the Juicebox tag.
+    /// @dev Returns `(false, 0)` for empty, short, or untagged `hookData` (a generic integration's own payload), so a
+    /// foreign first word is never mis-decoded as a minimum. Returns `(true, min)` only for tagged data
+    /// (`JB_HOOK_DATA_TAG ++ abi.encode(min)`, length >= 36); any trailing bytes after the minimum are ignored.
+    /// @param hookData The swap's hook data.
+    /// @return present Whether the caller supplied a tagged explicit minimum.
+    /// @return amountOutMin The explicit minimum output (0 when none is present).
+    function _amountOutMinFrom(bytes calldata hookData) internal pure returns (bool present, uint256 amountOutMin) {
+        if (hookData.length >= 36 && bytes4(hookData[:4]) == JB_HOOK_DATA_TAG) {
+            return (true, uint256(bytes32(hookData[4:36])));
         }
     }
 
@@ -1105,6 +1077,74 @@ contract JBUniswapV4Hook is BaseHook {
         // Round toward negative infinity for negative ticks (Solidity truncates toward zero).
         if (tickCumulativeDelta < 0 && (tickCumulativeDelta % int56(uint56(secondsAgo)) != 0)) {
             arithmeticMeanTick--;
+        }
+    }
+
+    /// @notice Converts an input amount into an expected V4 output using a given sqrt price, mirroring V4 swap math.
+    /// @dev Used by `estimateUniswapOutput` to value a swap at a chosen price. Applies the combined swap fee
+    /// (protocol fee + LP fee) to the input BEFORE the price-ratio conversion so the estimate's floor rounding matches
+    /// V4's execution rounding. The fee is read for `key.toId()` so the fee always matches the priced pool.
+    /// @param key The pool key
+    /// @param amountIn The input amount
+    /// @param zeroForOne Whether swapping token0 for token1
+    /// @param sqrtPriceX96 The price (spot or TWAP) to value the swap at
+    /// @return estimatedOut The estimated output amount
+    function _outputForSqrtPrice(
+        PoolKey memory key,
+        uint256 amountIn,
+        bool zeroForOne,
+        uint160 sqrtPriceX96
+    )
+        internal
+        view
+        returns (uint256 estimatedOut)
+    {
+        // Apply the combined swap fee (protocol fee + LP fee) to the input amount BEFORE the price-ratio
+        // conversion, mirroring Uniswap V4's swap math so this estimator's floor rounding matches V4's
+        // execution rounding (small inputs at typical fees would otherwise diverge by one unit).
+        uint256 amountInAfterFee = amountIn;
+        {
+            // Read protocol fee from slot0 (directional: lower 12 bits = zeroForOne, upper 12 bits = oneForZero)
+            (,, uint24 protocolFee, uint24 slot0LpFee) = poolManager.getSlot0(PoolIdLibrary.toId(key));
+
+            // Determine the LP fee: use key.fee for static pools, slot0LpFee for dynamic pools
+            uint24 lpFee;
+            if (LPFeeLibrary.isDynamicFee(key.fee)) {
+                lpFee = slot0LpFee;
+            } else {
+                lpFee = key.fee;
+            }
+
+            // Extract the directional protocol fee and compose with LP fee.
+            uint16 directionalProtocolFee = zeroForOne ? protocolFee.getZeroForOneFee() : protocolFee.getOneForZeroFee();
+            uint24 swapFee = directionalProtocolFee == 0 ? lpFee : directionalProtocolFee.calculateSwapFee(lpFee);
+
+            if (swapFee > 0) {
+                amountInAfterFee = FullMath.mulDiv({
+                    a: amountIn,
+                    b: ProtocolFeeLibrary.PIPS_DENOMINATOR - swapFee,
+                    denominator: ProtocolFeeLibrary.PIPS_DENOMINATOR
+                });
+            }
+        }
+
+        // Calculate price ratio from sqrtPriceX96, handling overflow for large values.
+        // When sqrtPriceX96 <= type(uint128).max, we can square it directly (fits in uint256).
+        // Otherwise, use FullMath.mulDiv to avoid overflow, at the cost of reduced precision.
+        if (sqrtPriceX96 <= type(uint128).max) {
+            uint256 ratioX192 = uint256(sqrtPriceX96) * sqrtPriceX96;
+            if (zeroForOne) {
+                estimatedOut = FullMath.mulDiv({a: amountInAfterFee, b: ratioX192, denominator: 1 << 192});
+            } else {
+                estimatedOut = FullMath.mulDiv({a: amountInAfterFee, b: 1 << 192, denominator: ratioX192});
+            }
+        } else {
+            uint256 ratioX128 = FullMath.mulDiv({a: sqrtPriceX96, b: sqrtPriceX96, denominator: 1 << 64});
+            if (zeroForOne) {
+                estimatedOut = FullMath.mulDiv({a: amountInAfterFee, b: ratioX128, denominator: 1 << 128});
+            } else {
+                estimatedOut = FullMath.mulDiv({a: amountInAfterFee, b: 1 << 128, denominator: ratioX128});
+            }
         }
     }
 

@@ -44,5 +44,5 @@ Uniswap V4 hook and oracle surface for Juicebox-aware swaps. This repo compares 
 - Sell-side routing depends on `previewCashOutFrom(...)` and intentionally falls back to V4 rather than reviving stale static reclaim math.
 - The V4 quote model is intentionally approximate. Do not oversell estimates as execution guarantees.
 - Uniswap V4 signed-delta limits are a real routing boundary. Oversized Juicebox outputs must degrade to V4.
-- Keep the `hookData` contract straight: `_beforeSwap` expects the first 32 bytes to encode `amountOutMin`.
+- Keep the `hookData` contract straight: a minimum is enforced only when `hookData` is `JB_HOOK_DATA_TAG ++ abi.encode(amountOutMin)` (explicit zero opts out). Untagged or empty data carries no minimum and is never mis-decoded as one; the hook imposes no floor of its own.
 - When a task mentions buyback composition, confirm whether the behavior actually lives here or in `nana-buyback-hook-v6`.

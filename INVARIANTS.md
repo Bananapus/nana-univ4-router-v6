@@ -19,7 +19,7 @@ Scope: the Uniswap V4 hook surface that serves Juicebox-aware routing and oracle
 
 | `tokenIn` is JB token? | `tokenOut` is JB token? | Decision |
 |---|---|---|
-| no | no | Pass-through to V4 (`ZERO_DELTA`); `_afterSwap` enforces `amountOutMin`. |
+| no | no | Pass-through to V4 (`ZERO_DELTA`); `_afterSwap` enforces a tagged `amountOutMin` when present, else no hook-level minimum. |
 | no | yes | Buy-side route comparison: `previewPayFor` quote vs `estimateUniswapOutput`. |
 | yes | no | Sell-side route comparison: `calculateExpectedOutputFromSelling` (uses `previewCashOutFrom`) vs `estimateUniswapOutput`. |
 | yes | yes | Both sides evaluated; higher quote wins; ties favor buy side. |
@@ -29,7 +29,7 @@ JB-token detection requires the project to have a **registered ERC-20** (`JBToke
 ## A.1 Routing and best-execution
 
 - Every swap that touches a Juicebox project's registered ERC-20 is route-compared: the hook computes a V4-pool quote (`estimateUniswapOutput`) AND a Juicebox-side quote (`previewPayFor` on buys, `previewCashOutFrom` on sells) and routes through whichever yields more output. (`JBUniswapV4Hook.sol:734-803`)
-- The swapper **never receives fewer output tokens than `amountOutMin`** declared in `hookData[:32]`. The first 32 bytes of `hookData` are required; calls with shorter `hookData` revert `JBUniswapV4Hook_AmountOutMinRequired`. (`JBUniswapV4Hook.sol:688-693`)
+- The swapper's minimum output is a **tag-gated** discriminator on `hookData` (`_amountOutMinFrom`). A minimum is read only when `hookData` begins with `JB_HOOK_DATA_TAG` and is at least 36 bytes (`tag ++ abi.encode(amountOutMin)`); that explicit minimum — including an explicit zero, a deliberate take-any-price opt-out — is enforced on the settlement balance delta on both routing paths, and the swapper **never receives fewer output tokens than it**. Any other payload — empty, or a generic integration's own metadata — carries no minimum (its first word is never mis-decoded as one), and the hook imposes no floor of its own; such a swap proceeds under the caller's own protection. (`JBUniswapV4Hook.sol:597-636, 664-673`)
 - For Juicebox-routed sells, the internal `routeMinimum` is raised to the previewed reclaim (`juiceboxExpectedOutput`) so the terminal cannot under-fill its own preview and still win the route. (`JBUniswapV4Hook.sol:819-825`)
 - For Juicebox-routed buys, `routeMinimum` is raised to `uniswapV4ExpectedTokens + 1`, enforcing the strict "better than V4" floor on actual settlement. (`JBUniswapV4Hook.sol:826-831`)
 - Final settlement is measured by **balance delta on the hook's side**, not the terminal's return value. Fee-on-transfer output tokens and over-reporting terminals cannot silently degrade realized output below `amountOutMin`. (`JBUniswapV4Hook.sol:1265-1298`)
@@ -49,12 +49,12 @@ JB-token detection requires the project to have a **registered ERC-20** (`JBToke
 - A non-zero sell that yields zero output reverts `JBUniswapV4Hook_JuiceboxSellDidNotDeliver` rather than settling a degenerate zero-output swap. (`JBUniswapV4Hook.sol:1286-1292`)
 - Temporary ERC-20 allowances granted to the terminal are checked for **exact consumption** post-call. Any leftover allowance reverts `JBUniswapV4Hook_TemporaryAllowanceNotConsumed`, preventing a terminal from holding live spend authority on the hook's residual balance across transactions. (`JBUniswapV4Hook.sol:1163-1174, 1226-1248`)
 - Balance-delta accounting means **pre-existing hook balances are never swept into settlement** — only the delta produced by *this* terminal call moves to PoolManager. Stranded-token attacks via dust pre-funding the hook are blocked.
-- V4-routed swaps (where the hook returned `ZERO_DELTA`) still get `amountOutMin` validation in `_afterSwap` against the actual swap delta. (`JBUniswapV4Hook.sol:619-661`)
+- V4-routed swaps (where the hook returned `ZERO_DELTA`) are validated in `_afterSwap` against the actual swap delta only when `hookData` carries a tagged `amountOutMin`; an untagged payload carries no minimum and the swap is not floored by the hook. (`JBUniswapV4Hook.sol:585-640`)
 
 ## A.4 Oracle protections
 
 - `_beforeSwap` route comparison uses **TWAP-derived** V4 quotes (`_getTWAPSqrtPrice` over `TWAP_PERIOD = 30 minutes`) when sufficient observation history exists, not raw spot price. (`JBUniswapV4Hook.sol:140, 985-1031`)
-- When observation history is insufficient (`cardinality < 2` or oldest observation < 30min old), the V4 quote falls back to current spot. This is documented and bounded; `amountOutMin` provides the absolute execution floor. (`JBUniswapV4Hook.sol:990-1014, 410-416`)
+- When observation history is insufficient (`cardinality < 2` or oldest observation < 30min old), the V4 route-*comparison* quote (`estimateUniswapOutput`) falls back to current spot. This is documented and bounded; a tagged `amountOutMin`, when supplied, provides the absolute execution floor. The hook derives no settlement floor of its own from the TWAP. (`JBUniswapV4Hook.sol:990-1014, 410-432`)
 - Once TWAP is expected to be available, observation-read failures cause the swap to revert rather than silently degrade to spot pricing. Fail-closed on mature oracles. (`JBUniswapV4Hook.sol:1017-1019`)
 - The cap-aware observation guard refuses to overwrite a freshly-stored observation when the new second-oldest entry is younger than `TWAP_PERIOD`, preserving the 30-minute window even under sustained sub-2s block cadence (~1024 slots / 1s would otherwise erase the window in ~17 minutes). (`JBUniswapV4Hook.sol:1114-1133`)
 - Swap-fee normalization happens **before** the price-ratio conversion inside `estimateUniswapOutput`, mirroring V4 swap math so the estimator's rounding matches actual execution rounding (avoids off-by-one drift at typical fee tiers for small inputs). (`JBUniswapV4Hook.sol:418-445`)
@@ -77,14 +77,14 @@ There are no operator powers on this hook. After deployment:
 - **No owner.** No `Ownable`, no `_DEPLOYER`, no governance role.
 - **No pause.** Swaps cannot be paused, blocked, or fee-switched on hooked pools.
 - **No upgrade.** Hook bytecode is fixed; recovery from a bug requires a new hook deployment + pool migration.
-- **No retunable parameters.** `TWAP_PERIOD = 1800`, `MAX_TWAP_CARDINALITY = 1024`, `TWAP_SLIPPAGE_DENOMINATOR = 10000`, `MAX_V4_DELTA = type(int128).max`, `JB_NATIVE_TOKEN`, `UNISWAP_NATIVE_ETH` are all `public constant`. (`JBUniswapV4Hook.sol:124-146`)
+- **No retunable parameters.** `TWAP_PERIOD = 1800`, `MAX_TWAP_CARDINALITY = 1024`, `TWAP_SLIPPAGE_DENOMINATOR = 10000`, `JB_HOOK_DATA_TAG`, `MAX_V4_DELTA = type(int128).max`, `JB_NATIVE_TOKEN`, `UNISWAP_NATIVE_ETH` are all `public constant`. (`JBUniswapV4Hook.sol:124-146`)
 - **No registry / mapping.** Pool-to-routing settings, allowlists, blocklists — none exist. The hook applies uniformly to every pool that initializes against it.
 - **No setChainSpecificConstants.** Unlike `JBBuybackHook` / `JBRouterTerminal`, this hook has no one-shot deployer-only setter. All chain wiring is in the constructor.
 
 ## B.2 Powers pool creators implicitly hold
 
 - **Pool initialization is the act of opting in.** Whoever calls `poolManager.initialize` with this hook's address permanently binds the resulting `PoolId` to this hook's behavior. No on-chain undo.
-- **Hook-data interface choice.** Integrators choose how to encode the additional `hookData` payload (beyond the first 32-byte `amountOutMin` prefix). `_beforeSwap` requires `length >= 32`; `_afterSwap` is permissive about trailing bytes for arbitrary external metadata. (`JBUniswapV4Hook.sol:633-636, 688-693`)
+- **Hook-data interface choice.** `hookData` is optional and tag-gated. A minimum is read only from `JB_HOOK_DATA_TAG ++ abi.encode(amountOutMin)` (length >= 36); integrators may append further metadata after that. Any other payload — empty, or a generic router's own bytes — carries no minimum and is never mis-decoded as one; the hook imposes no floor of its own. (`JBUniswapV4Hook.sol:596-640`)
 
 ## B.3 Powers integrators trust the hook for
 
@@ -102,11 +102,11 @@ V4 `BaseHook`. Holds no persistent project funds — only transient swap-in-flig
 
 **PoolManager-only callbacks (the only state-mutating external surface):**
 
-- **`_beforeSwap(_, key, params, hookData) → (selector, BeforeSwapDelta, uint24)`** — PoolManager only. Decodes `amountOutMin` from `hookData[:32]`, rejects exact-output, identifies JB project tokens via `_projectIdForRegisteredToken`, queries both terminals' previews, compares against `estimateUniswapOutput`, routes the winning side.
-  - **Invariants:** Recursive routing reverts (`_routing` flag); `hookData.length >= 32` required; exact-output rejected; quotes above `MAX_V4_DELTA` ineligible; JB-routed buys must beat V4 strictly (`> uniswapV4ExpectedTokens`); JB-routed sells must deliver `>= juiceboxExpectedOutput`. (`JBUniswapV4Hook.sol:672-851`)
+- **`_beforeSwap(_, key, params, hookData) → (selector, BeforeSwapDelta, uint24)`** — PoolManager only. Reads the explicit `amountOutMin` from `hookData[:32]` when present (`0` when absent), rejects exact-output, identifies JB project tokens via `_projectIdForRegisteredToken`, queries both terminals' previews, compares against `estimateUniswapOutput`, routes the winning side.
+  - **Invariants:** Recursive routing reverts (`_routing` flag); exact-output rejected; quotes above `MAX_V4_DELTA` ineligible; JB-routed buys must beat V4 strictly (`> uniswapV4ExpectedTokens`); JB-routed sells must deliver `>= juiceboxExpectedOutput`. (`JBUniswapV4Hook.sol:672-851`)
 
-- **`_afterSwap(_, key, params, delta, hookData) → (selector, int128)`** — PoolManager only. For V4-routed swaps (where `_beforeSwap` returned `ZERO_DELTA`), validates the actual output delta against `amountOutMin` encoded in `hookData[:32]`. Records a fresh oracle observation.
-  - **Invariants:** `amountOutMin` enforced on real V4 swaps; permissive trailing-byte handling (`length >= 32`); observation written exactly once. (`JBUniswapV4Hook.sol:619-661`)
+- **`_afterSwap(_, key, params, delta, hookData) → (selector, int128)`** — PoolManager only. For V4-routed swaps (where `_beforeSwap` returned `ZERO_DELTA`), validates the actual output delta against a tagged `amountOutMin` (`_amountOutMinFrom`) when present. Records a fresh oracle observation.
+  - **Invariants:** a tagged minimum (when present) is enforced on real V4 swaps; untagged/empty `hookData` carries no minimum and is allowed (no revert, no hook floor); observation written exactly once. (`JBUniswapV4Hook.sol:585-640`)
 
 - **`_afterInitialize(_, key, _, _) → selector`** — PoolManager only. Initializes the per-pool `Oracle.Observation` array via `Oracle.initialize`, sets `ObservationState{index:0, cardinality:1, cardinalityNext:1}`.
   - **Invariants:** one-shot per pool; first observation timestamp is `block.timestamp`. (`JBUniswapV4Hook.sol:581-590`)
@@ -171,7 +171,7 @@ There is no `setChainSpecificConstants` one-shot binder pattern on this contract
 
 ## Section D — Cross-cutting invariants
 
-1. **Best-execution floor.** `amountOutMin` (first 32 bytes of `hookData`) is enforced on the actual settlement balance delta — not on the terminal's return value. Applies to both `_beforeSwap` (JB-routed) and `_afterSwap` (V4-routed). Fee-on-transfer output tokens cannot silently undercut.
+1. **Best-execution floor.** A tagged `amountOutMin` (`JB_HOOK_DATA_TAG ++ abi.encode(min)`, when present) is enforced on the actual settlement balance delta — not on the terminal's return value — on both `_beforeSwap` (JB-routed) and `_afterSwap` (V4-routed). Fee-on-transfer output tokens cannot silently undercut it. A swap that omits the tag carries no hook-level minimum and proceeds under the caller's own protection; the hook imposes no floor of its own. (JB-routed legs additionally carry their own `routeMinimum` — the deterministic cash-out preview on sells, or "beat the displaced V4 quote" on buys.)
 
 2. **Conservative degrade on preview failure.** Whenever `previewPayFor` / `previewCashOutFrom` / `pricePerUnitOf` / `currentRulesetOf` reverts or returns implausible metadata (extreme decimals), the JB quote falls to `0` and V4 wins the route. No path resurrects stale static math for live execution.
 

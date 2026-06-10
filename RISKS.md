@@ -33,7 +33,7 @@ This file focuses on the routing, oracle, and composition risks in `JBUniswapV4H
 ## 3. Routing risks
 
 - **Three-way routing.** The hook may compare V4 with minting, cash out, or both, depending on which side is the project token.
-- **Slippage protection depends on `hookData`.** The first 32 bytes must encode `amountOutMin`.
+- **Slippage protection is tag-gated.** A minimum is enforced only when `hookData` begins with `JB_HOOK_DATA_TAG` followed by a 32-byte `amountOutMin` (an explicit zero is a deliberate opt-out). Any other payload — empty, or a generic router's own metadata — carries no minimum: its first word is never mis-decoded as one, so neither a large word (DoS) nor a small word (silent skip) is possible. The hook imposes no floor of its own; an untagged swap proceeds under the caller's own protection (its router min-out or `sqrtPriceLimitX96`).
 - **V4 estimates are approximate.** Large trades can diverge materially from the linearized V4 quote.
 - **Buy-side estimates depend on preview availability.** If the terminal cannot provide a usable preview, the hook intentionally makes the Juicebox buy path ineligible.
 - **Sell-side estimates are conservative.** If `previewCashOutFrom(...)` is unavailable or reverts, the hook intentionally declines JB sell routing instead of reviving older static reclaim math.
@@ -134,11 +134,11 @@ These are standing properties of the system. They describe behavior that is inte
 
 #### A single observation returns the spot tick as the TWAP
 
-With fewer than two observations, `observeTWAP` returns the current spot tick as the TWAP. Internal routing is bounded by the 15% fixed slippage tolerance that applies when no TWAP is available, and external callers check the observation count before trusting the value.
+With fewer than two observations, `observeTWAP` returns the current spot tick as the TWAP, and the route comparison may price against it (no tolerance is applied to the comparison itself). A buy-side JB route that leans on this cold-pool spot quote as its `routeMinimum` is only bounded by a tagged `amountOutMin` if the caller supplied one; the mint itself stays ruleset-priced. External callers check the observation count before trusting the TWAP value.
 
 #### Insufficient history falls back to the manipulable spot price
 
-When too few observations exist, the oracle returns the spot price, which is manipulable via JIT liquidity. The 15% fixed slippage tolerance bounds the impact on routing, and external consumers verify TWAP quality before relying on it.
+When too few observations exist, the oracle returns the spot price, which is manipulable via JIT liquidity. The route comparison may use it, and external consumers verify TWAP quality before relying on it. The hook does not derive a slippage floor of its own from the TWAP; protection is the caller's tagged `amountOutMin` (when supplied) or their own router-level minimum.
 
 #### Observation growth is synchronous
 
