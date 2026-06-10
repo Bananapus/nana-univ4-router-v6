@@ -61,7 +61,7 @@ Generated event/error name deltas:
 - Event names removed or replaced:
   - `BestRouteSelected`, `RouteSelected`.
 - Error names added:
-  - `JBUniswapV4Hook_AmountOutMinRequired`, `JBUniswapV4Hook_ExactOutputSwapsNotSupported`, `JBUniswapV4Hook_InputExceedsV4DeltaLimit`, `JBUniswapV4Hook_InsufficientOutput`, `JBUniswapV4Hook_JuiceboxSellDidNotDeliver`, `JBUniswapV4Hook_OutputExceedsV4DeltaLimit`, `JBUniswapV4Hook_ReentrantRouting`, `JBUniswapV4Hook_SecondsAgoCannotBeZero`.
+  - `JBUniswapV4Hook_ExactOutputSwapsNotSupported`, `JBUniswapV4Hook_InputExceedsV4DeltaLimit`, `JBUniswapV4Hook_InsufficientOutput`, `JBUniswapV4Hook_JuiceboxSellDidNotDeliver`, `JBUniswapV4Hook_OutputExceedsV4DeltaLimit`, `JBUniswapV4Hook_ReentrantRouting`, `JBUniswapV4Hook_SecondsAgoCannotBeZero`.
   - `JBUniswapV4Hook_SellInputReturned`, `JBUniswapV4Hook_TemporaryAllowanceNotConsumed`, `Oracle_CardinalityCannotBeZero`, `Oracle_TargetPredatesOldestObservation`.
 - Error names removed or replaced:
   - `AddressEmptyCode`, `AddressInsufficientBalance`, `FailedInnerCall`, `JBUniswapV4Hook_AmountOutMinRequired`, `JBUniswapV4Hook_ExactOutputSwapsNotSupported`, `JBUniswapV4Hook_InsufficientOutput`, `JBUniswapV4Hook_InvalidCallback`, `JBUniswapV4Hook_NoSwap`.

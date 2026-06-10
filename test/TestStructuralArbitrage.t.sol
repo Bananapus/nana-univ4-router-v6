@@ -559,10 +559,7 @@ contract TestStructuralArbitrage is Test {
             sqrtPriceLimitX96: TickMath.MIN_SQRT_PRICE + 1
         });
 
-        // Pass a minimal explicit `amountOutMin` (1 wei), modeling a real trader that sets its own slippage. These
-        // tests exercise routing economics, not the zero-min protection floor: an explicit min skips the warm-pool
-        // TWAP floor that `amountOutMin == 0` now triggers, so large price-moving convergence swaps are not rejected.
-        jbSwapRouter.swap(key, params, 1);
+        jbSwapRouter.swap(key, params, 0);
     }
 
     // ============================================

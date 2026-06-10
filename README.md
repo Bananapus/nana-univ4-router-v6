@@ -102,7 +102,7 @@ script/
 - buyback-hook metadata is not used as a route-scoring source for buy or sell paths
 - the hook falls back when Juicebox-side estimation fails, so liveness and perfect observability are traded against each other
 - spot-price fallback is intentionally allowed but materially weaker than a mature TWAP
-- every Juicebox-routed swap expects `hookData` to encode at least one `uint256 amountOutMin`
+- `hookData` is optional: when present, its first 32 bytes are the caller's explicit `uint256 amountOutMin` (an explicit zero opts out of any floor); when absent, a swap that settles through V4 is floored against the warm-pool TWAP, and on a cold pool no floor is imposed
 - composition with `nana-buyback-hook-v6` depends on the router's recursion guard to fail closed into minting
 
 ## For AI agents
