@@ -42,6 +42,7 @@ import {PoolId, PoolIdLibrary} from "@uniswap/v4-core/src/types/PoolId.sol";
 import {SwapParams, ModifyLiquidityParams} from "@uniswap/v4-core/src/types/PoolOperation.sol";
 import {BaseHook} from "@uniswap/v4-periphery/src/utils/BaseHook.sol";
 
+import {JBUniswapV4HookData} from "./libraries/JBUniswapV4HookData.sol";
 import {Oracle} from "./libraries/Oracle.sol";
 
 /// @title JBUniswapV4Hook
@@ -138,12 +139,12 @@ contract JBUniswapV4Hook is BaseHook {
     uint256 public constant TWAP_SLIPPAGE_DENOMINATOR = 10_000;
 
     /// @notice The 4-byte prefix that marks `hookData` as carrying a Juicebox `amountOutMin`.
-    /// @dev `hookData` is only read as an explicit minimum when it begins with this tag and is at least 36 bytes
+    /// @dev Mirrors `JBUniswapV4HookData.TAG` (the canonical source, importable by downstream contracts at compile
+    /// time). `hookData` is only read as an explicit minimum when it begins with this tag and is at least 36 bytes
     /// (`tag ++ abi.encode(amountOutMin)`). Any other payload — empty, or another protocol's metadata forwarded by a
-    /// generic router — carries no minimum, so its first word is never mis-decoded as one. A JB-aware caller that
-    /// wants
-    /// a minimum enforced must prefix it: `abi.encodePacked(JB_HOOK_DATA_TAG, abi.encode(amountOutMin))`.
-    bytes4 public constant JB_HOOK_DATA_TAG = bytes4(keccak256("JBUniswapV4Hook.amountOutMin.v1"));
+    /// generic router — carries no minimum, so its first word is never mis-decoded as one. A JB-aware caller prefixes
+    /// it: `abi.encodePacked(JBUniswapV4HookData.TAG, abi.encode(amountOutMin))`.
+    bytes4 public constant JB_HOOK_DATA_TAG = JBUniswapV4HookData.TAG;
 
     /// @notice Native ETH address representation
     address public constant UNISWAP_NATIVE_ETH = address(0);
