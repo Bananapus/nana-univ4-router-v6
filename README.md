@@ -53,6 +53,8 @@ It is infrastructure, but infrastructure with direct economic consequences.
 
 - this hook can choose between market and protocol-native execution, so pool state alone does not determine the path
 - oracle maturity matters; early or thin pools weaken protection even if swaps still execute
+- callers that need a hard value floor should pass tagged `hookData` with an explicit `amountOutMin`; price limits and
+  pool state alone are not a complete slippage policy
 - hook-data encoding is part of the trusted interface
 - the composed buyback path inherits assumptions from both this repo and `nana-buyback-hook-v6`
 
@@ -102,6 +104,8 @@ script/
 - buyback-hook metadata is not used as a route-scoring source for buy or sell paths
 - the hook falls back when Juicebox-side estimation fails, so liveness and perfect observability are traded against each other
 - spot-price fallback is intentionally allowed but materially weaker than a mature TWAP
+- official pools should be pre-warmed before launch if downstream hooks are expected to rely on TWAP history from the
+  first user-facing route
 - `hookData` is optional and tag-gated: a minimum is enforced only when `hookData` begins with `JB_HOOK_DATA_TAG` followed by a `uint256 amountOutMin`. Any other payload — empty, or a generic integration's own metadata — carries no minimum (its first word is never mis-read as one), so the swap proceeds under the caller's own protection; the hook imposes no floor of its own
 - composition with `nana-buyback-hook-v6` depends on the router's recursion guard to fail closed into minting
 
