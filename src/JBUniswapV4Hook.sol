@@ -390,7 +390,7 @@ contract JBUniswapV4Hook is BaseHook {
     }
 
     /// @notice Estimates how many output tokens a swap through the Uniswap V4 pool would produce, based on the
-    /// 30-minute TWAP price (or spot price if insufficient oracle history).
+    /// 30-minute TWAP price, the longest retained best-effort TWAP, or spot price if no oracle history is available.
     /// @dev Uses time-weighted average price to prevent manipulation
     /// @dev Price impact warning: This estimate does not account for price impact from liquidity depth. The TWAP
     /// price is applied uniformly to the entire `amountIn` regardless of available liquidity at the current tick
@@ -492,6 +492,15 @@ contract JBUniswapV4Hook is BaseHook {
     /// @return True if the oldest retained observation is at least `secondsAgo` old.
     function hasObservationCoverage(PoolKey calldata key, uint32 secondsAgo) external view returns (bool) {
         return _hasObservationCoverage({poolId: key.toId(), secondsAgo: secondsAgo});
+    }
+
+    /// @notice The oldest retained observation age for `key`.
+    /// @dev Consumers can use this to quote against the longest retained best-effort window when the preferred window
+    /// is not fully covered.
+    /// @param key The pool key.
+    /// @return oldestSecondsAgo The age of the oldest retained initialized observation, or 0 if unavailable.
+    function observationCoverageOf(PoolKey calldata key) external view returns (uint32 oldestSecondsAgo) {
+        return _observationCoverageOf({poolId: key.toId()});
     }
 
     /// @notice Observe the time-weighted average price (TWAP) tick over the specified lookback window for a pool.
@@ -984,8 +993,8 @@ contract JBUniswapV4Hook is BaseHook {
         }
     }
 
-    /// @notice Computes the TWAP sqrt price over the configured lookback window. Returns 0 if the pool lacks
-    /// sufficient observation history (fewer than 2 observations or none old enough).
+    /// @notice Computes the TWAP sqrt price over the configured lookback window, or the longest retained best-effort
+    /// window. Returns 0 if the pool lacks usable observation history.
     /// @param poolId The pool ID
     /// @return sqrtPriceX96 The TWAP sqrt price, or 0 if not enough observations
     // forge-lint: disable-next-line(mixed-case-function)
@@ -1003,8 +1012,9 @@ contract JBUniswapV4Hook is BaseHook {
         // Get current liquidity from the dedicated accessor
         uint128 liquidity = poolManager.getLiquidity(poolId);
 
-        // If we don't have observations old enough, return 0.
-        if (!_hasObservationCoverage({poolId: poolId, secondsAgo: TWAP_PERIOD})) return 0;
+        uint32 oldestSecondsAgo = _observationCoverageOf({poolId: poolId});
+        uint32 secondsAgo = oldestSecondsAgo < TWAP_PERIOD ? oldestSecondsAgo : TWAP_PERIOD;
+        if (secondsAgo == 0) return 0;
 
         // Observe the TWAP
         // _observeTWAP() is called without try-catch. If the oracle observation fails (e.g.,
@@ -1012,7 +1022,7 @@ contract JBUniswapV4Hook is BaseHook {
         // means no reliable price reference exists, and proceeding without one would expose the swap to manipulation.
         int24 arithmeticMeanTick = _observeTWAP({
             poolId: poolId,
-            secondsAgo: TWAP_PERIOD,
+            secondsAgo: secondsAgo,
             tick: tick,
             index: state.index,
             liquidity: liquidity,
@@ -1209,15 +1219,29 @@ contract JBUniswapV4Hook is BaseHook {
         ObservationState memory state = states[poolId];
         if (state.cardinality == 0) return false;
         if (secondsAgo == 0) return true;
-        if (state.cardinality < 2) return false;
 
-        Oracle.Observation memory oldest = observations[poolId][(state.index + 1) % state.cardinality];
+        uint32 oldestSecondsAgo = _observationCoverageOf({poolId: poolId});
+        return oldestSecondsAgo >= secondsAgo;
+    }
+
+    /// @notice The age of the oldest initialized retained observation.
+    /// @param poolId The pool ID.
+    /// @return oldestSecondsAgo The retained lookback window, or 0 if fewer than two observations are usable.
+    function _observationCoverageOf(PoolId poolId) internal view returns (uint32 oldestSecondsAgo) {
+        ObservationState memory state = states[poolId];
+        uint16 cardinality = state.cardinality;
+        if (cardinality < 2) return 0;
+
+        Oracle.Observation memory oldest = observations[poolId][(state.index + 1) % cardinality];
         if (!oldest.initialized) oldest = observations[poolId][0];
-        if (!oldest.initialized) return false;
+        if (!oldest.initialized) return 0;
+
+        uint32 currentTime = uint32(block.timestamp);
+        if (oldest.blockTimestamp >= currentTime) return 0;
 
         unchecked {
             // forge-lint: disable-next-line(block-timestamp)
-            return uint32(block.timestamp) - oldest.blockTimestamp >= secondsAgo;
+            oldestSecondsAgo = currentTime - oldest.blockTimestamp;
         }
     }
 

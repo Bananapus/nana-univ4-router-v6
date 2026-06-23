@@ -654,9 +654,9 @@ contract OracleDeepTest is Test {
     }
 
     /// @notice At one-observation-per-second cadence the capped buffer cannot retain a 30-minute TWAP window.
-    /// The hook keeps writing fresh observations and reports the window as under-covered so consumers can fail closed
+    /// The hook keeps writing fresh observations and reports the retained window so consumers can quote best-effort
     /// instead of using a stale newest observation.
-    function test_TWAPRetention_CapReportsUnderCoveredWindowAtOneSecondCadence() public {
+    function test_TWAPRetention_CapReportsBestEffortCoverageAtOneSecondCadence() public {
         uint256 ts = 10_000;
         uint32 twapPeriod = hook.TWAP_PERIOD();
         uint256 swapCount = twapPeriod + 250;
@@ -680,9 +680,12 @@ contract OracleDeepTest is Test {
             "The oldest retained observation should be newer than the TWAP target at one-second cadence"
         );
         assertFalse(hook.hasObservationCoverage(key, twapPeriod), "The requested TWAP window should be under-covered");
+        uint32 oldestSecondsAgo = hook.observationCoverageOf(key);
+        assertGt(oldestSecondsAgo, 0, "Coverage should report a usable best-effort window");
+        assertLt(oldestSecondsAgo, twapPeriod, "Coverage should report under-covered history");
 
         uint256 estimate = hook.estimateUniswapOutput(id, key, 1 ether, true);
-        assertGt(estimate, 0, "Estimation should fall back to spot when TWAP coverage is unavailable");
+        assertGt(estimate, 0, "Estimation should use best-effort retained history");
     }
 
     // ---------------------------------------------------------------

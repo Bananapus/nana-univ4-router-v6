@@ -7,7 +7,8 @@ import {SwapParams} from "@uniswap/v4-core/src/types/PoolOperation.sol";
 
 import {JuiceboxHookTest} from "../JBUniswapV4Hook.t.sol";
 
-/// @notice Regression coverage for capped oracle writes: under-covered windows must fail closed, not leave stale data.
+/// @notice Regression coverage for capped oracle writes: under-covered windows must report best-effort coverage, not
+/// leave stale newest data.
 contract StaleNewestObservationPoC is JuiceboxHookTest {
     function test_cappedOracleContinuesWritingAndReportsUnderCoveredWindow() external {
         token1.approve(address(swapRouter), type(uint256).max);
@@ -19,6 +20,8 @@ contract StaleNewestObservationPoC is JuiceboxHookTest {
         }
 
         assertFalse(hook.hasObservationCoverage(key, hook.TWAP_PERIOD()), "high-cadence buffer is under-covered");
+        uint32 oldestSecondsAgo = hook.observationCoverageOf(key);
+        assertGt(oldestSecondsAgo, 0, "high-cadence buffer still exposes best-effort coverage");
 
         (uint16 indexBefore,,) = hook.states(id);
         _swapAtNextTimestamp();
