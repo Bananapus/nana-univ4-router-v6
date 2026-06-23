@@ -1216,6 +1216,7 @@ contract JBUniswapV4Hook is BaseHook {
         if (!oldest.initialized) return false;
 
         unchecked {
+            // forge-lint: disable-next-line(block-timestamp)
             return uint32(block.timestamp) - oldest.blockTimestamp >= secondsAgo;
         }
     }
