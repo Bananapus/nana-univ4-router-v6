@@ -116,9 +116,9 @@ The hook deliberately ignores buyback hook metadata when choosing between Juiceb
 
 `estimateUniswapOutput()` uses a linear TWAP quote without liquidity-depth simulation. For large trades in shallow pools, the actual V4 execution price may be worse than the Juicebox issuance path. A full liquidity-depth check was deemed too complex for the routing hot path. `amountOutMin` slippage protection prevents worst-case execution.
 
-### 8.8 TWAP warmup spot-price fallback
+### 8.8 TWAP warmup best-effort fallback
 
-When the TWAP oracle has insufficient observation history (newly created pools, first ~30 minutes), `estimateUniswapOutput` falls back to the manipulable spot price. During this window, routing decisions may be suboptimal. Slippage protection (`amountOutMin`) prevents worst-case execution. This is documented in code and is a bounded startup condition.
+When the TWAP oracle has some observation history but not enough for the preferred 30-minute window, `estimateUniswapOutput` quotes against the longest retained best-effort TWAP. If no usable history exists, it falls back to the manipulable spot price. During this window, routing decisions may be suboptimal. Slippage protection (`amountOutMin`) prevents worst-case execution. This is documented in code and is a bounded startup condition.
 
 ---
 
@@ -136,9 +136,9 @@ These are standing properties of the system. They describe behavior that is inte
 
 With fewer than two observations, `observeTWAP` returns the current spot tick as the TWAP, and the route comparison may price against it (no tolerance is applied to the comparison itself). A buy-side JB route that leans on this cold-pool spot quote as its `routeMinimum` is only bounded by a tagged `amountOutMin` if the caller supplied one; the mint itself stays ruleset-priced. External callers check the observation count before trusting the TWAP value.
 
-#### Insufficient history falls back to the manipulable spot price
+#### Partial history uses best-effort TWAP; no history falls back to spot
 
-When too few observations exist, the oracle returns the spot price, which is manipulable via JIT liquidity. The route comparison may use it, and external consumers verify TWAP quality before relying on it. The hook does not derive a slippage floor of its own from the TWAP; protection is the caller's tagged `amountOutMin` (when supplied) or their own router-level minimum.
+When retained observations do not cover the preferred window, the hook uses the longest retained best-effort TWAP. When no usable observations exist, the oracle returns the spot price, which is manipulable via JIT liquidity. The route comparison may use it, and external consumers can call `hasObservationCoverage(...)` or `observationCoverageOf(...)` before relying on a quote. The hook does not derive a slippage floor of its own from the TWAP; protection is the caller's tagged `amountOutMin` (when supplied) or their own router-level minimum.
 
 #### Observation growth is synchronous
 
