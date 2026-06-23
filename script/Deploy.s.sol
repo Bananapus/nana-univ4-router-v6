@@ -11,9 +11,6 @@ import {HookMiner} from "@uniswap/v4-periphery/src/utils/HookMiner.sol";
 import {JBUniswapV4Hook} from "../src/JBUniswapV4Hook.sol";
 
 contract DeployScript is Script {
-    /// @notice Canonical deterministic CREATE2 deployer used by forge scripts for salted hook deployments.
-    address internal constant CREATE2_DEPLOYER = 0x4e59b44847b379578588920cA78FbF26c0B4956C;
-
     /// @notice Tracks the deployment of the core contracts for the chain we are deploying to.
     CoreDeployment core;
 
@@ -29,6 +26,8 @@ contract DeployScript is Script {
         );
 
         uint256 deployerPrivateKey = vm.envUint("PRIVATE_KEY");
+        address deployer = vm.addr(deployerPrivateKey);
+
         // Calculate the required flags for the hook permissions.
         uint160 flags = uint160(
             Hooks.BEFORE_SWAP_FLAG | Hooks.AFTER_SWAP_FLAG | Hooks.AFTER_INITIALIZE_FLAG
@@ -41,7 +40,7 @@ contract DeployScript is Script {
 
         // Mine a valid hook address.
         (address hookAddress, bytes32 salt) = HookMiner.find({
-            deployer: CREATE2_DEPLOYER,
+            deployer: deployer,
             flags: flags,
             creationCode: type(JBUniswapV4Hook).creationCode,
             constructorArgs: constructorArgs
