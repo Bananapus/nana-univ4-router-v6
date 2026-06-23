@@ -142,7 +142,7 @@ When retained observations do not cover the preferred window, the hook uses the 
 
 #### Observation growth is synchronous
 
-`increaseOracleCardinalityNext` initializes oracle slots synchronously, so growing by a large amount in one call costs significant gas. Growth is bounded by `MAX_TWAP_CARDINALITY = 1024` and is idempotent: once a slot is grown, it cannot be grown again at the same size, so the cost is paid once.
+`increaseOracleCardinalityNext` initializes oracle slots synchronously, so growing by a large amount in one call costs significant gas. Growth is bounded by `MAX_TWAP_CARDINALITY = 1801` and is idempotent: once a slot is grown, it cannot be grown again at the same size, so the cost is paid once.
 
 ### Swap routing behavior
 

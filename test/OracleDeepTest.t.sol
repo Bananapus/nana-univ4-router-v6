@@ -596,7 +596,7 @@ contract OracleDeepTest is Test {
     /// @notice After enough growth cycles, cardinalityNext should cap at the configured maximum.
     function test_OracleCardinality_CapsAtConfiguredMaximum() public {
         // We need to trigger auto-grow repeatedly.
-        // Growth pattern: 1 -> 2 -> 4 -> 8 -> 16 -> 32 -> 64 -> 128 -> 256 -> 512 -> 1024.
+        // Growth pattern: 1 -> 2 -> 4 -> 8 -> 16 -> 32 -> 64 -> 128 -> 256 -> 512 -> 1024 -> cap.
         // Each growth cycle requires filling up to cardinality slots.
         // Total swaps needed: 1 + 2 + 4 + 8 + 16 + 32 + 64 + 128 + 256 + 512 = 1023 plus some margin.
 
@@ -653,10 +653,8 @@ contract OracleDeepTest is Test {
         assertLe(meanTick, 1000, "Mean tick should remain bounded after fast-block warmup");
     }
 
-    /// @notice At one-observation-per-second cadence the capped buffer cannot retain a 30-minute TWAP window.
-    /// The hook keeps writing fresh observations and reports the retained window so consumers can quote best-effort
-    /// instead of using a stale newest observation.
-    function test_TWAPRetention_CapReportsBestEffortCoverageAtOneSecondCadence() public {
+    /// @notice At one-observation-per-second cadence the capped buffer still retains a 30-minute TWAP window.
+    function test_TWAPRetention_CapCoversThirtyMinutesAtOneSecondCadence() public {
         uint256 ts = 10_000;
         uint32 twapPeriod = hook.TWAP_PERIOD();
         uint256 swapCount = twapPeriod + 250;
@@ -674,15 +672,14 @@ contract OracleDeepTest is Test {
         uint16 oldestIndex = (index + 1) % cardinality;
         (uint32 oldestTimestamp,,,) = hook.observations(id, oldestIndex);
         uint32 targetTimestamp = uint32(block.timestamp) - twapPeriod;
-        assertGt(
+        assertLe(
             oldestTimestamp,
             targetTimestamp,
-            "The oldest retained observation should be newer than the TWAP target at one-second cadence"
+            "The oldest retained observation should cover the TWAP target at one-second cadence"
         );
-        assertFalse(hook.hasObservationCoverage(key, twapPeriod), "The requested TWAP window should be under-covered");
+        assertTrue(hook.hasObservationCoverage(key, twapPeriod), "The requested TWAP window should be covered");
         uint32 oldestSecondsAgo = hook.observationCoverageOf(key);
-        assertGt(oldestSecondsAgo, 0, "Coverage should report a usable best-effort window");
-        assertLt(oldestSecondsAgo, twapPeriod, "Coverage should report under-covered history");
+        assertGe(oldestSecondsAgo, twapPeriod, "Coverage should report full TWAP history");
 
         uint256 estimate = hook.estimateUniswapOutput(id, key, 1 ether, true);
         assertGt(estimate, 0, "Estimation should use best-effort retained history");

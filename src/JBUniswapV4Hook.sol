@@ -124,9 +124,9 @@ contract JBUniswapV4Hook is BaseHook {
     address public constant JB_NATIVE_TOKEN = address(0x000000000000000000000000000000000000EEEe);
 
     /// @notice Maximum retained observation cardinality for a pool oracle.
-    /// @dev 1024 observations cover just over 34 minutes at 2-second block times, keeping a 30-minute TWAP
-    /// window available on fast-block L2s while staying well below the storage array's 65,535 hard limit.
-    uint16 public constant MAX_TWAP_CARDINALITY = 1024;
+    /// @dev 1801 observations retain a full 30-minute TWAP at one observation per second, including both endpoints,
+    /// while staying well below the storage array's 65,535 hard limit.
+    uint16 public constant MAX_TWAP_CARDINALITY = 1801;
 
     /// @notice Largest output amount that Uniswap V4 can represent in flash-accounting deltas.
     /// @dev PoolManager settles against signed `int128` deltas, so larger JB outputs must fall back to V4.

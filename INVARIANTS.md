@@ -56,7 +56,7 @@ JB-token detection requires the project to have a **registered ERC-20** (`JBToke
 - `_beforeSwap` route comparison uses **TWAP-derived** V4 quotes (`_getTWAPSqrtPrice` over `TWAP_PERIOD = 30 minutes`) when sufficient observation history exists, not raw spot price. (`JBUniswapV4Hook.sol:140, 985-1031`)
 - When observation history is insufficient (`cardinality < 2` or oldest observation < 30min old), the V4 route-*comparison* quote (`estimateUniswapOutput`) falls back to current spot. This is documented and bounded; a tagged `amountOutMin`, when supplied, provides the absolute execution floor. The hook derives no settlement floor of its own from the TWAP. (`JBUniswapV4Hook.sol:990-1014, 410-432`)
 - Once TWAP is expected to be available, observation-read failures cause the swap to revert rather than silently degrade to spot pricing. Fail-closed on mature oracles. (`JBUniswapV4Hook.sol:1017-1019`)
-- The cap-aware observation guard refuses to overwrite a freshly-stored observation when the new second-oldest entry is younger than `TWAP_PERIOD`, preserving the 30-minute window even under sustained sub-2s block cadence (~1024 slots / 1s would otherwise erase the window in ~17 minutes). (`JBUniswapV4Hook.sol:1114-1133`)
+- `MAX_TWAP_CARDINALITY = 1801` preserves a full 30-minute window at the oracle's maximum one-observation-per-second write cadence, including both endpoints. If a pool still has partial coverage during warmup, consumers can detect that with `hasObservationCoverage(...)` / `observationCoverageOf(...)`, and the hook quotes against the longest retained best-effort window. (`JBUniswapV4Hook.sol:124-136, 1218-1248`)
 - Swap-fee normalization happens **before** the price-ratio conversion inside `estimateUniswapOutput`, mirroring V4 swap math so the estimator's rounding matches actual execution rounding (avoids off-by-one drift at typical fee tiers for small inputs). (`JBUniswapV4Hook.sol:418-445`)
 - The TWAP arithmetic-mean tick is rounded toward negative infinity for negative tick deltas (Uniswap V3 convention), avoiding silent truncation bias on bearish moves. (`JBUniswapV4Hook.sol:1080-1087`)
 
@@ -77,7 +77,7 @@ There are no operator powers on this hook. After deployment:
 - **No owner.** No `Ownable`, no `_DEPLOYER`, no governance role.
 - **No pause.** Swaps cannot be paused, blocked, or fee-switched on hooked pools.
 - **No upgrade.** Hook bytecode is fixed; recovery from a bug requires a new hook deployment + pool migration.
-- **No retunable parameters.** `TWAP_PERIOD = 1800`, `MAX_TWAP_CARDINALITY = 1024`, `TWAP_SLIPPAGE_DENOMINATOR = 10000`, `JB_HOOK_DATA_TAG`, `MAX_V4_DELTA = type(int128).max`, `JB_NATIVE_TOKEN`, `UNISWAP_NATIVE_ETH` are all `public constant`. (`JBUniswapV4Hook.sol:124-146`)
+- **No retunable parameters.** `TWAP_PERIOD = 1800`, `MAX_TWAP_CARDINALITY = 1801`, `TWAP_SLIPPAGE_DENOMINATOR = 10000`, `JB_HOOK_DATA_TAG`, `MAX_V4_DELTA = type(int128).max`, `JB_NATIVE_TOKEN`, `UNISWAP_NATIVE_ETH` are all `public constant`. (`JBUniswapV4Hook.sol:124-146`)
 - **No registry / mapping.** Pool-to-routing settings, allowlists, blocklists — none exist. The hook applies uniformly to every pool that initializes against it.
 - **No setChainSpecificConstants.** Unlike `JBBuybackHook` / `JBRouterTerminal`, this hook has no one-shot deployer-only setter. All chain wiring is in the constructor.
 
@@ -187,7 +187,7 @@ There is no `setChainSpecificConstants` one-shot binder pattern on this contract
 
 8. **Sell-input conservation.** On sell-side ERC-20 routes, the hook's input-token balance before and after the terminal call must match exactly. Partial-fill terminals cannot strand project tokens on the hook.
 
-9. **MAX_TWAP_CARDINALITY-bounded oracle work.** Ring buffer capped at 1024 slots. Auto-grows on demand; once at cap, only one fresh write per block (same-block no-op) and a guard avoids overwriting an observation younger than `TWAP_PERIOD` to preserve the 30-minute window under sub-2s block cadence. (`JBUniswapV4Hook.sol:1114-1133`)
+9. **MAX_TWAP_CARDINALITY-bounded oracle work.** Ring buffer capped at 1801 slots. Auto-grows on demand; once at cap, only one fresh write per second is retained (same-second writes are no-ops in the oracle library). The cap is large enough to preserve the 30-minute window at one observation per second. (`JBUniswapV4Hook.sol:124-136, 1164-1248`)
 
 10. **TWAP-then-spot fallback chain.** `estimateUniswapOutput` prefers TWAP when `cardinality >= 2` AND oldest observation `>= TWAP_PERIOD` old; otherwise it falls back to slot0 spot. `amountOutMin` is the absolute floor in either mode.
 
