@@ -454,6 +454,24 @@ contract JBUniswapV4Hook is BaseHook {
         });
     }
 
+    /// @notice Whether the oracle has stored observations covering `secondsAgo` for `key`.
+    /// @dev Consumers should require this before trusting `observe([secondsAgo, 0])` as a manipulation-resistant TWAP.
+    /// @param key The pool key.
+    /// @param secondsAgo The requested lookback window.
+    /// @return True if the oldest retained observation is at least `secondsAgo` old.
+    function hasObservationCoverage(PoolKey calldata key, uint32 secondsAgo) external view returns (bool) {
+        return _hasObservationCoverage({poolId: key.toId(), secondsAgo: secondsAgo});
+    }
+
+    /// @notice The oldest retained observation age for `key`.
+    /// @dev Consumers can use this to quote against the longest retained best-effort window when the preferred window
+    /// is not fully covered.
+    /// @param key The pool key.
+    /// @return oldestSecondsAgo The age of the oldest retained initialized observation, or 0 if unavailable.
+    function observationCoverageOf(PoolKey calldata key) external view returns (uint32 oldestSecondsAgo) {
+        return _observationCoverageOf({poolId: key.toId()});
+    }
+
     /// @notice Returns cumulative tick and liquidity-time data for specified lookback periods.
     /// @dev Implements the IGeomeanOracle interface so external contracts (e.g. buyback hooks) can query this pool's
     /// TWAP without maintaining their own oracle.
@@ -483,24 +501,6 @@ contract JBUniswapV4Hook is BaseHook {
             liquidity: liquidity,
             cardinality: state.cardinality
         });
-    }
-
-    /// @notice Whether the oracle has stored observations covering `secondsAgo` for `key`.
-    /// @dev Consumers should require this before trusting `observe([secondsAgo, 0])` as a manipulation-resistant TWAP.
-    /// @param key The pool key.
-    /// @param secondsAgo The requested lookback window.
-    /// @return True if the oldest retained observation is at least `secondsAgo` old.
-    function hasObservationCoverage(PoolKey calldata key, uint32 secondsAgo) external view returns (bool) {
-        return _hasObservationCoverage({poolId: key.toId(), secondsAgo: secondsAgo});
-    }
-
-    /// @notice The oldest retained observation age for `key`.
-    /// @dev Consumers can use this to quote against the longest retained best-effort window when the preferred window
-    /// is not fully covered.
-    /// @param key The pool key.
-    /// @return oldestSecondsAgo The age of the oldest retained initialized observation, or 0 if unavailable.
-    function observationCoverageOf(PoolKey calldata key) external view returns (uint32 oldestSecondsAgo) {
-        return _observationCoverageOf({poolId: key.toId()});
     }
 
     /// @notice Observe the time-weighted average price (TWAP) tick over the specified lookback window for a pool.
