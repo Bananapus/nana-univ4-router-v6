@@ -1164,13 +1164,14 @@ contract JBUniswapV4Hook is BaseHook {
     /// (up to MAX_TWAP_CARDINALITY) when the buffer is full so the TWAP window can grow over time.
     /// @param poolId The pool ID
     function _recordObservation(PoolId poolId) internal {
+        ObservationState memory state = states[poolId];
+        if (state.cardinality == 0) return;
+
         // Get current pool state
         // getSlot0 returns: sqrtPriceX96, tick, protocolFee, lpFee (no liquidity)
         (, int24 tick,,) = poolManager.getSlot0(poolId);
         // Get current liquidity from the dedicated accessor
         uint128 liquidity = poolManager.getLiquidity(poolId);
-
-        ObservationState memory state = states[poolId];
 
         // Auto-grow cardinality when at capacity to enable TWAP functionality
         // Grow when we're about to wrap around (index == cardinality - 1) and cardinality == cardinalityNext
