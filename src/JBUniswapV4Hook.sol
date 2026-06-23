@@ -485,6 +485,15 @@ contract JBUniswapV4Hook is BaseHook {
         });
     }
 
+    /// @notice Whether the oracle has stored observations covering `secondsAgo` for `key`.
+    /// @dev Consumers should require this before trusting `observe([secondsAgo, 0])` as a manipulation-resistant TWAP.
+    /// @param key The pool key.
+    /// @param secondsAgo The requested lookback window.
+    /// @return True if the oldest retained observation is at least `secondsAgo` old.
+    function hasObservationCoverage(PoolKey calldata key, uint32 secondsAgo) external view returns (bool) {
+        return _hasObservationCoverage({poolId: key.toId(), secondsAgo: secondsAgo});
+    }
+
     /// @notice Observe the time-weighted average price (TWAP) tick over the specified lookback window for a pool.
     /// @dev External-facing wrapper around `_observeTWAP` for contracts that need the time-weighted average tick.
     /// @param poolId The pool ID
@@ -640,6 +649,11 @@ contract JBUniswapV4Hook is BaseHook {
         override
         returns (bytes4, BeforeSwapDelta, uint24)
     {
+        // Close the previous time interval before any swap can move the price. Writing post-swap would attribute the
+        // entire elapsed interval since the previous observation to the new tick.
+        PoolId poolId = key.toId();
+        _recordObservation(poolId);
+
         // Prevent recursive routing: if we're already routing through Juicebox, block reentrant swaps.
         if (_routing) revert JBUniswapV4Hook_ReentrantRouting(msg.sender);
 
@@ -649,7 +663,6 @@ contract JBUniswapV4Hook is BaseHook {
         // never reverted for omitting JB's encoding, and a JB-routed leg falls back to the routing floor derived below
         // (`routeMinimum`). The minimum is not re-interpreted as a hook-imposed floor here.
         (, uint256 amountOutMin) = _amountOutMinFrom(hookData);
-        PoolId poolId = key.toId();
 
         // Only support exact-input swaps (amountSpecified < 0)
         // Exact-output swaps (amountSpecified > 0) are not supported as they require
@@ -990,21 +1003,8 @@ contract JBUniswapV4Hook is BaseHook {
         // Get current liquidity from the dedicated accessor
         uint128 liquidity = poolManager.getLiquidity(poolId);
 
-        uint32 currentTime = uint32(block.timestamp);
-
-        // Calculate the target time (TWAP_PERIOD seconds ago)
-        uint32 oldestAllowedTime = currentTime > TWAP_PERIOD ? currentTime - TWAP_PERIOD : 0;
-
-        // Get oldest observation timestamp
-        Oracle.Observation memory oldestObs = observations[poolId][(state.index + 1) % state.cardinality];
-        if (!oldestObs.initialized) {
-            oldestObs = observations[poolId][0];
-        }
-
-        // If we don't have observations old enough, return 0
-        if (oldestObs.blockTimestamp > oldestAllowedTime) {
-            return 0;
-        }
+        // If we don't have observations old enough, return 0.
+        if (!_hasObservationCoverage({poolId: poolId, secondsAgo: TWAP_PERIOD})) return 0;
 
         // Observe the TWAP
         // _observeTWAP() is called without try-catch. If the oracle observation fails (e.g.,
@@ -1172,27 +1172,6 @@ contract JBUniswapV4Hook is BaseHook {
 
         ObservationState memory state = states[poolId];
 
-        // Preserve the 30-minute TWAP window when the buffer is at the configured cap. A fresh
-        // write would overwrite the current oldest slot, promoting the second-oldest into the new
-        // oldest position — so the window stays intact only when that second-oldest is at least
-        // TWAP_PERIOD old at the moment of the write. Without this guard, sustained sub-2s swap
-        // cadence (1024 slots / 1s) erases the entire window in under 17 minutes and forces
-        // `observeTWAP` into the predates-oldest revert, collapsing routing back to spot pricing
-        // exactly when TWAP protection matters most.
-        if (state.cardinality == MAX_TWAP_CARDINALITY) {
-            uint16 newOldestIndex;
-            unchecked {
-                newOldestIndex = (state.index + 2) % state.cardinality;
-            }
-            Oracle.Observation memory newOldest = observations[poolId][newOldestIndex];
-            // Only enforce the guard once that slot has been written for real — newly grown slots
-            // carry a sentinel `blockTimestamp = 1` and `initialized = false` until first written.
-            // forge-lint: disable-next-line(block-timestamp)
-            if (newOldest.initialized && uint32(block.timestamp) - newOldest.blockTimestamp < TWAP_PERIOD) {
-                return;
-            }
-        }
-
         // Auto-grow cardinality when at capacity to enable TWAP functionality
         // Grow when we're about to wrap around (index == cardinality - 1) and cardinality == cardinalityNext
         uint16 newCardinalityNext = state.cardinalityNext;
@@ -1219,6 +1198,25 @@ contract JBUniswapV4Hook is BaseHook {
         states[poolId] = ObservationState({
             index: indexUpdated, cardinality: cardinalityUpdated, cardinalityNext: newCardinalityNext
         });
+    }
+
+    /// @notice Whether the retained oracle ring buffer covers a requested lookback.
+    /// @param poolId The pool ID.
+    /// @param secondsAgo The requested lookback window.
+    /// @return True if an observation at least `secondsAgo` old is retained.
+    function _hasObservationCoverage(PoolId poolId, uint32 secondsAgo) internal view returns (bool) {
+        ObservationState memory state = states[poolId];
+        if (state.cardinality == 0) return false;
+        if (secondsAgo == 0) return true;
+        if (state.cardinality < 2) return false;
+
+        Oracle.Observation memory oldest = observations[poolId][(state.index + 1) % state.cardinality];
+        if (!oldest.initialized) oldest = observations[poolId][0];
+        if (!oldest.initialized) return false;
+
+        unchecked {
+            return uint32(block.timestamp) - oldest.blockTimestamp >= secondsAgo;
+        }
     }
 
     /// @notice Revert if `spender` still has any temporary ERC-20 allowance from this hook.
