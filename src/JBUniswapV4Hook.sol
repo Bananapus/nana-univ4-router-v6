@@ -921,36 +921,58 @@ contract JBUniswapV4Hook is BaseHook {
         view
         returns (bool)
     {
+        // Start with the gross reclaim because this is the terminal-token amount `recordCashOutFor` must pay
+        // directly from the selected terminal during execution.
         uint256 settlementDemand = reclaimAmount;
 
+        // Cash-out hook specifications can reserve additional terminal-token amounts. These amounts are also paid
+        // from the selected terminal, so they must be included in the local balance demand.
         for (uint256 i; i < hookSpecifications.length;) {
+            // Cache the hook amount so the overflow check and the addition use the same specification value.
             uint256 amount = hookSpecifications[i].amount;
+
+            // If adding this hook amount would overflow, the demand cannot be represented safely. Treat the preview
+            // as locally unfulfillable instead of risking an understated settlement requirement.
             if (amount > type(uint256).max - settlementDemand) return false;
+
+            // Add this hook's terminal-token draw to the amount the selected terminal must be able to settle.
             settlementDemand += amount;
 
             unchecked {
+                // The loop bound guarantees `i` cannot overflow before termination, so skip checked-add gas here.
                 ++i;
             }
         }
 
+        // Ask the selected terminal for the accounting context of the exact reclaimed token. `currentSurplusOf`
+        // needs this context so the returned surplus is denominated in the same units as `settlementDemand`.
         try terminal.accountingContextForTokenOf({projectId: projectId, token: outputToken}) returns (
             JBAccountingContext memory context
         ) {
+            // If the terminal does not report a context for the exact output token, its surplus result cannot prove
+            // that this token's local balance can settle the cash-out.
             if (context.token != outputToken) return false;
 
+            // `currentSurplusOf` accepts a token list. Query only `outputToken` so the result is this terminal's
+            // local surplus for the reclaimed token, not a broader project-level or multi-token value.
             address[] memory tokens = new address[](1);
             tokens[0] = outputToken;
 
+            // Read the selected terminal's local surplus using the token's own accounting context. If this call
+            // reverts, the hook cannot prove local settlement and should leave the JB sell route ineligible.
             try terminal.currentSurplusOf({
                 projectId: projectId, tokens: tokens, decimals: context.decimals, currency: context.currency
             }) returns (
                 uint256 localSurplus
             ) {
+                // The preview is safe to compete with V4 only if execution demand fits inside local surplus.
                 return settlementDemand <= localSurplus;
             } catch {
+                // A terminal that cannot report local surplus cannot prove that the selected cash-out route settles.
                 return false;
             }
         } catch {
+            // A terminal that cannot report accounting context cannot produce a trustworthy local-surplus check.
             return false;
         }
     }
