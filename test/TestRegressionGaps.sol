@@ -27,6 +27,7 @@ import {JBRulesetMetadata} from "@bananapus/core-v6/src/structs/JBRulesetMetadat
 import {JBRulesetMetadataResolver} from "@bananapus/core-v6/src/libraries/JBRulesetMetadataResolver.sol";
 import {IJBRulesetApprovalHook} from "@bananapus/core-v6/src/interfaces/IJBRulesetApprovalHook.sol";
 import {IJBTerminalStore} from "@bananapus/core-v6/src/interfaces/IJBTerminalStore.sol";
+import {JBAccountingContext} from "@bananapus/core-v6/src/structs/JBAccountingContext.sol";
 import {JBCashOutHookSpecification} from "@bananapus/core-v6/src/structs/JBCashOutHookSpecification.sol";
 import {JBPayHookSpecification} from "@bananapus/core-v6/src/structs/JBPayHookSpecification.sol";
 import {HookMiner} from "@uniswap/v4-periphery/src/utils/HookMiner.sol";
@@ -168,6 +169,8 @@ contract MockJBMultiTerminal_RegressionGaps {
     MockJBTerminalStore_RegressionGaps public TERMINAL_STORE;
     uint256 public overridePayReturnAmount;
     bool public useOverridePayReturn;
+    mapping(uint256 => mapping(address => uint256)) internal _localSurplusOf;
+    mapping(uint256 => mapping(address => bool)) internal _useLocalSurplusOverride;
 
     // forge-lint: disable-next-line(mixed-case-function)
     function FEE() external pure returns (uint256) {
@@ -190,6 +193,11 @@ contract MockJBMultiTerminal_RegressionGaps {
     function setPayReturnAmount(uint256 amount) external {
         overridePayReturnAmount = amount;
         useOverridePayReturn = true;
+    }
+
+    function setLocalSurplus(uint256 projectId, address token, uint256 surplus) external {
+        _localSurplusOf[projectId][token] = surplus;
+        _useLocalSurplusOverride[projectId][token] = true;
     }
 
     function previewPayFor(
@@ -281,6 +289,27 @@ contract MockJBMultiTerminal_RegressionGaps {
         }
 
         return outputAmount;
+    }
+
+    function accountingContextForTokenOf(uint256, address token) external pure returns (JBAccountingContext memory) {
+        // forge-lint: disable-next-line(unsafe-typecast)
+        return JBAccountingContext({token: token, decimals: 18, currency: uint32(uint160(token))});
+    }
+
+    function currentSurplusOf(
+        uint256 projectId,
+        address[] calldata tokens,
+        uint256,
+        uint256
+    )
+        external
+        view
+        returns (uint256)
+    {
+        address token = tokens.length == 0 ? address(0) : tokens[0];
+        if (_useLocalSurplusOverride[projectId][token]) return _localSurplusOf[projectId][token];
+
+        return type(uint128).max;
     }
 
     function previewCashOutFrom(

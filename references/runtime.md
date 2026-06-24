@@ -9,7 +9,7 @@
 
 1. A V4 swap involving a Juicebox project token enters the hook.
 2. The hook estimates the V4 path and the Juicebox-native path from terminal-reported preview amounts.
-3. It chooses the better route or falls back to V4 when Juicebox-side estimation fails, when the buy-side terminal cannot be previewed live, when the sell-side preview surface is unavailable, or when the best JB quote cannot fit Uniswap V4's signed delta accounting.
+3. It chooses the better route or falls back to V4 when Juicebox-side estimation fails, when the buy-side terminal cannot be previewed live, when the sell-side preview surface is unavailable or not locally settleable by the selected terminal, or when the best JB quote cannot fit Uniswap V4's signed delta accounting.
 4. After relevant pool actions, it records observations for future TWAP queries.
 
 ## High-risk areas

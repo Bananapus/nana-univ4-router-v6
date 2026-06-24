@@ -33,7 +33,7 @@ JB-token detection requires the project to have a **registered ERC-20** (`JBToke
 - For Juicebox-routed sells, the internal `routeMinimum` is raised to the previewed reclaim (`juiceboxExpectedOutput`) so the terminal cannot under-fill its own preview and still win the route. (`JBUniswapV4Hook.sol:819-825`)
 - For Juicebox-routed buys, `routeMinimum` is raised to `uniswapV4ExpectedTokens + 1`, enforcing the strict "better than V4" floor on actual settlement. (`JBUniswapV4Hook.sol:826-831`)
 - Final settlement is measured by **balance delta on the hook's side**, not the terminal's return value. Fee-on-transfer output tokens and over-reporting terminals cannot silently degrade realized output below `amountOutMin`. (`JBUniswapV4Hook.sol:1265-1298`)
-- If the Juicebox preview surface reverts or is unavailable, the JB quote degrades to `0` and the swap continues on V4 (conservative degrade rule). (`JBUniswapV4Hook.sol:281-286, 751-754`)
+- If the Juicebox preview surface reverts, is unavailable, or a sell preview cannot be locally settled by the selected terminal, the JB quote degrades to `0` and the swap continues on V4 (conservative degrade rule). (`JBUniswapV4Hook.sol:281-286, 751-754`)
 - Buyback-hook metadata-only preview hints are **deliberately ignored** by live routing; only terminal-direct `previewPayFor` / `previewCashOutFrom` amounts count. Prevents same-pool indirect routing via composed hooks.
 - Quotes that exceed Uniswap V4's signed-delta capacity (`MAX_V4_DELTA = type(int128).max`) are treated as ineligible so the swap falls back to V4 instead of reverting during settlement. (`JBUniswapV4Hook.sol:135-137, 792-794`)
 
@@ -117,7 +117,7 @@ V4 `BaseHook`. Holds no persistent project funds — only transient swap-in-flig
 
 **Public views (anyone):**
 
-- **`calculateExpectedOutputFromSelling(projectId, tokenAmountIn, outputToken, terminal) view → uint256`** — Quotes a JB cash-out using `terminal.previewCashOutFrom`. Computes exact zero-tax net via `_exactZeroTaxNet`; for positive tax, subtracts `JBFees.standardFeeAmountFrom(gross)`. Returns `0` on any catch (conservative degrade). (`JBUniswapV4Hook.sol:239-287`)
+- **`calculateExpectedOutputFromSelling(projectId, tokenAmountIn, outputToken, terminal) view → uint256`** — Quotes a JB cash-out using `terminal.previewCashOutFrom`. Requires the selected terminal to locally settle the gross reclaim plus cash-out hook amounts before the sell quote is eligible. Computes exact zero-tax net via `_exactZeroTaxNet`; for positive tax, subtracts `JBFees.standardFeeAmountFrom(gross)`. Returns `0` on any catch (conservative degrade). (`JBUniswapV4Hook.sol:239-287`)
 
 - **`calculateExpectedTokensWithCurrency(projectId, paymentToken, paymentAmount) view → uint256`** — Reference helper using **static ruleset weight** (not preview). Intentionally more permissive than live routing. Live `_beforeSwap` does not use this for buy decisions. Returns `0` on controller revert, price-feed revert, or `decimals > 77`. (`JBUniswapV4Hook.sol:298-378`)
 
@@ -208,7 +208,7 @@ There is no `setChainSpecificConstants` one-shot binder pattern on this contract
 This repo holds **no privileged role** of its own. All implied centralization flows through dependencies whose authority is documented in the top-level `INVARIANTS.md`:
 
 - **PoolManager (`IPoolManager`).** Uniswap V4 PoolManager is the sole authorized caller of every hook callback. A compromised PoolManager could fabricate `_beforeSwap` / `_afterSwap` calls; this is the trust posture of every V4 hook.
-- **Juicebox Directory / Controllers / Terminals.** The hook trusts `DIRECTORY.primaryTerminalOf(...)` for terminal lookup and `terminal.previewPayFor(...)` / `previewCashOutFrom(...)` for live previews. A misconfigured controller or a malicious data hook can return arbitrary preview values; the hook's defenses are (a) conservative degrade to `0` on revert, (b) `amountOutMin` enforced against actual settlement balance delta, (c) sell-input conservation, (d) temporary-allowance consumption check.
+- **Juicebox Directory / Controllers / Terminals.** The hook trusts `DIRECTORY.primaryTerminalOf(...)` for terminal lookup and `terminal.previewPayFor(...)` / `previewCashOutFrom(...)` for live previews. A misconfigured controller or a malicious data hook can return arbitrary preview values; the hook's defenses are (a) conservative degrade to `0` on revert, (b) sell-preview local-surplus gating before route selection, (c) `amountOutMin` enforced against actual settlement balance delta, (d) sell-input conservation, (e) temporary-allowance consumption check.
 - **`JBPrices`.** USD-denominated currency conversion in `calculateExpectedTokensWithCurrency` consults `PRICES.pricePerUnitOf(...)`. A compromised price feed only affects the **reference helper** — live `_beforeSwap` buy decisions use `previewPayFor`, which already accounts for the project's configured feed inside the terminal.
 - **`JBTokens`.** `TOKENS.projectIdOf(...)` and `TOKENS.tokenOf(...)` decide which swaps engage JB routing at all. A maliciously registered project token would only force more swaps into JB route-comparison; the comparison still floors at `amountOutMin`.
 - **Pool creator's hook choice.** Whoever initializes a V4 pool with this hook permanently binds the pool to this routing logic. There is no admin override.

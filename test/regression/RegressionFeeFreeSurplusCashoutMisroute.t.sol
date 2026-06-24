@@ -5,6 +5,7 @@ import {TickMath} from "@uniswap/v4-core/src/libraries/TickMath.sol";
 import {SwapParams, ModifyLiquidityParams} from "@uniswap/v4-core/src/types/PoolOperation.sol";
 
 import {IJBRulesetApprovalHook} from "@bananapus/core-v6/src/interfaces/IJBRulesetApprovalHook.sol";
+import {JBAccountingContext} from "@bananapus/core-v6/src/structs/JBAccountingContext.sol";
 import {JBCashOutHookSpecification} from "@bananapus/core-v6/src/structs/JBCashOutHookSpecification.sol";
 import {JBPayHookSpecification} from "@bananapus/core-v6/src/structs/JBPayHookSpecification.sol";
 import {JBRuleset} from "@bananapus/core-v6/src/structs/JBRuleset.sol";
@@ -139,6 +140,15 @@ contract FeeFreeSurplusLikeTerminal {
         }
         MockERC20(tokenToReclaim).mint(beneficiary, actualReclaim);
         return actualReclaim;
+    }
+
+    function accountingContextForTokenOf(uint256, address token) external pure returns (JBAccountingContext memory) {
+        // forge-lint: disable-next-line(unsafe-typecast)
+        return JBAccountingContext({token: token, decimals: 18, currency: uint32(uint160(token))});
+    }
+
+    function currentSurplusOf(uint256, address[] calldata, uint256, uint256) external view returns (uint256) {
+        return previewReclaim;
     }
 }
 

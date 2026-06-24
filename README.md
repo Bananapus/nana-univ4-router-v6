@@ -102,6 +102,8 @@ script/
 - buy-side routing trusts `previewPayFor(...)` for live route decisions when a terminal is available
 - sell-side routing is only for registered project ERC-20s; hook-held internal credits are claimed into the ERC-20
   before the hook checks exact-input settlement
+- sell-side cash-out previews must be locally settleable by the selected terminal; aggregate project surplus alone does
+  not make the JB route eligible
 - buyback-hook metadata is not used as a route-scoring source for buy or sell paths
 - the hook falls back when Juicebox-side estimation fails, so liveness and perfect observability are traded against each other
 - if no usable observation history exists, spot-price fallback is intentionally allowed but materially weaker than a mature TWAP

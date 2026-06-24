@@ -36,7 +36,9 @@ This file focuses on the routing, oracle, and composition risks in `JBUniswapV4H
 - **Slippage protection is tag-gated.** A minimum is enforced only when `hookData` begins with `JB_HOOK_DATA_TAG` followed by a 32-byte `amountOutMin` (an explicit zero is a deliberate opt-out). Any other payload — empty, or a generic router's own metadata — carries no minimum: its first word is never mis-decoded as one, so neither a large word (DoS) nor a small word (silent skip) is possible. The hook imposes no floor of its own; an untagged swap proceeds under the caller's own protection (its router min-out or `sqrtPriceLimitX96`).
 - **V4 estimates are approximate.** Large trades can diverge materially from the linearized V4 quote.
 - **Buy-side estimates depend on preview availability.** If the terminal cannot provide a usable preview, the hook intentionally makes the Juicebox buy path ineligible.
-- **Sell-side estimates are conservative.** If `previewCashOutFrom(...)` is unavailable or reverts, the hook intentionally declines JB sell routing instead of reviving older static reclaim math.
+- **Sell-side estimates are conservative.** If `previewCashOutFrom(...)` is unavailable or reverts, or if the selected
+  terminal cannot locally settle the previewed gross reclaim plus cash-out hook amounts, the hook intentionally declines
+  JB sell routing instead of reviving older static reclaim math.
 - **Sell-side routing is ERC-20 only, with credit normalization.** The hook only routes sell-side Juicebox cash-outs for
   registered project ERC-20s. Before measuring its exact-input ERC-20 balance, it claims any internal project-token
   credits it already holds into that ERC-20 so core's credit-first burn ordering cannot leave the user's routed input

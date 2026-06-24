@@ -15,6 +15,7 @@ import {JBConstants} from "@bananapus/core-v6/src/libraries/JBConstants.sol";
 import {JBFees} from "@bananapus/core-v6/src/libraries/JBFees.sol";
 import {JBRulesetMetadataResolver} from "@bananapus/core-v6/src/libraries/JBRulesetMetadataResolver.sol";
 
+import {JBAccountingContext} from "@bananapus/core-v6/src/structs/JBAccountingContext.sol";
 import {JBCashOutHookSpecification} from "@bananapus/core-v6/src/structs/JBCashOutHookSpecification.sol";
 import {JBPayHookSpecification} from "@bananapus/core-v6/src/structs/JBPayHookSpecification.sol";
 import {JBRuleset} from "@bananapus/core-v6/src/structs/JBRuleset.sol";
@@ -271,9 +272,25 @@ contract JBUniswapV4Hook is BaseHook {
             beneficiary: payable(address(this)),
             metadata: bytes("")
         }) returns (
-            JBRuleset memory, uint256 grossReclaim, uint256 cashOutTaxRate, JBCashOutHookSpecification[] memory
+            JBRuleset memory,
+            uint256 grossReclaim,
+            uint256 cashOutTaxRate,
+            JBCashOutHookSpecification[] memory hookSpecifications
         ) {
             if (grossReclaim == 0) {
+                return 0;
+            }
+
+            // Core previews price cash-outs against aggregate project surplus, but execution must subtract the gross
+            // reclaim plus any cash-out hook amounts from the selected terminal's local balance. If that local
+            // settlement check cannot pass, leave this sell leg ineligible so the swap can use V4 instead.
+            if (!_cashOutCanSettleLocally({
+                    terminal: terminal,
+                    projectId: projectId,
+                    outputToken: outputToken,
+                    reclaimAmount: grossReclaim,
+                    hookSpecifications: hookSpecifications
+                })) {
                 return 0;
             }
 
@@ -881,6 +898,60 @@ contract JBUniswapV4Hook is BaseHook {
     function _amountOutMinFrom(bytes calldata hookData) internal pure returns (bool present, uint256 amountOutMin) {
         if (hookData.length >= 36 && bytes4(hookData[:4]) == JB_HOOK_DATA_TAG) {
             return (true, uint256(bytes32(hookData[4:36])));
+        }
+    }
+
+    /// @notice Checks whether the selected terminal can locally settle a cash-out preview.
+    /// @dev `previewCashOutFrom` can price against aggregate project surplus, but `recordCashOutFor` subtracts
+    /// `reclaimAmount + hookSpecification amounts` from this terminal's local balance.
+    /// @param terminal The terminal that would execute the cash-out.
+    /// @param projectId The Juicebox project ID.
+    /// @param outputToken The terminal token being reclaimed, normalized to Juicebox's token representation.
+    /// @param reclaimAmount The gross reclaim amount returned by `previewCashOutFrom`.
+    /// @param hookSpecifications Cash-out hook specifications returned by `previewCashOutFrom`.
+    /// @return True if the terminal reports enough local surplus to settle the preview.
+    function _cashOutCanSettleLocally(
+        IJBTerminal terminal,
+        uint256 projectId,
+        address outputToken,
+        uint256 reclaimAmount,
+        JBCashOutHookSpecification[] memory hookSpecifications
+    )
+        internal
+        view
+        returns (bool)
+    {
+        uint256 settlementDemand = reclaimAmount;
+
+        for (uint256 i; i < hookSpecifications.length;) {
+            uint256 amount = hookSpecifications[i].amount;
+            if (amount > type(uint256).max - settlementDemand) return false;
+            settlementDemand += amount;
+
+            unchecked {
+                ++i;
+            }
+        }
+
+        try terminal.accountingContextForTokenOf({projectId: projectId, token: outputToken}) returns (
+            JBAccountingContext memory context
+        ) {
+            if (context.token != outputToken) return false;
+
+            address[] memory tokens = new address[](1);
+            tokens[0] = outputToken;
+
+            try terminal.currentSurplusOf({
+                projectId: projectId, tokens: tokens, decimals: context.decimals, currency: context.currency
+            }) returns (
+                uint256 localSurplus
+            ) {
+                return settlementDemand <= localSurplus;
+            } catch {
+                return false;
+            }
+        } catch {
+            return false;
         }
     }
 
