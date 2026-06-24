@@ -23,7 +23,9 @@ The hook intercepts swaps involving a Juicebox project token and can route throu
 - minting through the Juicebox terminal on buys
 - cashing out through the Juicebox terminal on sells
 
-It also maintains per-pool observation history that other contracts can query through an `observe()`-compatible interface for TWAP-style calculations. Consumers can check `hasObservationCoverage(...)` or `observationCoverageOf(...)` before deciding whether the retained history is strong enough for their route.
+It also maintains per-pool observation history that other contracts can query through the canonical `IGeomeanOracle` interface for TWAP-style calculations. Consumers can check `hasObservationCoverage(...)` or `observationCoverageOf(...)` before deciding whether the retained history is strong enough for their route.
+
+Downstream packages should import `src/interfaces/IGeomeanOracle.sol` from this package instead of redeclaring local copies.
 
 Use this repo when swap routing should be aware of Juicebox-native issuance and redemption. Do not use it as a generic Uniswap utility package.
 
@@ -40,6 +42,7 @@ It is infrastructure, but infrastructure with direct economic consequences.
 
 | Contract | Role |
 | --- | --- |
+| `IGeomeanOracle` | Canonical external oracle interface implemented by `JBUniswapV4Hook`. |
 | `JBUniswapV4Hook` | Main Uniswap V4 hook that performs routing decisions and records oracle observations. |
 | `Oracle` | Observation-ring library used for TWAP accounting and lookup. |
 
@@ -47,7 +50,8 @@ It is infrastructure, but infrastructure with direct economic consequences.
 
 1. `src/JBUniswapV4Hook.sol`
 2. `src/libraries/Oracle.sol`
-3. `nana-buyback-hook-v6/src/JBBuybackHook.sol` if you are reviewing the composed buyback path
+3. `src/interfaces/IGeomeanOracle.sol`
+4. `nana-buyback-hook-v6/src/JBBuybackHook.sol` if you are reviewing the composed buyback path
 
 ## Integration traps
 
@@ -63,6 +67,7 @@ It is infrastructure, but infrastructure with direct economic consequences.
 
 - routing and swap decision logic live in `JBUniswapV4Hook`
 - observation history and TWAP support live in `Oracle`
+- the canonical downstream oracle interface lives in `IGeomeanOracle`
 - composed buyback selection state lives outside this repo in `nana-buyback-hook-v6`
 
 ## Install
@@ -88,6 +93,8 @@ This repo is commonly paired with the buyback hook and the UniV4 LP split hook. 
 ```text
 src/
   JBUniswapV4Hook.sol
+  interfaces/
+    IGeomeanOracle.sol
   libraries/
 test/
   routing, oracle, fork, invariant, review, and regression coverage

@@ -1,13 +1,14 @@
 # Invariants of `@bananapus/univ4-router-v6`
 
-Last updated: 2026-05-28.
+Last updated: 2026-06-24.
 
 Scope: the Uniswap V4 hook surface that serves Juicebox-aware routing and oracle observation history for project-token pools. This document is scoped to one repo — the canonical top-level invariants live in [`../INVARIANTS.md`](../INVARIANTS.md). See also: [`ARCHITECTURE.md`](./ARCHITECTURE.md), [`ADMINISTRATION.md`](./ADMINISTRATION.md), [`RISKS.md`](./RISKS.md), [`USER_JOURNEYS.md`](./USER_JOURNEYS.md), [`SKILLS.md`](./SKILLS.md), [`STYLE_GUIDE.md`](./STYLE_GUIDE.md), [`AUDIT_INSTRUCTIONS.md`](./AUDIT_INSTRUCTIONS.md), [`CHANGELOG.md`](./CHANGELOG.md).
 
 | Contract | Lines | Role |
 |----------|-------|------|
-| `JBUniswapV4Hook` | 1325 | V4 `BaseHook` that intercepts swaps involving a Juicebox project token, compares V4 quote vs JB terminal pay/cashout quote, routes whichever wins, and records oracle observations. |
-| `libraries/Oracle` | 402 | Circular-buffer observation library (Uniswap V3-derived) backing `observe()` / TWAP lookups. |
+| `IGeomeanOracle` | 33 | Canonical downstream interface for pool-local TWAP reads implemented by `JBUniswapV4Hook`. |
+| `JBUniswapV4Hook` | 1506 | V4 `BaseHook` that intercepts swaps involving a Juicebox project token, compares V4 quote vs JB terminal pay/cashout quote, routes whichever wins, and records oracle observations. |
+| `libraries/Oracle` | 415 | Circular-buffer observation library (Uniswap V3-derived) backing `observe()` / TWAP lookups. |
 
 `JBUniswapV4Hook` is adminless after deployment: there is no owner, governance, pause, upgrade, or one-shot deployer setter. Constructor wiring (`poolManager`, `tokens`, `directory`, `prices`) is the entire control model. Pools opt in permanently by initializing with this hook address.
 
@@ -88,7 +89,7 @@ There are no operator powers on this hook. After deployment:
 
 ## B.3 Powers integrators trust the hook for
 
-- **IGeomeanOracle-compatible `observe()`.** Downstream consumers (notably `JBBuybackHook`) read TWAP via `observe(key, secondsAgos[])` and `observeTWAP(...)`. Both are `view` and never mutate state. (`JBUniswapV4Hook.sol:498-552`)
+- **Canonical `IGeomeanOracle` implementation.** Downstream consumers (notably `JBBuybackHook`) import `src/interfaces/IGeomeanOracle.sol` from this package and read TWAP via `observe(key, secondsAgos[])`. Coverage helpers `hasObservationCoverage(...)` and `observationCoverageOf(...)` let consumers distinguish mature windows from best-effort warmup. These views never mutate state. (`IGeomeanOracle.sol`, `JBUniswapV4Hook.sol:480-526`)
 - **Observation recording on liquidity events and swaps.** `_afterInitialize`, `_afterAddLiquidity`, `_afterRemoveLiquidity`, `_afterSwap` each call `_recordObservation` exactly once per call (idempotent within a block — `Oracle.write` is a no-op when `blockTimestamp` matches the last observation). (`JBUniswapV4Hook.sol:472-489, 562-661`)
 - **Hook permission bits match implementation.** `getHookPermissions()` exposes the exact callbacks the hook implements; mismatched address-encoded permission bits would cause Uniswap V4 to silently skip callbacks. (`JBUniswapV4Hook.sol:472-489`)
 
@@ -102,7 +103,7 @@ V4 `BaseHook`. Holds no persistent project funds — only transient swap-in-flig
 
 **PoolManager-only callbacks (the only state-mutating external surface):**
 
-- **`_beforeSwap(_, key, params, hookData) → (selector, BeforeSwapDelta, uint24)`** — PoolManager only. Reads the explicit `amountOutMin` from `hookData[:32]` when present (`0` when absent), rejects exact-output, identifies JB project tokens via `_projectIdForRegisteredToken`, queries both terminals' previews, compares against `estimateUniswapOutput`, routes the winning side.
+- **`_beforeSwap(_, key, params, hookData) → (selector, BeforeSwapDelta, uint24)`** — PoolManager only. Reads an explicit `amountOutMin` only when `hookData` begins with `JB_HOOK_DATA_TAG ++ abi.encode(amountOutMin)` (`0` when absent), rejects exact-output, identifies JB project tokens via `_projectIdForRegisteredToken`, queries both terminals' previews, compares against `estimateUniswapOutput`, routes the winning side.
   - **Invariants:** Recursive routing reverts (`_routing` flag); exact-output rejected; quotes above `MAX_V4_DELTA` ineligible; JB-routed buys must beat V4 strictly (`> uniswapV4ExpectedTokens`); JB-routed sells must deliver `>= juiceboxExpectedOutput`. (`JBUniswapV4Hook.sol:672-851`)
 
 - **`_afterSwap(_, key, params, delta, hookData) → (selector, int128)`** — PoolManager only. For V4-routed swaps (where `_beforeSwap` returned `ZERO_DELTA`), validates the actual output delta against a tagged `amountOutMin` (`_amountOutMinFrom`) when present. Records a fresh oracle observation.
@@ -122,6 +123,10 @@ V4 `BaseHook`. Holds no persistent project funds — only transient swap-in-flig
 - **`calculateExpectedTokensWithCurrency(projectId, paymentToken, paymentAmount) view → uint256`** — Reference helper using **static ruleset weight** (not preview). Intentionally more permissive than live routing. Live `_beforeSwap` does not use this for buy decisions. Returns `0` on controller revert, price-feed revert, or `decimals > 77`. (`JBUniswapV4Hook.sol:298-378`)
 
 - **`estimateUniswapOutput(poolId, key, amountIn, zeroForOne) view → uint256`** — TWAP-quote estimator. Falls back to spot when `_getTWAPSqrtPrice == 0`. Applies combined protocol+LP swap fee BEFORE the price-ratio conversion to mirror V4 swap math. Linear (no liquidity-depth simulation). (`JBUniswapV4Hook.sol:397-467`)
+
+- **`hasObservationCoverage(key, secondsAgo) view → bool`** — Canonical `IGeomeanOracle` coverage check. Returns whether retained observations cover the requested lookback window. (`JBUniswapV4Hook.sol:480-482`)
+
+- **`observationCoverageOf(key) view → uint32`** — Canonical `IGeomeanOracle` warmup helper. Returns the age of the oldest retained initialized observation, or `0` if unavailable. (`JBUniswapV4Hook.sol:489-491`)
 
 - **`observe(key, secondsAgos[]) view → (int56[], uint160[])`** — IGeomeanOracle-compatible. Reads slot0 + liquidity from PoolManager, delegates to `Oracle.observe`. (`JBUniswapV4Hook.sol:498-520`)
 
@@ -157,7 +162,15 @@ Library, no external surface. Used only by `JBUniswapV4Hook`.
 - Initialization sentinel (`blockTimestamp = 1`, `initialized = false`) on freshly-grown slots is distinguishable from any real `block.timestamp` value (which is always `> 1` on real chains), so the cap-aware guard in `_recordObservation` does not misfire on uninitialized slots.
 - `observe` for `secondsAgo == 0` returns the current cumulative values (no binary search) — used internally by `_observeTWAP` to batch the (now, now-T) pair into a single call.
 
-## C.3 Constructor wiring (`JBUniswapV4Hook` only)
+## C.3 `IGeomeanOracle` — `src/interfaces/IGeomeanOracle.sol`
+
+Interface only, no storage or behavior. Consumer packages should import this interface from `@bananapus/univ4-router-v6` instead of redeclaring local copies.
+
+- **`hasObservationCoverage(key, secondsAgo) view → bool`** — checks whether the retained observation history covers the requested lookback.
+- **`observationCoverageOf(key) view → uint32`** — reports the oldest retained observation age for best-effort fallback decisions.
+- **`observe(key, secondsAgos[]) view → (int56[], uint160[])`** — exposes cumulative tick and liquidity-time data for downstream TWAP calculations.
+
+## C.4 Constructor wiring (`JBUniswapV4Hook` only)
 
 `constructor(IPoolManager poolManager, IJBTokens tokens, IJBDirectory directory, IJBPrices prices)`:
 

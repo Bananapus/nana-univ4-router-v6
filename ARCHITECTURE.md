@@ -6,7 +6,7 @@
 
 ## System overview
 
-`JBUniswapV4Hook` is the runtime hook that inspects swaps, estimates both market and protocol routes, and can override settlement when the protocol path is better. `Oracle` maintains the observation ring buffer used for TWAP lookup and interpolation. The deployment is intentionally immutable after construction.
+`JBUniswapV4Hook` is the runtime hook that inspects swaps, estimates both market and protocol routes, and can override settlement when the protocol path is better. It implements `IGeomeanOracle`, the canonical downstream interface for pool-local TWAP reads. `Oracle` maintains the observation ring buffer used for TWAP lookup and interpolation. The deployment is intentionally immutable after construction.
 
 ## Core invariants
 
@@ -20,6 +20,7 @@
 
 | Module | Responsibility | Notes |
 | --- | --- | --- |
+| `IGeomeanOracle` | External oracle-read interface for downstream packages | Import from this package instead of redeclaring |
 | `JBUniswapV4Hook` | Routing-aware Uniswap V4 hook and settlement override logic | Immutable runtime core |
 | `Oracle` | Observation ring buffer and TWAP interpolation | Quote-critical |
 
@@ -27,7 +28,7 @@
 
 - Juicebox still owns minting and cash-out execution when the protocol path is selected.
 - Pool state and hook entrypoints come from Uniswap V4.
-- Downstream integrations such as `nana-buyback-hook-v6` depend on this repo's oracle and routing semantics.
+- Downstream integrations such as `nana-buyback-hook-v6` depend on this repo's oracle and routing semantics through `IGeomeanOracle`.
 
 ## Critical flows
 
@@ -76,6 +77,7 @@ Its route comparison is intentionally asymmetric: helper surfaces can be more pe
 ## Source map
 
 - `src/JBUniswapV4Hook.sol`
+- `src/interfaces/IGeomeanOracle.sol`
 - `src/libraries/Oracle.sol`
 - `test/OracleDeepTest.t.sol`
 - `test/regression/PreviewPayForRouting.t.sol`
