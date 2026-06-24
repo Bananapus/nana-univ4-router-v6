@@ -27,6 +27,7 @@ import {JBRulesetMetadata} from "@bananapus/core-v6/src/structs/JBRulesetMetadat
 import {JBRulesetMetadataResolver} from "@bananapus/core-v6/src/libraries/JBRulesetMetadataResolver.sol";
 import {IJBRulesetApprovalHook} from "@bananapus/core-v6/src/interfaces/IJBRulesetApprovalHook.sol";
 import {IJBTerminalStore} from "@bananapus/core-v6/src/interfaces/IJBTerminalStore.sol";
+import {JBAccountingContext} from "@bananapus/core-v6/src/structs/JBAccountingContext.sol";
 import {JBCashOutHookSpecification} from "@bananapus/core-v6/src/structs/JBCashOutHookSpecification.sol";
 import {JBPayHookSpecification} from "@bananapus/core-v6/src/structs/JBPayHookSpecification.sol";
 import {HookMiner} from "@uniswap/v4-periphery/src/utils/HookMiner.sol";
@@ -168,6 +169,8 @@ contract MockJBMultiTerminal_RegressionGaps {
     MockJBTerminalStore_RegressionGaps public TERMINAL_STORE;
     uint256 public overridePayReturnAmount;
     bool public useOverridePayReturn;
+    mapping(uint256 => mapping(address => uint256)) internal _localSurplusOf;
+    mapping(uint256 => mapping(address => bool)) internal _useLocalSurplusOverride;
 
     // forge-lint: disable-next-line(mixed-case-function)
     function FEE() external pure returns (uint256) {
@@ -190,6 +193,11 @@ contract MockJBMultiTerminal_RegressionGaps {
     function setPayReturnAmount(uint256 amount) external {
         overridePayReturnAmount = amount;
         useOverridePayReturn = true;
+    }
+
+    function setLocalSurplus(uint256 projectId, address token, uint256 surplus) external {
+        _localSurplusOf[projectId][token] = surplus;
+        _useLocalSurplusOverride[projectId][token] = true;
     }
 
     function previewPayFor(
@@ -281,6 +289,27 @@ contract MockJBMultiTerminal_RegressionGaps {
         }
 
         return outputAmount;
+    }
+
+    function accountingContextForTokenOf(uint256, address token) external pure returns (JBAccountingContext memory) {
+        // forge-lint: disable-next-line(unsafe-typecast)
+        return JBAccountingContext({token: token, decimals: 18, currency: uint32(uint160(token))});
+    }
+
+    function currentSurplusOf(
+        uint256 projectId,
+        address[] calldata tokens,
+        uint256,
+        uint256
+    )
+        external
+        view
+        returns (uint256)
+    {
+        address token = tokens.length == 0 ? address(0) : tokens[0];
+        if (_useLocalSurplusOverride[projectId][token]) return _localSurplusOf[projectId][token];
+
+        return type(uint128).max;
     }
 
     function previewCashOutFrom(
@@ -888,73 +917,70 @@ contract TestRegressionGaps_SpotFallbackSandwichWindow is Test {
     }
 
     // ---------------------------------------------------------------
-    // Test: Spot fallback is active when oracle has insufficient history
+    // Test: Spot fallback is active before the oracle has retained history
     // ---------------------------------------------------------------
 
-    /// @notice Right after pool initialization, the oracle has cardinality=1, which
-    ///         means _getTWAPSqrtPrice returns 0 and estimateUniswapOutput uses spot price.
-    ///         This is the vulnerable window.
+    /// @notice Right after pool initialization, the oracle has cardinality=1, which means
+    ///         estimateUniswapOutput uses spot price. Once a second observation exists,
+    ///         estimates use the retained best-effort window even before TWAP_PERIOD is covered.
     function test_SpotFallback_ActiveDuringWarmup() public {
         // Immediately after setUp, cardinality is 1 (init + same-block addLiq is no-op write)
         (, uint16 card,) = hook.states(id);
         assertEq(card, 1, "Cardinality should be 1 right after init (warmup period)");
 
-        // The estimate should still work (using spot fallback)
+        // The estimate should still work (using spot fallback).
         uint256 estimate = hook.estimateUniswapOutput(id, key, 1 ether, true);
-        assertGt(estimate, 0, "Estimate should use spot price fallback during warmup");
+        assertGt(estimate, 0, "Estimate should use spot price fallback before retained history exists");
         console.log("[warmup] Spot-based estimate for 1 ETH:", estimate);
 
-        // Now do a swap in a new block to get cardinality >= 2 but oldest obs is still too recent
+        // Now do a swap in a new block to get cardinality >= 2, with less than TWAP_PERIOD retained.
         vm.warp(100_012);
         _doSwap(true, -0.001 ether);
 
         (, uint16 card2,) = hook.states(id);
         assertGe(card2, 2, "Cardinality should be >= 2 after swap in new block");
 
-        // But the oldest observation is only 12 seconds old, TWAP_PERIOD is 1800.
-        // _getTWAPSqrtPrice checks: oldestObs.blockTimestamp > oldestAllowedTime
-        // oldestAllowedTime = 100012 - 1800 = 98212, oldest obs = 100000 > 98212 => returns 0 => spot fallback
-        uint256 estimateStillSpot = hook.estimateUniswapOutput(id, key, 1 ether, true);
-        assertGt(estimateStillSpot, 0, "Should still use spot fallback when history < TWAP_PERIOD");
-        console.log("[warmup+12s] Still spot-based estimate:", estimateStillSpot);
+        // The retained window is only 12 seconds, so the full TWAP window is not covered.
+        assertEq(hook.observationCoverageOf(key), 12, "Retained oracle history should be 12 seconds");
+        assertFalse(hook.hasObservationCoverage(key, hook.TWAP_PERIOD()), "Full TWAP window should not be covered yet");
+
+        uint256 estimateBestEffort = hook.estimateUniswapOutput(id, key, 1 ether, true);
+        assertGt(estimateBestEffort, 0, "Should use best-effort retained history before full TWAP coverage");
+        console.log("[warmup+12s] Best-effort estimate:", estimateBestEffort);
     }
 
     // ---------------------------------------------------------------
-    // Test: Spot price can be pushed by a large swap during warmup
+    // Test: Retained history ignores a same-block spot push after observation write
     // ---------------------------------------------------------------
 
-    /// @notice During the warmup period, a large swap shifts the spot price, and
-    ///         the next call to estimateUniswapOutput reflects this shifted price
-    ///         immediately (no TWAP dampening).
-    function test_SpotFallback_PriceIsManipulable() public {
-        // Record the baseline spot-based estimate
+    /// @notice After a second observation is written before a large swap, the next quote uses
+    ///         retained history and does not immediately reflect the post-swap spot price.
+    function test_BestEffortWindow_IgnoresCurrentBlockPricePushAfterSecondObservation() public {
+        // Record the baseline cold-start estimate.
         uint256 baselineEstimate = hook.estimateUniswapOutput(id, key, 1 ether, true);
-        console.log("[sandwich] Baseline spot estimate:", baselineEstimate);
+        console.log("[sandwich] Baseline estimate:", baselineEstimate);
 
-        // Advance one block and do a large swap to push the price
+        // Advance one block and do a large swap to push the spot price. The hook writes
+        // an observation before the swap, so this quote should use the pre-push retained window.
         vm.warp(100_012);
         _doSwap(true, -50 ether);
 
-        // The spot price has now been pushed. Check the estimate.
-        uint256 manipulatedEstimate = hook.estimateUniswapOutput(id, key, 1 ether, true);
-        console.log("[sandwich] Manipulated spot estimate:", manipulatedEstimate);
+        assertEq(hook.observationCoverageOf(key), 12, "Retained oracle history should be 12 seconds");
+        assertFalse(hook.hasObservationCoverage(key, hook.TWAP_PERIOD()), "Full TWAP window should not be covered yet");
 
-        // The estimates should differ significantly because spot price moved.
-        // For a zeroForOne=true estimate (token0 -> token1), pushing the price
-        // in the zeroForOne direction decreases sqrtPrice, which decreases the
-        // estimated output for zeroForOne=true swaps.
+        uint256 postPushEstimate = hook.estimateUniswapOutput(id, key, 1 ether, true);
+        console.log("[sandwich] Post-push best-effort estimate:", postPushEstimate);
+
         uint256 deviation;
-        if (manipulatedEstimate > baselineEstimate) {
-            deviation = manipulatedEstimate - baselineEstimate;
+        if (postPushEstimate > baselineEstimate) {
+            deviation = postPushEstimate - baselineEstimate;
         } else {
-            deviation = baselineEstimate - manipulatedEstimate;
+            deviation = baselineEstimate - postPushEstimate;
         }
         uint256 deviationBps = (deviation * 10_000) / baselineEstimate;
-        console.log("[sandwich] Spot deviation (bps):", deviationBps);
+        console.log("[sandwich] Best-effort deviation (bps):", deviationBps);
 
-        // The spot price should have deviated significantly (more than 1%)
-        // documenting the vulnerability during warmup.
-        assertGt(deviationBps, 100, "Spot price should deviate >1% from a 50 ETH push during warmup");
+        assertLe(deviationBps, 100, "Best-effort quote should not move >1% from same-block spot push");
     }
 
     // ---------------------------------------------------------------
@@ -1009,12 +1035,12 @@ contract TestRegressionGaps_SpotFallbackSandwichWindow is Test {
     }
 
     // ---------------------------------------------------------------
-    // Test: The exact warmup window duration is TWAP_PERIOD seconds
+    // Test: The exact transition from best-effort to full TWAP_PERIOD coverage
     // ---------------------------------------------------------------
 
-    /// @notice The warmup window ends exactly when the oldest observation is older
-    ///         than TWAP_PERIOD. This test verifies the boundary: at TWAP_PERIOD - 1
-    ///         seconds, spot fallback is still used; at TWAP_PERIOD seconds, TWAP activates.
+    /// @notice Full-window coverage begins exactly when the oldest observation is at least
+    ///         TWAP_PERIOD seconds old. Before that point, estimates still use the retained
+    ///         best-effort window instead of falling back to spot.
     function test_SpotFallback_WarmupBoundary() public {
         // Build cardinality >= 2
         vm.warp(100_012);
@@ -1023,23 +1049,24 @@ contract TestRegressionGaps_SpotFallbackSandwichWindow is Test {
         (, uint16 card,) = hook.states(id);
         assertGe(card, 2, "Need cardinality >= 2");
 
-        // The oldest observation was written at 100_000 (pool init).
-        // TWAP activates when: block.timestamp - TWAP_PERIOD >= oldest obs timestamp
-        // i.e., block.timestamp >= 100_000 + 1800 = 101_800.
+        // The oldest observation was written at 100_000 (pool init). Full TWAP_PERIOD
+        // coverage begins when block.timestamp >= 100_000 + 1800 = 101_800.
 
-        // At 101_799 (just before boundary), TWAP should still not be available.
-        // oldestAllowedTime = 101799 - 1800 = 99999. Oldest obs = 100000 > 99999 => spot fallback.
+        // At 101_799 (just before boundary), retained history is one second short of TWAP_PERIOD.
         vm.warp(101_799);
         _doSwap(false, -0.001 ether); // Record an observation at the boundary
 
+        assertEq(hook.observationCoverageOf(key), 1799, "Retained history should be one second short");
+        assertFalse(hook.hasObservationCoverage(key, hook.TWAP_PERIOD()), "Full TWAP window should not be covered yet");
         uint256 estimateBeforeBoundary = hook.estimateUniswapOutput(id, key, 1 ether, true);
         assertGt(estimateBeforeBoundary, 0, "Should work at boundary-1");
 
-        // At 101_800 (exact boundary), TWAP should activate.
-        // oldestAllowedTime = 101800 - 1800 = 100000. Oldest obs = 100000 <= 100000 => TWAP active.
+        // At 101_800 (exact boundary), full TWAP_PERIOD coverage is available.
         vm.warp(101_800);
         _doSwap(true, -0.001 ether);
 
+        assertEq(hook.observationCoverageOf(key), hook.TWAP_PERIOD(), "Retained history should cover TWAP_PERIOD");
+        assertTrue(hook.hasObservationCoverage(key, hook.TWAP_PERIOD()), "Full TWAP window should be covered");
         uint256 estimateAtBoundary = hook.estimateUniswapOutput(id, key, 1 ether, true);
         assertGt(estimateAtBoundary, 0, "Should work at exact boundary");
 

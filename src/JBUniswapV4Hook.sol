@@ -15,6 +15,7 @@ import {JBConstants} from "@bananapus/core-v6/src/libraries/JBConstants.sol";
 import {JBFees} from "@bananapus/core-v6/src/libraries/JBFees.sol";
 import {JBRulesetMetadataResolver} from "@bananapus/core-v6/src/libraries/JBRulesetMetadataResolver.sol";
 
+import {JBAccountingContext} from "@bananapus/core-v6/src/structs/JBAccountingContext.sol";
 import {JBCashOutHookSpecification} from "@bananapus/core-v6/src/structs/JBCashOutHookSpecification.sol";
 import {JBPayHookSpecification} from "@bananapus/core-v6/src/structs/JBPayHookSpecification.sol";
 import {JBRuleset} from "@bananapus/core-v6/src/structs/JBRuleset.sol";
@@ -124,9 +125,9 @@ contract JBUniswapV4Hook is BaseHook {
     address public constant JB_NATIVE_TOKEN = address(0x000000000000000000000000000000000000EEEe);
 
     /// @notice Maximum retained observation cardinality for a pool oracle.
-    /// @dev 1024 observations cover just over 34 minutes at 2-second block times, keeping a 30-minute TWAP
-    /// window available on fast-block L2s while staying well below the storage array's 65,535 hard limit.
-    uint16 public constant MAX_TWAP_CARDINALITY = 1024;
+    /// @dev 1801 observations retain a full 30-minute TWAP at one observation per second, including both endpoints,
+    /// while staying well below the storage array's 65,535 hard limit.
+    uint16 public constant MAX_TWAP_CARDINALITY = 1801;
 
     /// @notice Largest output amount that Uniswap V4 can represent in flash-accounting deltas.
     /// @dev PoolManager settles against signed `int128` deltas, so larger JB outputs must fall back to V4.
@@ -271,9 +272,25 @@ contract JBUniswapV4Hook is BaseHook {
             beneficiary: payable(address(this)),
             metadata: bytes("")
         }) returns (
-            JBRuleset memory, uint256 grossReclaim, uint256 cashOutTaxRate, JBCashOutHookSpecification[] memory
+            JBRuleset memory,
+            uint256 grossReclaim,
+            uint256 cashOutTaxRate,
+            JBCashOutHookSpecification[] memory hookSpecifications
         ) {
             if (grossReclaim == 0) {
+                return 0;
+            }
+
+            // Core previews price cash-outs against aggregate project surplus, but execution must subtract the gross
+            // reclaim plus any cash-out hook amounts from the selected terminal's local balance. If that local
+            // settlement check cannot pass, leave this sell leg ineligible so the swap can use V4 instead.
+            if (!_cashOutCanSettleLocally({
+                    terminal: terminal,
+                    projectId: projectId,
+                    outputToken: outputToken,
+                    reclaimAmount: grossReclaim,
+                    hookSpecifications: hookSpecifications
+                })) {
                 return 0;
             }
 
@@ -390,7 +407,7 @@ contract JBUniswapV4Hook is BaseHook {
     }
 
     /// @notice Estimates how many output tokens a swap through the Uniswap V4 pool would produce, based on the
-    /// 30-minute TWAP price (or spot price if insufficient oracle history).
+    /// 30-minute TWAP price, the longest retained best-effort TWAP, or spot price if no oracle history is available.
     /// @dev Uses time-weighted average price to prevent manipulation
     /// @dev Price impact warning: This estimate does not account for price impact from liquidity depth. The TWAP
     /// price is applied uniformly to the entire `amountIn` regardless of available liquidity at the current tick
@@ -452,6 +469,24 @@ contract JBUniswapV4Hook is BaseHook {
             afterAddLiquidityReturnDelta: false,
             afterRemoveLiquidityReturnDelta: false
         });
+    }
+
+    /// @notice Whether the oracle has stored observations covering `secondsAgo` for `key`.
+    /// @dev Consumers should require this before trusting `observe([secondsAgo, 0])` as a manipulation-resistant TWAP.
+    /// @param key The pool key.
+    /// @param secondsAgo The requested lookback window.
+    /// @return True if the oldest retained observation is at least `secondsAgo` old.
+    function hasObservationCoverage(PoolKey calldata key, uint32 secondsAgo) external view returns (bool) {
+        return _hasObservationCoverage({poolId: key.toId(), secondsAgo: secondsAgo});
+    }
+
+    /// @notice The oldest retained observation age for `key`.
+    /// @dev Consumers can use this to quote against the longest retained best-effort window when the preferred window
+    /// is not fully covered.
+    /// @param key The pool key.
+    /// @return oldestSecondsAgo The age of the oldest retained initialized observation, or 0 if unavailable.
+    function observationCoverageOf(PoolKey calldata key) external view returns (uint32 oldestSecondsAgo) {
+        return _observationCoverageOf({poolId: key.toId()});
     }
 
     /// @notice Returns cumulative tick and liquidity-time data for specified lookback periods.
@@ -640,6 +675,11 @@ contract JBUniswapV4Hook is BaseHook {
         override
         returns (bytes4, BeforeSwapDelta, uint24)
     {
+        // Close the previous time interval before any swap can move the price. Writing post-swap would attribute the
+        // entire elapsed interval since the previous observation to the new tick.
+        PoolId poolId = key.toId();
+        _recordObservation(poolId);
+
         // Prevent recursive routing: if we're already routing through Juicebox, block reentrant swaps.
         if (_routing) revert JBUniswapV4Hook_ReentrantRouting(msg.sender);
 
@@ -649,7 +689,6 @@ contract JBUniswapV4Hook is BaseHook {
         // never reverted for omitting JB's encoding, and a JB-routed leg falls back to the routing floor derived below
         // (`routeMinimum`). The minimum is not re-interpreted as a hook-imposed floor here.
         (, uint256 amountOutMin) = _amountOutMinFrom(hookData);
-        PoolId poolId = key.toId();
 
         // Only support exact-input swaps (amountSpecified < 0)
         // Exact-output swaps (amountSpecified > 0) are not supported as they require
@@ -862,6 +901,82 @@ contract JBUniswapV4Hook is BaseHook {
         }
     }
 
+    /// @notice Checks whether the selected terminal can locally settle a cash-out preview.
+    /// @dev `previewCashOutFrom` can price against aggregate project surplus, but `recordCashOutFor` subtracts
+    /// `reclaimAmount + hookSpecification amounts` from this terminal's local balance.
+    /// @param terminal The terminal that would execute the cash-out.
+    /// @param projectId The Juicebox project ID.
+    /// @param outputToken The terminal token being reclaimed, normalized to Juicebox's token representation.
+    /// @param reclaimAmount The gross reclaim amount returned by `previewCashOutFrom`.
+    /// @param hookSpecifications Cash-out hook specifications returned by `previewCashOutFrom`.
+    /// @return True if the terminal reports enough local surplus to settle the preview.
+    function _cashOutCanSettleLocally(
+        IJBTerminal terminal,
+        uint256 projectId,
+        address outputToken,
+        uint256 reclaimAmount,
+        JBCashOutHookSpecification[] memory hookSpecifications
+    )
+        internal
+        view
+        returns (bool)
+    {
+        // Start with the gross reclaim because this is the terminal-token amount `recordCashOutFor` must pay
+        // directly from the selected terminal during execution.
+        uint256 settlementDemand = reclaimAmount;
+
+        // Cash-out hook specifications can reserve additional terminal-token amounts. These amounts are also paid
+        // from the selected terminal, so they must be included in the local balance demand.
+        for (uint256 i; i < hookSpecifications.length;) {
+            // Cache the hook amount so the overflow check and the addition use the same specification value.
+            uint256 amount = hookSpecifications[i].amount;
+
+            // If adding this hook amount would overflow, the demand cannot be represented safely. Treat the preview
+            // as locally unfulfillable instead of risking an understated settlement requirement.
+            if (amount > type(uint256).max - settlementDemand) return false;
+
+            // Add this hook's terminal-token draw to the amount the selected terminal must be able to settle.
+            settlementDemand += amount;
+
+            unchecked {
+                // The loop bound guarantees `i` cannot overflow before termination, so skip checked-add gas here.
+                ++i;
+            }
+        }
+
+        // Ask the selected terminal for the accounting context of the exact reclaimed token. `currentSurplusOf`
+        // needs this context so the returned surplus is denominated in the same units as `settlementDemand`.
+        try terminal.accountingContextForTokenOf({projectId: projectId, token: outputToken}) returns (
+            JBAccountingContext memory context
+        ) {
+            // If the terminal does not report a context for the exact output token, its surplus result cannot prove
+            // that this token's local balance can settle the cash-out.
+            if (context.token != outputToken) return false;
+
+            // `currentSurplusOf` accepts a token list. Query only `outputToken` so the result is this terminal's
+            // local surplus for the reclaimed token, not a broader project-level or multi-token value.
+            address[] memory tokens = new address[](1);
+            tokens[0] = outputToken;
+
+            // Read the selected terminal's local surplus using the token's own accounting context. If this call
+            // reverts, the hook cannot prove local settlement and should leave the JB sell route ineligible.
+            try terminal.currentSurplusOf({
+                projectId: projectId, tokens: tokens, decimals: context.decimals, currency: context.currency
+            }) returns (
+                uint256 localSurplus
+            ) {
+                // The preview is safe to compete with V4 only if execution demand fits inside local surplus.
+                return settlementDemand <= localSurplus;
+            } catch {
+                // A terminal that cannot report local surplus cannot prove that the selected cash-out route settles.
+                return false;
+            }
+        } catch {
+            // A terminal that cannot report accounting context cannot produce a trustworthy local-surplus check.
+            return false;
+        }
+    }
+
     /// @notice Converts this hook's internal project-token credits into the registered ERC-20 before a sell route.
     /// @dev Core burns holder credits before ERC-20 balances. Normalizing first keeps the sell-side input-balance
     /// invariant scoped to transferable tokens already visible to Uniswap V4.
@@ -971,8 +1086,8 @@ contract JBUniswapV4Hook is BaseHook {
         }
     }
 
-    /// @notice Computes the TWAP sqrt price over the configured lookback window. Returns 0 if the pool lacks
-    /// sufficient observation history (fewer than 2 observations or none old enough).
+    /// @notice Computes the TWAP sqrt price over the configured lookback window, or the longest retained best-effort
+    /// window. Returns 0 if the pool lacks usable observation history.
     /// @param poolId The pool ID
     /// @return sqrtPriceX96 The TWAP sqrt price, or 0 if not enough observations
     // forge-lint: disable-next-line(mixed-case-function)
@@ -990,21 +1105,9 @@ contract JBUniswapV4Hook is BaseHook {
         // Get current liquidity from the dedicated accessor
         uint128 liquidity = poolManager.getLiquidity(poolId);
 
-        uint32 currentTime = uint32(block.timestamp);
-
-        // Calculate the target time (TWAP_PERIOD seconds ago)
-        uint32 oldestAllowedTime = currentTime > TWAP_PERIOD ? currentTime - TWAP_PERIOD : 0;
-
-        // Get oldest observation timestamp
-        Oracle.Observation memory oldestObs = observations[poolId][(state.index + 1) % state.cardinality];
-        if (!oldestObs.initialized) {
-            oldestObs = observations[poolId][0];
-        }
-
-        // If we don't have observations old enough, return 0
-        if (oldestObs.blockTimestamp > oldestAllowedTime) {
-            return 0;
-        }
+        uint32 oldestSecondsAgo = _observationCoverageOf({poolId: poolId});
+        uint32 secondsAgo = oldestSecondsAgo < TWAP_PERIOD ? oldestSecondsAgo : TWAP_PERIOD;
+        if (secondsAgo == 0) return 0;
 
         // Observe the TWAP
         // _observeTWAP() is called without try-catch. If the oracle observation fails (e.g.,
@@ -1012,7 +1115,7 @@ contract JBUniswapV4Hook is BaseHook {
         // means no reliable price reference exists, and proceeding without one would expose the swap to manipulation.
         int24 arithmeticMeanTick = _observeTWAP({
             poolId: poolId,
-            secondsAgo: TWAP_PERIOD,
+            secondsAgo: secondsAgo,
             tick: tick,
             index: state.index,
             liquidity: liquidity,
@@ -1164,34 +1267,14 @@ contract JBUniswapV4Hook is BaseHook {
     /// (up to MAX_TWAP_CARDINALITY) when the buffer is full so the TWAP window can grow over time.
     /// @param poolId The pool ID
     function _recordObservation(PoolId poolId) internal {
+        ObservationState memory state = states[poolId];
+        if (state.cardinality == 0) return;
+
         // Get current pool state
         // getSlot0 returns: sqrtPriceX96, tick, protocolFee, lpFee (no liquidity)
         (, int24 tick,,) = poolManager.getSlot0(poolId);
         // Get current liquidity from the dedicated accessor
         uint128 liquidity = poolManager.getLiquidity(poolId);
-
-        ObservationState memory state = states[poolId];
-
-        // Preserve the 30-minute TWAP window when the buffer is at the configured cap. A fresh
-        // write would overwrite the current oldest slot, promoting the second-oldest into the new
-        // oldest position — so the window stays intact only when that second-oldest is at least
-        // TWAP_PERIOD old at the moment of the write. Without this guard, sustained sub-2s swap
-        // cadence (1024 slots / 1s) erases the entire window in under 17 minutes and forces
-        // `observeTWAP` into the predates-oldest revert, collapsing routing back to spot pricing
-        // exactly when TWAP protection matters most.
-        if (state.cardinality == MAX_TWAP_CARDINALITY) {
-            uint16 newOldestIndex;
-            unchecked {
-                newOldestIndex = (state.index + 2) % state.cardinality;
-            }
-            Oracle.Observation memory newOldest = observations[poolId][newOldestIndex];
-            // Only enforce the guard once that slot has been written for real — newly grown slots
-            // carry a sentinel `blockTimestamp = 1` and `initialized = false` until first written.
-            // forge-lint: disable-next-line(block-timestamp)
-            if (newOldest.initialized && uint32(block.timestamp) - newOldest.blockTimestamp < TWAP_PERIOD) {
-                return;
-            }
-        }
 
         // Auto-grow cardinality when at capacity to enable TWAP functionality
         // Grow when we're about to wrap around (index == cardinality - 1) and cardinality == cardinalityNext
@@ -1219,6 +1302,40 @@ contract JBUniswapV4Hook is BaseHook {
         states[poolId] = ObservationState({
             index: indexUpdated, cardinality: cardinalityUpdated, cardinalityNext: newCardinalityNext
         });
+    }
+
+    /// @notice Whether the retained oracle ring buffer covers a requested lookback.
+    /// @param poolId The pool ID.
+    /// @param secondsAgo The requested lookback window.
+    /// @return True if an observation at least `secondsAgo` old is retained.
+    function _hasObservationCoverage(PoolId poolId, uint32 secondsAgo) internal view returns (bool) {
+        ObservationState memory state = states[poolId];
+        if (state.cardinality == 0) return false;
+        if (secondsAgo == 0) return true;
+
+        uint32 oldestSecondsAgo = _observationCoverageOf({poolId: poolId});
+        return oldestSecondsAgo >= secondsAgo;
+    }
+
+    /// @notice The age of the oldest initialized retained observation.
+    /// @param poolId The pool ID.
+    /// @return oldestSecondsAgo The retained lookback window, or 0 if fewer than two observations are usable.
+    function _observationCoverageOf(PoolId poolId) internal view returns (uint32 oldestSecondsAgo) {
+        ObservationState memory state = states[poolId];
+        uint16 cardinality = state.cardinality;
+        if (cardinality < 2) return 0;
+
+        Oracle.Observation memory oldest = observations[poolId][(state.index + 1) % cardinality];
+        if (!oldest.initialized) oldest = observations[poolId][0];
+        if (!oldest.initialized) return 0;
+
+        uint32 currentTime = uint32(block.timestamp);
+        if (oldest.blockTimestamp >= currentTime) return 0;
+
+        unchecked {
+            // forge-lint: disable-next-line(block-timestamp)
+            oldestSecondsAgo = currentTime - oldest.blockTimestamp;
+        }
     }
 
     /// @notice Revert if `spender` still has any temporary ERC-20 allowance from this hook.

@@ -596,7 +596,7 @@ contract OracleDeepTest is Test {
     /// @notice After enough growth cycles, cardinalityNext should cap at the configured maximum.
     function test_OracleCardinality_CapsAtConfiguredMaximum() public {
         // We need to trigger auto-grow repeatedly.
-        // Growth pattern: 1 -> 2 -> 4 -> 8 -> 16 -> 32 -> 64 -> 128 -> 256 -> 512 -> 1024.
+        // Growth pattern: 1 -> 2 -> 4 -> 8 -> 16 -> 32 -> 64 -> 128 -> 256 -> 512 -> 1024 -> cap.
         // Each growth cycle requires filling up to cardinality slots.
         // Total swaps needed: 1 + 2 + 4 + 8 + 16 + 32 + 64 + 128 + 256 + 512 = 1023 plus some margin.
 
@@ -653,11 +653,8 @@ contract OracleDeepTest is Test {
         assertLe(meanTick, 1000, "Mean tick should remain bounded after fast-block warmup");
     }
 
-    /// @notice At one-observation-per-second cadence the buffer would erase the 30-minute TWAP
-    /// window in under 17 minutes (1024 slots / 1s). The hook drops writes that would promote a
-    /// too-young slot into the oldest position, so the window stays intact and the TWAP oracle
-    /// continues to answer queries instead of falling back to spot.
-    function test_TWAPRetention_CapPreservesThirtyMinuteWindowAtOneSecondCadence() public {
+    /// @notice At one-observation-per-second cadence the capped buffer still retains a 30-minute TWAP window.
+    function test_TWAPRetention_CapCoversThirtyMinutesAtOneSecondCadence() public {
         uint256 ts = 10_000;
         uint32 twapPeriod = hook.TWAP_PERIOD();
         uint256 swapCount = twapPeriod + 250;
@@ -678,17 +675,14 @@ contract OracleDeepTest is Test {
         assertLe(
             oldestTimestamp,
             targetTimestamp,
-            "The oldest retained observation covers (or predates) the TWAP target - window preserved"
+            "The oldest retained observation should cover the TWAP target at one-second cadence"
         );
+        assertTrue(hook.hasObservationCoverage(key, twapPeriod), "The requested TWAP window should be covered");
+        uint32 oldestSecondsAgo = hook.observationCoverageOf(key);
+        assertGe(oldestSecondsAgo, twapPeriod, "Coverage should report full TWAP history");
 
-        IPoolManager pm = manager;
-        (, int24 currentTick,,) = pm.getSlot0(id);
-        uint128 currentLiquidity = pm.getLiquidity(id);
-
-        // observeTWAP no longer reverts because the buffer still contains an observation at or
-        // before the 30-minute lookback target.
-        int24 meanTick = hook.observeTWAP(id, twapPeriod, currentTick, index, currentLiquidity, cardinality);
-        meanTick;
+        uint256 estimate = hook.estimateUniswapOutput(id, key, 1 ether, true);
+        assertGt(estimate, 0, "Estimation should use best-effort retained history");
     }
 
     // ---------------------------------------------------------------

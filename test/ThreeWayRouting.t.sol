@@ -325,6 +325,15 @@ contract MockJBMultiTerminal {
         return contexts;
     }
 
+    function accountingContextForTokenOf(uint256, address token) external pure returns (JBAccountingContext memory) {
+        // forge-lint: disable-next-line(unsafe-typecast)
+        return JBAccountingContext({token: token, decimals: 18, currency: uint32(uint160(token))});
+    }
+
+    function currentSurplusOf(uint256, address[] calldata, uint256, uint256) external pure returns (uint256) {
+        return type(uint128).max;
+    }
+
     function previewCashOutFrom(
         address,
         uint256 projectId,

@@ -23,7 +23,7 @@ The hook intercepts swaps involving a Juicebox project token and can route throu
 - minting through the Juicebox terminal on buys
 - cashing out through the Juicebox terminal on sells
 
-It also maintains per-pool observation history that other contracts can query through an `observe()`-compatible interface for TWAP-style calculations.
+It also maintains per-pool observation history that other contracts can query through an `observe()`-compatible interface for TWAP-style calculations. Consumers can check `hasObservationCoverage(...)` or `observationCoverageOf(...)` before deciding whether the retained history is strong enough for their route.
 
 Use this repo when swap routing should be aware of Juicebox-native issuance and redemption. Do not use it as a generic Uniswap utility package.
 
@@ -53,6 +53,7 @@ It is infrastructure, but infrastructure with direct economic consequences.
 
 - this hook can choose between market and protocol-native execution, so pool state alone does not determine the path
 - oracle maturity matters; early or thin pools weaken protection even if swaps still execute
+- downstream consumers should prefer the full intended TWAP window, but can use `observationCoverageOf(...)` to fall back to the longest retained best-effort window instead of treating every partial window as spot
 - callers that need a hard value floor should pass tagged `hookData` with an explicit `amountOutMin`; price limits and
   pool state alone are not a complete slippage policy
 - hook-data encoding is part of the trusted interface
@@ -101,9 +102,11 @@ script/
 - buy-side routing trusts `previewPayFor(...)` for live route decisions when a terminal is available
 - sell-side routing is only for registered project ERC-20s; hook-held internal credits are claimed into the ERC-20
   before the hook checks exact-input settlement
+- sell-side cash-out previews must be locally settleable by the selected terminal; aggregate project surplus alone does
+  not make the JB route eligible
 - buyback-hook metadata is not used as a route-scoring source for buy or sell paths
 - the hook falls back when Juicebox-side estimation fails, so liveness and perfect observability are traded against each other
-- spot-price fallback is intentionally allowed but materially weaker than a mature TWAP
+- if no usable observation history exists, spot-price fallback is intentionally allowed but materially weaker than a mature TWAP
 - official pools should be pre-warmed before launch if downstream hooks are expected to rely on TWAP history from the
   first user-facing route
 - `hookData` is optional and tag-gated: a minimum is enforced only when `hookData` begins with `JB_HOOK_DATA_TAG` followed by a `uint256 amountOutMin`. Any other payload — empty, or a generic integration's own metadata — carries no minimum (its first word is never mis-read as one), so the swap proceeds under the caller's own protection; the hook imposes no floor of its own

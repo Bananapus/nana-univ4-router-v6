@@ -3,6 +3,7 @@ pragma solidity 0.8.28;
 
 import {IJBTerminal} from "@bananapus/core-v6/src/interfaces/IJBTerminal.sol";
 import {IJBRulesetApprovalHook} from "@bananapus/core-v6/src/interfaces/IJBRulesetApprovalHook.sol";
+import {JBAccountingContext} from "@bananapus/core-v6/src/structs/JBAccountingContext.sol";
 import {JBCashOutHookSpecification} from "@bananapus/core-v6/src/structs/JBCashOutHookSpecification.sol";
 import {JBRuleset} from "@bananapus/core-v6/src/structs/JBRuleset.sol";
 import {SwapParams} from "@uniswap/v4-core/src/types/PoolOperation.sol";
@@ -77,6 +78,15 @@ contract ZeroTaxNoFeeCashoutTerminal {
             MockERC20(_projectToken).burn(msg.sender, cashOutCount);
         }
         MockERC20(tokenToReclaim).mint(beneficiary, _cashOutAmount);
+        return _cashOutAmount;
+    }
+
+    function accountingContextForTokenOf(uint256, address token) external pure returns (JBAccountingContext memory) {
+        // forge-lint: disable-next-line(unsafe-typecast)
+        return JBAccountingContext({token: token, decimals: 18, currency: uint32(uint160(token))});
+    }
+
+    function currentSurplusOf(uint256, address[] calldata, uint256, uint256) external view returns (uint256) {
         return _cashOutAmount;
     }
 }

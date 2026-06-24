@@ -171,6 +171,8 @@ contract MockJBMultiTerminal {
     bool public useOverridePayReturn;
     bool public useOverrideCashOutReturn;
     mapping(uint256 => JBAccountingContext[]) internal _accountingContextsOf;
+    mapping(uint256 => mapping(address => uint256)) internal _localSurplusOf;
+    mapping(uint256 => mapping(address => bool)) internal _useLocalSurplusOverride;
 
     /// @notice JB protocol fee (2.5% = 25 out of MAX_FEE 1000).
     // forge-lint: disable-next-line(mixed-case-function)
@@ -203,6 +205,11 @@ contract MockJBMultiTerminal {
     function setCashOutReturnAmount(uint256 amount) external {
         overrideCashOutReturnAmount = amount;
         useOverrideCashOutReturn = true;
+    }
+
+    function setLocalSurplus(uint256 projectId, address token, uint256 surplus) external {
+        _localSurplusOf[projectId][token] = surplus;
+        _useLocalSurplusOverride[projectId][token] = true;
     }
 
     function resetOverrides() external {
@@ -324,6 +331,39 @@ contract MockJBMultiTerminal {
 
     function accountingContextsOf(uint256 projectId) external view returns (JBAccountingContext[] memory contexts) {
         return _accountingContextsOf[projectId];
+    }
+
+    function accountingContextForTokenOf(
+        uint256 projectId,
+        address token
+    )
+        external
+        view
+        returns (JBAccountingContext memory context)
+    {
+        JBAccountingContext[] memory contexts = _accountingContextsOf[projectId];
+        for (uint256 i; i < contexts.length; i++) {
+            if (contexts[i].token == token) return contexts[i];
+        }
+
+        // forge-lint: disable-next-line(unsafe-typecast)
+        return JBAccountingContext({token: token, decimals: 18, currency: uint32(uint160(token))});
+    }
+
+    function currentSurplusOf(
+        uint256 projectId,
+        address[] calldata tokens,
+        uint256,
+        uint256
+    )
+        external
+        view
+        returns (uint256)
+    {
+        address token = tokens.length == 0 ? address(0) : tokens[0];
+        if (_useLocalSurplusOverride[projectId][token]) return _localSurplusOf[projectId][token];
+
+        return type(uint128).max;
     }
 
     function previewCashOutFrom(
@@ -2265,6 +2305,30 @@ contract JuiceboxHookTest is Test {
 
         uint256 expectedNet = 0.25 ether - (0.25 ether * 25 / 1000);
         assertEq(expectedOutput, expectedNet, "Should use previewed cash-out reclaim instead of static surplus");
+    }
+
+    /// Given a cash-out preview that is priced from aggregate project surplus
+    /// And the selected terminal cannot locally settle the previewed gross reclaim
+    /// When sell-side estimation runs
+    /// Then the JB sell leg should be ineligible so the swap can fall back to V4
+    function testCalculateExpectedOutputFromSelling_RequiresLocalTerminalSurplus() public {
+        mockJBTerminalStore.setPreviewReclaim(123, address(token1), 2 ether);
+        mockJBMultiTerminal.setLocalSurplus(123, address(token1), 1 ether);
+
+        IJBTerminal terminal = IJBTerminal(address(mockJBDirectory.primaryTerminalOf(123, address(token1))));
+        uint256 expectedOutput = hook.calculateExpectedOutputFromSelling(123, 1 ether, address(token1), terminal);
+
+        assertEq(expectedOutput, 0, "Unsettleable aggregate preview should not activate JB route");
+
+        uint256 token1Before = token1.balanceOf(address(this));
+        token0.approve(address(jbSwapRouter), 1 ether);
+
+        SwapParams memory params =
+            SwapParams({zeroForOne: true, amountSpecified: -1 ether, sqrtPriceLimitX96: TickMath.MIN_SQRT_PRICE + 1});
+        jbSwapRouter.swap(key, params, 0);
+
+        assertEq(mockJBMultiTerminal.lastProjectId(), 0, "Swap should not call terminal cash-out");
+        assertGt(token1.balanceOf(address(this)) - token1Before, 0, "Swap should still execute through V4");
     }
 
     /// Given a preview reclaim override set for a project
