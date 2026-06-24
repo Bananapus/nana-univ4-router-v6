@@ -43,6 +43,7 @@ import {PoolId, PoolIdLibrary} from "@uniswap/v4-core/src/types/PoolId.sol";
 import {SwapParams, ModifyLiquidityParams} from "@uniswap/v4-core/src/types/PoolOperation.sol";
 import {BaseHook} from "@uniswap/v4-periphery/src/utils/BaseHook.sol";
 
+import {IGeomeanOracle} from "./interfaces/IGeomeanOracle.sol";
 import {JBUniswapV4HookData} from "./libraries/JBUniswapV4HookData.sol";
 import {Oracle} from "./libraries/Oracle.sol";
 
@@ -56,7 +57,7 @@ import {Oracle} from "./libraries/Oracle.sol";
 /// trusts direct terminal preview outputs. Buyback-hook metadata is ignored because it can send users through the same
 /// pool indirectly. Static weight math remains only an offchain/reference helper, so deployers must not treat it as
 /// proof that data-hook-adjusted projects are safe for live best-execution routing.
-contract JBUniswapV4Hook is BaseHook {
+contract JBUniswapV4Hook is BaseHook, IGeomeanOracle {
     using Oracle for Oracle.Observation[65_535];
     using PoolIdLibrary for PoolKey;
     using ProtocolFeeLibrary for uint16;
@@ -476,7 +477,7 @@ contract JBUniswapV4Hook is BaseHook {
     /// @param key The pool key.
     /// @param secondsAgo The requested lookback window.
     /// @return True if the oldest retained observation is at least `secondsAgo` old.
-    function hasObservationCoverage(PoolKey calldata key, uint32 secondsAgo) external view returns (bool) {
+    function hasObservationCoverage(PoolKey calldata key, uint32 secondsAgo) external view override returns (bool) {
         return _hasObservationCoverage({poolId: key.toId(), secondsAgo: secondsAgo});
     }
 
@@ -485,7 +486,7 @@ contract JBUniswapV4Hook is BaseHook {
     /// is not fully covered.
     /// @param key The pool key.
     /// @return oldestSecondsAgo The age of the oldest retained initialized observation, or 0 if unavailable.
-    function observationCoverageOf(PoolKey calldata key) external view returns (uint32 oldestSecondsAgo) {
+    function observationCoverageOf(PoolKey calldata key) external view override returns (uint32 oldestSecondsAgo) {
         return _observationCoverageOf({poolId: key.toId()});
     }
 
@@ -502,6 +503,7 @@ contract JBUniswapV4Hook is BaseHook {
     )
         external
         view
+        override
         returns (int56[] memory tickCumulatives, uint160[] memory secondsPerLiquidityCumulativeX128s)
     {
         PoolId poolId = key.toId();

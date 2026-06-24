@@ -17,7 +17,7 @@
 - Route decision logic: buy/sell estimation changes have direct economic impact.
 - Oracle maturity: early pools may lack enough history for strong TWAP protection.
 - Fallback semantics: liveness is intentionally preserved when estimation fails.
-- Hook-data assumptions: swap callers must supply `amountOutMin` in the first 32 bytes, but may append extra metadata after that prefix.
+- Hook-data assumptions: swap callers must supply `amountOutMin` as `JB_HOOK_DATA_TAG ++ abi.encode(amountOutMin)`, and may append extra metadata after that tagged prefix.
 - Buyback-hook metadata-only hints are ignored for live route scoring; use the V4 path directly when the pool is the intended route.
 - Quote-model limits: `estimateUniswapOutput()` is a linear quote, not a full execution simulation. Large trades can still see material V4 quote drift on shallow liquidity.
 - Signed-delta capacity: even when Juicebox would return more, V4 settlement still has `int128` output limits. The hook must degrade rather than overflowing that boundary.

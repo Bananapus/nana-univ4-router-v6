@@ -12,6 +12,7 @@
 | Repo overview and intended composition | [`README.md`](./README.md), [`ARCHITECTURE.md`](./ARCHITECTURE.md) |
 | Router-hook implementation | [`src/JBUniswapV4Hook.sol`](./src/JBUniswapV4Hook.sol) |
 | Runtime and fallback assumptions | [`references/runtime.md`](./references/runtime.md), [`references/operations.md`](./references/operations.md) |
+| Canonical downstream oracle interface | [`src/interfaces/IGeomeanOracle.sol`](./src/interfaces/IGeomeanOracle.sol) |
 | Oracle internals | [`src/libraries/Oracle.sol`](./src/libraries/Oracle.sol), [`test/TestObserve.t.sol`](./test/TestObserve.t.sol), [`test/OracleDeepTest.t.sol`](./test/OracleDeepTest.t.sol) |
 | Deployment script and setup | [`script/Deploy.s.sol`](./script/Deploy.s.sol) |
 | Routing invariants and slippage behavior | [`test/Invariant.t.sol`](./test/Invariant.t.sol), [`test/SlippageTolerance.t.sol`](./test/SlippageTolerance.t.sol), [`test/ThreeWayRouting.t.sol`](./test/ThreeWayRouting.t.sol), [`test/JBUniswapV4HookFork.t.sol`](./test/JBUniswapV4HookFork.t.sol) |
@@ -22,6 +23,7 @@
 | Area | Where to look |
 |---|---|
 | Main contract | [`src/JBUniswapV4Hook.sol`](./src/JBUniswapV4Hook.sol) |
+| Interfaces | [`src/interfaces/`](./src/interfaces/) |
 | Libraries | [`src/libraries/`](./src/libraries/) |
 | Scripts | [`script/`](./script/) |
 | Tests | [`test/`](./test/) |
@@ -38,6 +40,7 @@ Uniswap V4 hook and oracle surface for Juicebox-aware swaps. This repo compares 
 ## Working rules
 
 - Start in [`src/JBUniswapV4Hook.sol`](./src/JBUniswapV4Hook.sol) for routing behavior, but verify oracle assumptions in [`src/libraries/Oracle.sol`](./src/libraries/Oracle.sol) before changing quote logic.
+- Keep downstream oracle consumers on [`src/interfaces/IGeomeanOracle.sol`](./src/interfaces/IGeomeanOracle.sol); do not add repo-local duplicates in consumer packages.
 - This hook is designed to compose with the buyback hook on the same pool. Treat composition limits and recursion guards as first-class behavior.
 - Treat exact-input assumptions, fallback-to-V4 behavior, and slippage checks as high-risk.
 - Buy-side routing trusts `previewPayFor(...)` for live decisions when it is available.

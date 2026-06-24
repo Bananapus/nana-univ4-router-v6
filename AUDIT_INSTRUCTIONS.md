@@ -19,6 +19,7 @@ Suggestions of where to look:
 In scope:
 
 - `src/JBUniswapV4Hook.sol`
+- `src/interfaces/IGeomeanOracle.sol`
 - `src/libraries/Oracle.sol`
 - deployment scripts in `script/`
 
@@ -31,8 +32,9 @@ Key dependencies:
 ## Start here
 
 1. `src/JBUniswapV4Hook.sol`
-2. `src/libraries/Oracle.sol`
-3. deployment wiring in `script/`
+2. `src/interfaces/IGeomeanOracle.sol`
+3. `src/libraries/Oracle.sol`
+4. deployment wiring in `script/`
 
 ## Security model
 
@@ -46,7 +48,7 @@ On swaps involving a Juicebox project token, the hook:
 It is also an oracle surface:
 
 - pools using it depend on its observation ring buffer
-- other repos may call `observe()` and trust its output as a pricing guardrail
+- other repos may call `IGeomeanOracle.observe()` and trust its output as a pricing guardrail
 
 ## Roles and privileges
 
@@ -62,6 +64,7 @@ It is also an oracle surface:
 |------------|------------|----------------------|
 | `nana-core-v6` previews | Pay and cash-out previews are coherent enough to compare with V4 | The hook chooses the wrong path |
 | Uniswap V4 pool manager | Delta conventions and callback lifecycle are honored | Settlement or flash accounting breaks |
+| `IGeomeanOracle` consumers | Import and trust the canonical interface from this package | Consumer packages drift from the implemented oracle surface |
 | `nana-buyback-hook-v6` | Recursive composition expects a fail-closed routing guard | Infinite recursion or unsafe fallback |
 
 ## Critical invariants
