@@ -102,13 +102,16 @@ contract SplitBuySwapper is IUnlockCallback {
             PM.settle{value: amountIn}();
         } else {
             PM.sync(input);
-            IERC20(Currency.unwrap(input)).transferFrom(payer, address(PM), amountIn);
+            require(IERC20(Currency.unwrap(input)).transferFrom(payer, address(PM), amountIn));
             PM.settle();
         }
         BalanceDelta d = PM.swap({
             key: key,
             params: SwapParams({
-                zeroForOne: zeroForOne, amountSpecified: -int256(amountIn), sqrtPriceLimitX96: sqrtPriceLimitX96
+                zeroForOne: zeroForOne,
+                // forge-lint: disable-next-line(unsafe-typecast)
+                amountSpecified: -int256(amountIn),
+                sqrtPriceLimitX96: sqrtPriceLimitX96
             }),
             hookData: hookData
         });
@@ -282,11 +285,13 @@ contract SplitBuyTest is Test {
         returns (uint256 projectId, address projectToken)
     {
         JBRulesetConfig[] memory rulesetConfigs = new JBRulesetConfig[](1);
+        // forge-lint: disable-next-line(unsafe-typecast)
         rulesetConfigs[0].weight = uint112(weight);
         rulesetConfigs[0].approvalHook = IJBRulesetApprovalHook(address(0));
         rulesetConfigs[0].metadata = JBRulesetMetadata({
             reservedPercent: reservedPercent,
             cashOutTaxRate: 0,
+            // forge-lint: disable-next-line(unsafe-typecast)
             baseCurrency: uint32(uint160(acceptedToken)),
             pausePay: false,
             pauseCreditTransfers: false,
@@ -310,7 +315,8 @@ contract SplitBuyTest is Test {
 
         JBAccountingContext[] memory contexts = new JBAccountingContext[](1);
         contexts[0] =
-            JBAccountingContext({token: acceptedToken, decimals: decimals, currency: uint32(uint160(acceptedToken))});
+        // forge-lint: disable-next-line(unsafe-typecast)
+        JBAccountingContext({token: acceptedToken, decimals: decimals, currency: uint32(uint160(acceptedToken))});
         JBTerminalConfig[] memory terminals = new JBTerminalConfig[](1);
         terminals[0] = JBTerminalConfig({terminal: terminal, accountingContextsToAccept: contexts});
 
@@ -615,8 +621,21 @@ contract SplitBuyTest is Test {
 
         uint256 mintAll = _mintAll(projectId, JBConstants.NATIVE_TOKEN, amountIn);
         uint256 out = _buy(key, true, amountIn, _extreme(true), "");
-        // V4 rounds each step's input (and fee) up by a base unit, so the pool leg can consume a couple of wei of
-        // input it pays nothing for. That input is valued here at issuance.
-        assertGe(out + _mintAll(projectId, JBConstants.NATIVE_TOKEN, 2) + 3, mintAll, "never below minting everything");
+        // The hook's rounding margin: a millionth of the issuance plus 3 units.
+        assertGe(out + mintAll / 1_000_000 + 3, mintAll, "never below minting everything");
+    }
+
+    /// @notice When V4's rounding eats a pool fill (here the 1% fee takes the whole one-unit input of a 0-decimal
+    /// token), the buy reverts instead of delivering less than minting.
+    function test_poolFillEatenByRounding_reverts() public {
+        MockERC20WithDecimals unit = new MockERC20WithDecimals("U", "U", 0);
+        (uint256 projectId, address projectToken) = _launch(address(unit), 0, 1e18, 0, false);
+        uint256 rate = _mintAll(projectId, address(unit), 1e18);
+        (PoolKey memory key, bool zeroForOne) = _pool(address(unit), projectToken, rate, 130, 1e20, 10, 10_000);
+        uint256 balance = unit.balanceOf(address(this));
+
+        vm.expectRevert();
+        swapper.swap(key, zeroForOne, 1, _extreme(zeroForOne), "");
+        assertEq(unit.balanceOf(address(this)), balance, "the buyer keeps the input");
     }
 }

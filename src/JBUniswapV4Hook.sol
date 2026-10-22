@@ -321,7 +321,7 @@ contract JBUniswapV4Hook is BaseHook, IGeomeanOracle {
     /// @dev WARNING: This estimate uses the ruleset's static weight. If the project has a data hook that overrides the
     /// weight at payment time, actual token issuance may differ from this helper's output.
     /// @dev Live buys use this rate only when the terminal preview forwards the payment to a pay hook (see
-    /// `_issuanceOf`), and the terminal's `minReturnedTokens` then enforces it.
+    /// `_issuanceOf`), and the buy's output floor then enforces it.
     /// @param projectId The Juicebox project ID
     /// @param paymentToken The token to pay with
     /// @param paymentAmount The amount to pay (in the token's native decimals)
@@ -1071,8 +1071,9 @@ contract JBUniswapV4Hook is BaseHook, IGeomeanOracle {
     /// that forwards no funds leaves the minted count as previewed. A specification that forwards funds is a
     /// buyback-style hook taking the pay to its own swap: paid from inside a pool swap, its `poolManager.unlock`
     /// reverts because the PoolManager is already unlocked, and it falls back to minting at the ruleset's weight, which
-    /// `calculateExpectedTokensWithCurrency` prices. The mint leg's `minReturnedTokens` makes the terminal revert if a
-    /// hook delivers less, so an unknown hook can fail the swap but not underpay it.
+    /// `calculateExpectedTokensWithCurrency` prices; the larger of that and the previewed count is used. A rate above
+    /// what the terminal delivers makes the buy's output floor revert, so an unknown hook can fail the swap but not
+    /// underpay it.
     /// @param terminal The project's primary terminal for `token`.
     /// @param projectId The ID of the project whose tokens are being bought.
     /// @param token The input token, in Juicebox's representation.
@@ -1096,9 +1097,10 @@ contract JBUniswapV4Hook is BaseHook, IGeomeanOracle {
             for (uint256 i; i < hookSpecifications.length; i++) {
                 // A forwarded amount means the previewed count leaves out what the hook delivers.
                 if (hookSpecifications[i].amount != 0) {
-                    return calculateExpectedTokensWithCurrency({
+                    tokenCount = calculateExpectedTokensWithCurrency({
                         projectId: projectId, paymentToken: token, paymentAmount: amount
                     });
+                    return tokenCount > beneficiaryTokenCount ? tokenCount : beneficiaryTokenCount;
                 }
             }
             return beneficiaryTokenCount;
@@ -1324,7 +1326,8 @@ contract JBUniswapV4Hook is BaseHook, IGeomeanOracle {
     /// the rest of the input through the project's terminal.
     /// @dev The pool leg is this hook's own exact-input swap on the same pool, which skips this hook's callbacks
     /// (`Hooks.noSelfCall`). Its price limit is the issuance limit: the price where the pool's marginal output after
-    /// the LP and protocol fees equals the issuance rate, rounded so every pool fill is at or above issuance. The
+    /// the LP and protocol fees equals the issuance rate, rounded so the pool's marginal price never drops below
+    /// issuance; the output floor on both legs covers V4's per-step rounding. The
     /// input the pool leg leaves mints through `_routeThroughJuicebox`. The returned delta consumes the whole input
     /// and delivers both legs, so the outer swap moves nothing, and this hook's pool-leg deltas and the mint leg's take
     /// and settle net against it.
@@ -1401,13 +1404,10 @@ contract JBUniswapV4Hook is BaseHook, IGeomeanOracle {
         uint256 poolAmountIn;
         uint256 amountOut;
 
-        // The pool leg runs only while the current price beats the limit. A limit past V4's range clamps to the
-        // range's edge, so the leg fills whatever liquidity the pool has.
+        // The pool leg runs only while the current price beats the limit. Fees move the limit from the fee-free price
+        // checked above toward the current price, so a limit that passes this check is inside V4's range.
         (uint160 currentSqrtPriceX96,,,) = poolManager.getSlot0(key.toId());
         if (zeroForOne ? sqrtPriceX96 < currentSqrtPriceX96 : sqrtPriceX96 > currentSqrtPriceX96) {
-            if (zeroForOne && sqrtPriceX96 <= TickMath.MIN_SQRT_PRICE) sqrtPriceX96 = TickMath.MIN_SQRT_PRICE + 1;
-            if (!zeroForOne && sqrtPriceX96 >= TickMath.MAX_SQRT_PRICE) sqrtPriceX96 = TickMath.MAX_SQRT_PRICE - 1;
-
             BalanceDelta poolDelta = poolManager.swap({
                 key: key,
                 params: SwapParams({
@@ -1426,7 +1426,7 @@ contract JBUniswapV4Hook is BaseHook, IGeomeanOracle {
             amountOut = uint256(uint128(zeroForOne ? poolDelta.amount1() : poolDelta.amount0()));
         }
 
-        // The input the pool leg leaves mints at the issuance rate, less the rounding margin.
+        // The input the pool leg leaves mints through the terminal.
         if (poolAmountIn < amountIn) {
             amountOut += _routeThroughJuicebox({
                 projectId: projectId,
@@ -1435,13 +1435,13 @@ contract JBUniswapV4Hook is BaseHook, IGeomeanOracle {
                 amountIn: amountIn - poolAmountIn,
                 isBuying: true,
                 terminal: terminal,
-                amountOutMin: FullMath.mulDiv({
-                    a: issuedTokenCount - margin, b: amountIn - poolAmountIn, denominator: amountIn
-                })
+                amountOutMin: 0
             });
         }
 
-        // The caller's tagged minimum covers both legs together.
+        // Both legs together deliver at least minting the whole input, less the rounding margin, and the caller's
+        // tagged minimum. This also catches V4's per-step rounding on thin liquidity, where fees can eat a pool fill.
+        if (amountOutMin < issuedTokenCount - margin) amountOutMin = issuedTokenCount - margin;
         if (amountOut < amountOutMin) {
             revert JBUniswapV4Hook_InsufficientOutput({amount: amountOut, minimum: amountOutMin});
         }
