@@ -33,6 +33,7 @@ import {JBRulesetMetadataResolver} from "@bananapus/core-v6/src/libraries/JBRule
 import {IJBRulesetApprovalHook} from "@bananapus/core-v6/src/interfaces/IJBRulesetApprovalHook.sol";
 import {IJBTerminalStore} from "@bananapus/core-v6/src/interfaces/IJBTerminalStore.sol";
 import {HookMiner} from "@uniswap/v4-periphery/src/utils/HookMiner.sol";
+import {OracleQuote} from "./utils/OracleQuote.sol";
 
 // Mock Juicebox contracts for testing
 contract MockJBTokens {
@@ -985,21 +986,6 @@ contract JuiceboxHookTest is Test {
         assertEq(expectedTokens, 0, "Expected tokens should be 0 for invalid project");
     }
 
-    /// Given a pool with liquidity exists
-    /// When estimating output for a 1 ether token0 to token1 swap
-    /// Then the estimated output should be greater than 0
-    /// And the estimated output should be less than 1 ether due to fees
-    function testEstimateUniswapOutput() public view {
-        // Test Uniswap output estimation
-        uint256 amountIn = 1 ether;
-
-        // Estimate output for token0 -> token1 swap
-        uint256 estimatedOut = hook.estimateUniswapOutput(id, key, amountIn, true);
-
-        assertGt(estimatedOut, 0, "Should estimate positive output");
-        assertLt(estimatedOut, amountIn, "Output should account for fees and be less than 1:1");
-    }
-
     // Removed testSetCurrencyId and testSetCurrencyIdRevertZero - currency IDs are now derived from token addresses
 
     /// Given token1 has been minted to the test user
@@ -1100,7 +1086,7 @@ contract JuiceboxHookTest is Test {
     function testTWAPFallbackToSpot() public view {
         // For a newly initialized pool with only one observation,
         // TWAP should fallback to spot price
-        uint256 estimatedOut = hook.estimateUniswapOutput(id, key, 1 ether, true);
+        uint256 estimatedOut = OracleQuote.quote(hook, manager, key, 1 ether, true);
 
         assertGt(estimatedOut, 0, "Should fallback to spot price and return positive value");
     }
@@ -1111,7 +1097,7 @@ contract JuiceboxHookTest is Test {
     /// And the result should be greater than 0
     function testTWAPWithMultipleObservations() public view {
         // With only initial observation, estimate should use spot price fallback
-        uint256 estimatedOut = hook.estimateUniswapOutput(id, key, 1 ether, true);
+        uint256 estimatedOut = OracleQuote.quote(hook, manager, key, 1 ether, true);
 
         // Verify the fallback works
         assertGt(estimatedOut, 0, "Should get positive estimate via fallback to spot");
@@ -1179,52 +1165,6 @@ contract JuiceboxHookTest is Test {
         // Verify no overflow and correct calculation
         assertLe(expectedTokens, type(uint256).max, "Should not overflow");
         assertEq(expectedTokens, (weight * ethAmount) / 1e18, "Calculation should be correct");
-    }
-
-    /// Given a pool initialized with a fuzzed sqrt price
-    /// And a fuzzed input amount between 0.01 and 10 ether
-    /// When estimating Uniswap output for a Juicebox project token
-    /// Then if successful, the output should be positive
-    function testFuzz_EstimateUniswapOutput(uint160 sqrtPriceX96, uint96 amountIn) public {
-        // Bound to valid Uniswap sqrt price range, but use a safe middle range
-        // to avoid extreme arithmetic edge cases in the simplified price calculation
-        sqrtPriceX96 = uint160(bound(sqrtPriceX96, SQRT_PRICE_1_1 / 100, SQRT_PRICE_1_1 * 100));
-        amountIn = uint96(bound(amountIn, 0.01 ether, 10 ether));
-
-        // Create a new pool with this price
-        MockERC20 fuzzToken0 = new MockERC20("FuzzToken0", "FT0");
-        MockERC20 fuzzToken1 = new MockERC20("FuzzToken1", "FT1");
-
-        // Ensure proper ordering
-        if (address(fuzzToken0) > address(fuzzToken1)) {
-            (fuzzToken0, fuzzToken1) = (fuzzToken1, fuzzToken0);
-        }
-
-        // Set up as Juicebox project
-        mockJBTokens.setProjectId(address(fuzzToken0), 456);
-        mockJBController.setWeight(456, 1000e18);
-
-        PoolKey memory fuzzKey = PoolKey({
-            currency0: Currency.wrap(address(fuzzToken0)),
-            currency1: Currency.wrap(address(fuzzToken1)),
-            fee: 3000,
-            tickSpacing: 60,
-            hooks: IHooks(address(hook))
-        });
-
-        // Initialize pool with fuzzed price
-        manager.initialize(fuzzKey, sqrtPriceX96);
-        PoolId fuzzId = fuzzKey.toId();
-
-        // Estimate output - may fail for extreme edge cases in simplified calculation
-        // In production, a more robust swap math implementation would handle these
-        try hook.estimateUniswapOutput(fuzzId, fuzzKey, amountIn, true) returns (uint256 estimatedOut) {
-            // Output should be non-zero for successful calculations
-            assertGt(estimatedOut, 0, "Estimated output should be positive");
-        } catch {
-            // Some extreme combinations may overflow in the simplified math
-            // This is acceptable for a reference implementation
-        }
     }
 
     /// Given a pool with a higher purchase price for the JB project token than the uniswap price
@@ -1572,7 +1512,7 @@ contract JuiceboxHookTest is Test {
         amount = bound(amount, 0.01 ether, 100 ether);
 
         // With only initial observation, estimate should use spot price fallback
-        uint256 estimatedOut = hook.estimateUniswapOutput(id, key, amount, true);
+        uint256 estimatedOut = OracleQuote.quote(hook, manager, key, amount, true);
 
         // Verify the fallback works
         assertGt(estimatedOut, 0, "Should get positive estimate via fallback to spot");
@@ -1671,7 +1611,7 @@ contract JuiceboxHookTest is Test {
         // slippage
 
         // Calculate what TWAP says (should be less affected)
-        uint256 twapEstimateAfterManipulation = hook.estimateUniswapOutput(id, key, normalAmount, true);
+        uint256 twapEstimateAfterManipulation = OracleQuote.quote(hook, manager, key, normalAmount, true);
 
         // TWAP should still provide estimate
         assertTrue(twapEstimateAfterManipulation > 0, "TWAP should still provide estimate");
@@ -1696,7 +1636,7 @@ contract JuiceboxHookTest is Test {
 
         // Calculate expected tokens from both routes (call to verify no revert)
         hook.calculateExpectedTokensWithCurrency(123, address(token1), swapAmount);
-        hook.estimateUniswapOutput(id, key, swapAmount, false);
+        OracleQuote.quote(hook, manager, key, swapAmount, false);
 
         // Mint and approve for swap
         token1.mint(address(this), swapAmount);
@@ -1776,7 +1716,7 @@ contract JuiceboxHookTest is Test {
 
         // Record victim's expected outcome using TWAP
         // forge-lint: disable-next-line(mixed-case-variable)
-        uint256 victimExpectedWithTWAP = hook.estimateUniswapOutput(id, key, victimSwapAmount, false);
+        uint256 victimExpectedWithTWAP = OracleQuote.quote(hook, manager, key, victimSwapAmount, false);
 
         // Attacker front-runs: manipulate price
         address attacker = address(0xBEEF);
@@ -1797,7 +1737,7 @@ contract JuiceboxHookTest is Test {
         vm.stopPrank();
 
         // The hook uses TWAP for estimation, which should be less affected by the attack
-        uint256 victimExpectedAfterAttack = hook.estimateUniswapOutput(id, key, victimSwapAmount, false);
+        uint256 victimExpectedAfterAttack = OracleQuote.quote(hook, manager, key, victimSwapAmount, false);
 
         // TWAP-based estimate should not change dramatically from the attack
         uint256 actualDeviation = victimExpectedWithTWAP > victimExpectedAfterAttack
@@ -1834,13 +1774,10 @@ contract JuiceboxHookTest is Test {
             // slippage
                 successfulSwaps++;
                 // Try to get TWAP estimate
-                try hook.estimateUniswapOutput(id, key, 0.5 ether, true) returns (uint256 estimate) {
+                {
+                    uint256 estimate = OracleQuote.quote(hook, manager, key, 0.5 ether, true);
                     if (i < estimates.length) {
                         estimates[i] = estimate;
-                    }
-                } catch {
-                    if (i < estimates.length) {
-                        estimates[i] = 0;
                     }
                 }
             } catch {
@@ -1892,7 +1829,7 @@ contract JuiceboxHookTest is Test {
                 vm.warp(block.timestamp + timeGap2);
 
                 // Get TWAP estimate
-                uint256 twapEstimate = hook.estimateUniswapOutput(id, key, 0.5 ether, true);
+                uint256 twapEstimate = OracleQuote.quote(hook, manager, key, 0.5 ether, true);
 
                 // TWAP should work if enough time and observations exist
                 if (timeGap1 + timeGap2 >= 1800) {
@@ -1943,7 +1880,7 @@ contract JuiceboxHookTest is Test {
         try swapRouter.swap(key, extremeParams, PoolSwapTest.TestSettings(false, false), abi.encode(uint256(100))) { // 1%
         // slippage
         // If swap succeeds, TWAP should still work
-            uint256 twapEstimate = hook.estimateUniswapOutput(id, key, 1 ether, true);
+            uint256 twapEstimate = OracleQuote.quote(hook, manager, key, 1 ether, true);
             assertGt(twapEstimate, 0, "TWAP should work after extreme swap");
         } catch {
             // Swap may fail due to slippage - this is expected for extreme amounts
@@ -2425,7 +2362,7 @@ contract JuiceboxHookTest is Test {
         vm.warp(block.timestamp + 10_000);
 
         // Estimate expected output (swapping token1 for token0, so zeroForOne = false)
-        uint256 expectedOut = hook.estimateUniswapOutput(nonJBId, nonJBKey, 1 ether, false);
+        uint256 expectedOut = OracleQuote.quote(hook, manager, nonJBKey, 1 ether, false);
         assertGt(expectedOut, 0, "Should have positive output");
 
         // Prepare swap
@@ -2481,7 +2418,7 @@ contract JuiceboxHookTest is Test {
         vm.warp(block.timestamp + 10_000);
 
         // Estimate expected output
-        uint256 expectedOut = hook.estimateUniswapOutput(nonJBId, nonJBKey, 1 ether, false);
+        uint256 expectedOut = OracleQuote.quote(hook, manager, nonJBKey, 1 ether, false);
         assertGt(expectedOut, 0, "Should have positive output");
 
         // Prepare swap

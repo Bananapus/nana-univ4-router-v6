@@ -19,7 +19,7 @@
 - Fallback semantics: liveness is intentionally preserved when estimation fails.
 - Hook-data assumptions: swap callers must supply `amountOutMin` as `JB_HOOK_DATA_TAG ++ abi.encode(amountOutMin)`, and may append extra metadata after that tagged prefix.
 - Buyback-hook metadata-only hints are ignored for live route scoring; use the V4 path directly when the pool is the intended route.
-- Quote-model limits: `estimateUniswapOutput()` is a linear quote, not a full execution simulation. Large trades can still see material V4 quote drift on shallow liquidity.
+- Quotes: the hook has no quote view. Integrators quote through Uniswap's V4 Quoter, which simulates the hook's routing.
 - Signed-delta capacity: even when Juicebox would return more, V4 settlement still has `int128` output limits. The hook must degrade rather than overflowing that boundary.
 
 ## Tests to trust first

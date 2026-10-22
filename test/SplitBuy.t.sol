@@ -45,6 +45,7 @@ import {IPoolManager} from "@uniswap/v4-core/src/interfaces/IPoolManager.sol";
 import {IUnlockCallback} from "@uniswap/v4-core/src/interfaces/callback/IUnlockCallback.sol";
 import {FullMath} from "@uniswap/v4-core/src/libraries/FullMath.sol";
 import {Hooks} from "@uniswap/v4-core/src/libraries/Hooks.sol";
+import {LPFeeLibrary} from "@uniswap/v4-core/src/libraries/LPFeeLibrary.sol";
 import {StateLibrary} from "@uniswap/v4-core/src/libraries/StateLibrary.sol";
 import {TickMath} from "@uniswap/v4-core/src/libraries/TickMath.sol";
 import {PoolModifyLiquidityTest} from "@uniswap/v4-core/src/test/PoolModifyLiquidityTest.sol";
@@ -581,6 +582,38 @@ contract SplitBuyTest is Test {
         uint256 priceX192 = uint256(sqrtPriceX96) * sqrtPriceX96;
         assertApproxEqRel(priceX192 * 99 / 100, uint256(50_000) << 192, 1e12, "stopped at the issuance limit");
         assertGe(priceX192 * 99, uint256(5_000_000) << 192, "never past it");
+    }
+
+    /// @notice A dynamic-fee pool's key carries the `DYNAMIC_FEE_FLAG` sentinel, not a fee; the issuance limit uses the
+    /// LP fee in slot0. A split buy on it matches a static pool with that fee, both fresh (0) and once set (1%).
+    function test_split_dynamicFeePool_matchesStaticPool() public {
+        _assertDynamicMatchesStatic({lpFee: 0});
+        _assertDynamicMatchesStatic({lpFee: 10_000});
+    }
+
+    function _assertDynamicMatchesStatic(uint24 lpFee) internal {
+        (uint256 staticId, address staticToken) = _launch(JBConstants.NATIVE_TOKEN, 18, WEIGHT, 0, false);
+        (, address dynamicToken) = _launch(JBConstants.NATIVE_TOKEN, 18, WEIGHT, 0, false);
+        uint256 rate = _mintAll(staticId, JBConstants.NATIVE_TOKEN, 1e18);
+        (PoolKey memory staticKey,) = _pool(address(0), staticToken, rate, 130, 1e20, 10, lpFee);
+        (PoolKey memory dynamicKey,) =
+            _pool(address(0), dynamicToken, rate, 130, 1e20, 10, LPFeeLibrary.DYNAMIC_FEE_FLAG);
+        if (lpFee != 0) {
+            vm.prank(address(hook));
+            manager.updateDynamicLPFee(dynamicKey, lpFee);
+        }
+
+        uint256 staticSupply = _supply(staticToken);
+        uint256 dynamicSupply = _supply(dynamicToken);
+        uint256 staticOut = _buy(staticKey, true, 1 ether, _extreme(true), "");
+        uint256 dynamicOut = _buy(dynamicKey, true, 1 ether, _extreme(true), "");
+
+        assertGt(_supply(staticToken) - staticSupply, 0, "split, not pool-only");
+        assertEq(dynamicOut, staticOut, "same output");
+        assertEq(_supply(dynamicToken) - dynamicSupply, _supply(staticToken) - staticSupply, "same mint leg");
+        (uint160 staticPrice,,,) = manager.getSlot0(staticKey.toId());
+        (uint160 dynamicPrice,,,) = manager.getSlot0(dynamicKey.toId());
+        assertEq(dynamicPrice, staticPrice, "same issuance limit");
     }
 
     /// @notice A caller limit at the fee-free issuance price keeps a plain V4 swap: partial fill, no mint.

@@ -16,7 +16,6 @@ This repo is the UniV4 hook and oracle primitive for Juicebox-aware swaps. It ow
 - `JBUniswapV4Hook`: hook-level routing and oracle observation recording
 - `Oracle`: observation ring and TWAP lookup logic
 - `observe(...)`: time-weighted observation surface
-- `estimateUniswapOutput(...)`: linear TWAP quote for integrators; routing does not use it
 - buy-versus-mint and sell-versus-cash-out routing inside the hook's swap callbacks
 
 ## Journey 1: Deploy the V4 routing hook for a Juicebox-aware pool
@@ -114,7 +113,7 @@ This repo is the UniV4 hook and oracle primitive for Juicebox-aware swaps. It ow
 
 1. Initialize the pool and let observations accumulate through real activity.
 2. Treat the early period as warmup, not fully mature protection.
-3. Expect `estimateUniswapOutput(...)` to fall back to spot pricing until enough history exists for the configured lookback.
+3. Expect `observe(...)` readers to get only the retained window (`observationCoverageOf`) until enough history exists for the configured lookback.
 4. Only treat the oracle as protective once the lookback window is genuinely populated.
 
 **Failure Modes**

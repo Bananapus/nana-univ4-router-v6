@@ -16,7 +16,7 @@ This is a V5-to-V6 migration changelog, not a package release log or commit hist
 - The hook's cash-outs carry metadata telling the project's buyback hook to skip its pool sale, keyed to the registry the data hook names with `BUYBACK_HOOK()` (a revnet's) or to the data hook itself. Previews carry the same metadata.
 - Sells of the fee project's own token (project 1) stay in the pool: its cash-out fee would mint its token back to the hook mid-sell.
 - Adding or removing liquidity in a pool of this hook reverts with `JBUniswapV4Hook_ReentrantRouting` while a terminal leg runs, so a project's hooks cannot move the pool under a quoted split.
-- New `quoteSwap(PoolKey, SwapParams, uint160, uint256)`, which always reverts with `JBUniswapV4Hook_SwapQuote(legAmountIn, legAmountOut, restAmountOut)`. `BestRouteSelected` is removed; `RouteSelected` reports every route. `estimateUniswapOutput` stays as a view but no longer drives routing.
+- New `quoteSwap(PoolKey, SwapParams, uint160, uint256)`, which always reverts with `JBUniswapV4Hook_SwapQuote(legAmountIn, legAmountOut, restAmountOut)`. `BestRouteSelected` is removed; `RouteSelected` reports every route. `estimateUniswapOutput` is removed (routing no longer used it); integrators quote through Uniswap's V4 Quoter, which simulates the hook's routing.
 
 ## 1.3.0
 

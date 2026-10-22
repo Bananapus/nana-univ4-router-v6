@@ -49,11 +49,12 @@ import {Oracle} from "./libraries/Oracle.sol";
 
 /// @title JBUniswapV4Hook
 /// @notice A Uniswap V4 hook that routes swaps of Juicebox project tokens between the V4 pool and the Juicebox project.
-/// Buys fill from the pool while it beats the payer's issuance rate and mint the rest; sells go to whichever venue
-/// gives more, using a 30-minute TWAP oracle to resist price manipulation.
+/// Buys fill from the pool while it beats the payer's issuance rate and mint the rest; sells take the best of the pool,
+/// a cash-out, or a split of the two.
 /// @dev Buys take the pool's fills with a real swap limited at the issuance price, so the buyer gets at least what
-/// minting the whole input gives. Sells compare the V4 TWAP-based estimate against the terminal's cash-out preview.
-/// Provides IGeomeanOracle-compatible `observe()` for TWAP queries by external contracts.
+/// minting the whole input gives. Sells quote each route exactly (`quoteSwap` for pool legs, the terminal preview for
+/// cash-outs) and run the best. Records a TWAP oracle and provides IGeomeanOracle-compatible `observe()` for external
+/// contracts.
 /// @dev COMPOSITION WARNING — This hook can serve as JBBuybackHook's ORACLE_HOOK for the same V4 pool.
 /// When the buyback hook attempts a swap, it flows through this hook's `_beforeSwap` routing logic. Its swaps carry a
 /// price limit at the issuance price, so they stay plain V4 swaps here, and buyback-hook metadata is ignored because it
@@ -450,47 +451,6 @@ contract JBUniswapV4Hook is BaseHook, IGeomeanOracle {
         } else {
             expectedTokens = estimatedTokens;
         }
-    }
-
-    /// @notice Estimates how many output tokens a swap through the Uniswap V4 pool would produce, based on the
-    /// 30-minute TWAP price, the longest retained best-effort TWAP, or spot price if no oracle history is available.
-    /// @dev Uses time-weighted average price to prevent manipulation
-    /// @dev Price impact warning: This estimate does not account for price impact from liquidity depth. The TWAP
-    /// price is applied uniformly to the entire `amountIn` regardless of available liquidity at the current tick
-    /// range. In shallow pools, large trades will experience significant slippage that this function does not
-    /// reflect. As a result, `estimateUniswapOutput` may overquote the V4 route for large amounts relative to
-    /// pool liquidity. Live routing uses it only for sells; buys swap against the pool itself.
-    /// Callers processing large amounts relative to pool liquidity should verify the output independently.
-    // Pool selection by highest liquidity is a heuristic. A pool with less liquidity but better tick
-    // distribution could produce better output for a given swap size. Full simulation of all pools would be
-    // gas-prohibitive on-chain. Off-chain routers can provide optimal pool selection via metadata.
-    /// @param poolId The pool ID
-    /// @param key The pool key
-    /// @param amountIn The input amount
-    /// @param zeroForOne Whether swapping token0 for token1
-    /// @return estimatedOut The estimated output amount
-    function estimateUniswapOutput(
-        PoolId poolId,
-        PoolKey memory key,
-        uint256 amountIn,
-        bool zeroForOne
-    )
-        public
-        view
-        returns (uint256 estimatedOut)
-    {
-        // Get TWAP price instead of spot price to prevent manipulation
-        uint160 sqrtPriceX96twap = _getTWAPSqrtPrice(poolId);
-
-        // If TWAP is not available (not enough observations), fall back to spot price for the route comparison.
-        // A newly created pool that lacks sufficient TWAP history is priced at spot here, which is susceptible to
-        // spot-price manipulation; once the pool accumulates enough observations the TWAP is used instead.
-        if (sqrtPriceX96twap == 0) {
-            (sqrtPriceX96twap,,,) = poolManager.getSlot0(poolId);
-        }
-
-        return
-            _outputForSqrtPrice({key: key, amountIn: amountIn, zeroForOne: zeroForOne, sqrtPriceX96: sqrtPriceX96twap});
     }
 
     /// @notice Declares which Uniswap V4 lifecycle callbacks this hook uses (afterInitialize, afterSwap,
@@ -1078,46 +1038,6 @@ contract JBUniswapV4Hook is BaseHook, IGeomeanOracle {
         }
     }
 
-    /// @notice Computes the TWAP sqrt price over the configured lookback window, or the longest retained best-effort
-    /// window. Returns 0 if the pool lacks usable observation history.
-    /// @param poolId The pool ID
-    /// @return sqrtPriceX96 The TWAP sqrt price, or 0 if not enough observations
-    // forge-lint: disable-next-line(mixed-case-function)
-    function _getTWAPSqrtPrice(PoolId poolId) internal view returns (uint160) {
-        ObservationState memory state = states[poolId];
-
-        // Need at least 2 observations for TWAP
-        if (state.cardinality < 2) {
-            return 0;
-        }
-
-        // Get current pool state for observation
-        // getSlot0 returns: sqrtPriceX96, tick, protocolFee, lpFee (no liquidity)
-        (, int24 tick,,) = poolManager.getSlot0(poolId);
-        // Get current liquidity from the dedicated accessor
-        uint128 liquidity = poolManager.getLiquidity(poolId);
-
-        uint32 oldestSecondsAgo = _observationCoverageOf({poolId: poolId});
-        uint32 secondsAgo = oldestSecondsAgo < TWAP_PERIOD ? oldestSecondsAgo : TWAP_PERIOD;
-        if (secondsAgo == 0) return 0;
-
-        // Observe the TWAP
-        // _observeTWAP() is called without try-catch. If the oracle observation fails (e.g.,
-        // insufficient history), the entire transaction reverts. This is intentional — a failed TWAP observation
-        // means no reliable price reference exists, and proceeding without one would expose the swap to manipulation.
-        int24 arithmeticMeanTick = _observeTWAP({
-            poolId: poolId,
-            secondsAgo: secondsAgo,
-            tick: tick,
-            index: state.index,
-            liquidity: liquidity,
-            cardinality: state.cardinality
-        });
-
-        // Convert tick to sqrtPriceX96
-        return TickMath.getSqrtPriceAtTick(arithmeticMeanTick);
-    }
-
     /// @notice The payer's project tokens from the terminal's mint path for `amount`, or 0 when no mint path is usable.
     /// @dev Reads `previewPayFor` with empty metadata, the metadata the mint leg pays with, and uses its count. A
     /// preview that mints nothing for the payer while a pay hook specification forwards funds is a buyback-style hook
@@ -1220,61 +1140,6 @@ contract JBUniswapV4Hook is BaseHook, IGeomeanOracle {
         // Round toward negative infinity for negative ticks (Solidity truncates toward zero).
         if (tickCumulativeDelta < 0 && (tickCumulativeDelta % int56(uint56(secondsAgo)) != 0)) {
             arithmeticMeanTick--;
-        }
-    }
-
-    /// @notice Converts an input amount into an expected V4 output using a given sqrt price, mirroring V4 swap math.
-    /// @dev Used by `estimateUniswapOutput` to value a swap at a chosen price. Applies the combined swap fee
-    /// (protocol fee + LP fee) to the input BEFORE the price-ratio conversion so the estimate's floor rounding matches
-    /// V4's execution rounding. The fee is read for `key.toId()` so the fee always matches the priced pool.
-    /// @param key The pool key
-    /// @param amountIn The input amount
-    /// @param zeroForOne Whether swapping token0 for token1
-    /// @param sqrtPriceX96 The price (spot or TWAP) to value the swap at
-    /// @return estimatedOut The estimated output amount
-    function _outputForSqrtPrice(
-        PoolKey memory key,
-        uint256 amountIn,
-        bool zeroForOne,
-        uint160 sqrtPriceX96
-    )
-        internal
-        view
-        returns (uint256 estimatedOut)
-    {
-        // Apply the combined swap fee (protocol fee + LP fee) to the input amount BEFORE the price-ratio
-        // conversion, mirroring Uniswap V4's swap math so this estimator's floor rounding matches V4's
-        // execution rounding (small inputs at typical fees would otherwise diverge by one unit).
-        uint256 amountInAfterFee = amountIn;
-        {
-            uint24 swapFee = _swapFeeOf({key: key, zeroForOne: zeroForOne});
-
-            if (swapFee > 0) {
-                amountInAfterFee = FullMath.mulDiv({
-                    a: amountIn,
-                    b: ProtocolFeeLibrary.PIPS_DENOMINATOR - swapFee,
-                    denominator: ProtocolFeeLibrary.PIPS_DENOMINATOR
-                });
-            }
-        }
-
-        // Calculate price ratio from sqrtPriceX96, handling overflow for large values.
-        // When sqrtPriceX96 <= type(uint128).max, we can square it directly (fits in uint256).
-        // Otherwise, use FullMath.mulDiv to avoid overflow, at the cost of reduced precision.
-        if (sqrtPriceX96 <= type(uint128).max) {
-            uint256 ratioX192 = uint256(sqrtPriceX96) * sqrtPriceX96;
-            if (zeroForOne) {
-                estimatedOut = FullMath.mulDiv({a: amountInAfterFee, b: ratioX192, denominator: 1 << 192});
-            } else {
-                estimatedOut = FullMath.mulDiv({a: amountInAfterFee, b: 1 << 192, denominator: ratioX192});
-            }
-        } else {
-            uint256 ratioX128 = FullMath.mulDiv({a: sqrtPriceX96, b: sqrtPriceX96, denominator: 1 << 64});
-            if (zeroForOne) {
-                estimatedOut = FullMath.mulDiv({a: amountInAfterFee, b: ratioX128, denominator: 1 << 128});
-            } else {
-                estimatedOut = FullMath.mulDiv({a: amountInAfterFee, b: 1 << 128, denominator: ratioX128});
-            }
         }
     }
 

@@ -27,6 +27,7 @@ import {
     MockJBTerminalStore_RegressionGaps
 } from "../TestRegressionGaps.sol";
 import {IJBTokens, IJBPrices, IJBDirectory} from "../../src/JBUniswapV4Hook.sol";
+import {OracleQuote} from "../utils/OracleQuote.sol";
 
 contract RegressionLargeTradeMisrouteTest is Test {
     using PoolIdLibrary for PoolKey;
@@ -133,7 +134,7 @@ contract RegressionLargeTradeMisrouteTest is Test {
     function test_largeBuyGetsAtLeastTheJBQuote() public {
         uint256 amountIn = 10 ether;
         uint256 jbQuote = hook.calculateExpectedTokensWithCurrency(123, address(paymentToken), amountIn);
-        uint256 v4Estimate = hook.estimateUniswapOutput(id, key, amountIn, true);
+        uint256 v4Estimate = OracleQuote.quote(hook, manager, key, amountIn, true);
 
         assertEq(jbQuote, 5 ether, "sanity: configured JB quote");
         assertGt(v4Estimate, jbQuote, "router must prefer the inflated V4 estimate");

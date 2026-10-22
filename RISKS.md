@@ -13,7 +13,7 @@ This file focuses on the routing, oracle, and composition risks in `JBUniswapV4H
 | Priority | Risk | Why it matters | Primary controls |
 |----------|------|----------------|------------------|
 | P0 | Wrong route selection | The hook can send users through a worse path and lose value. | Buys fill from the pool only while it beats issuance and mint the rest, so a buyer gets at least issuance; sells take the best of the pool alone, cashing out everything and a split, each quoted exactly; slippage checks and routing-edge tests. |
-| P1 | Oracle warmup and low-history fallback | New or thin pools weaken TWAP-based protection and can fall back to spot pricing. | Operational warmup guidance, explicit fallback behavior, and `amountOutMin` enforcement. |
+| P1 | Oracle warmup for external readers | New or thin pools have little TWAP history, so `observe` readers (such as the buyback hook) get a short window. Routing reads no oracle. | Coverage views (`hasObservationCoverage`, `observationCoverageOf`) and each reader's own checks. |
 | P1 | Buyback-hook recursion | Same-pool composition with `nana-buyback-hook-v6` can recurse if the routing guard breaks. | Reentrancy guard plus fail-closed fallback into minting. |
 
 ## 1. Trust assumptions
@@ -25,10 +25,9 @@ This file focuses on the routing, oracle, and composition risks in `JBUniswapV4H
 
 ## 2. Oracle risks
 
-- **Warmup spot fallback.** During the early life of a pool, routing can rely on spot price instead of a mature TWAP.
+- **Warmup history.** Early in a pool's life, `observe` readers get only the retained window. Routing reads no oracle.
 - **Observation cardinality growth.** Oracle growth costs are borne by the caller that crosses a capacity boundary.
 - **Fixed TWAP period.** The 30-minute lookback is compile-time behavior. If conditions change, the fix is redeployment, not admin retuning.
-- **Mature-oracle failures are fail-closed.** Once the hook expects TWAP to be available, broken observation reads can revert the swap instead of degrading back to spot.
 
 ## 3. Routing risks
 
@@ -37,7 +36,6 @@ This file focuses on the routing, oracle, and composition risks in `JBUniswapV4H
 - **Sells take the best of three exact quotes.** Before executing, a sell quotes the pool alone and a split with `quoteSwap` (the same swaps on the same state, reverted), and the cash-outs with the terminal preview: everything in the pool, everything cashed out, or a pool leg limited where the pool's output after fees equals the marginal reclaim rate (`3 J(n) - 4 J(n/2)` for a taxed cash-out, the average rate when that is lower) with the rest cashed out. The rate only places the leg, so the reclaim curve's rounding cannot put the seller below the pool alone, or below cashing out everything when the PoolManager holds the whole input. The two quotes cost about two pool swaps of gas. Sells of the fee project's own token stay in the pool, because its cash-out fee mints that token back to the hook.
 - **Terminal legs take input from PoolManager reserves.** Callers settle their input after the swap. A buy's mint leg `take`s the leftover input before the caller settles, as the 1.2.0 Juicebox routes do, and a PoolManager without reserves of it makes the swap revert, never underpay. A sell's cash-out leg takes at most what the PoolManager holds of the token, and the outer swap sells the rest in the pool; `_afterSwap` adds the legs' output (held in a transient slot) to the pool's output for a tagged minimum. A thin pool of a token the PoolManager barely holds therefore gives most of a large sell to the pool, as 1.2.0 does. When the pool cannot take that rest (a pool already at its price bound), the sell reverts, as 1.2.0's did. The all-reclaim comparison is also skipped, leaving a plain swap, when the marginal reclaim rate is within the issuance-style rounding margin (dust), and it reads the standard fee, so a hook registered as feeless on the terminal is underquoted (see §5).
 - **Slippage protection is tag-gated.** A minimum is enforced only when `hookData` begins with `JB_HOOK_DATA_TAG` followed by a 32-byte `amountOutMin` (an explicit zero is a deliberate opt-out). Any other payload — empty, or a generic router's own metadata — carries no minimum: its first word is never mis-decoded as one, so neither a large word (DoS) nor a small word (silent skip) is possible. The hook imposes no floor of its own; an untagged swap proceeds under the caller's own protection (its router min-out or `sqrtPriceLimitX96`).
-- **`estimateUniswapOutput` is approximate.** It is a linear TWAP quote kept for integrators; routing no longer uses it.
 - **Buy-side issuance depends on preview availability.** If the terminal cannot provide a usable preview, the buy stays a plain V4 swap.
 - **Sell-side estimates are conservative.** If `previewCashOutFrom(...)` is unavailable or reverts, or if the selected
   terminal cannot locally settle the previewed gross reclaim plus cash-out hook amounts, the hook intentionally declines
@@ -52,14 +50,13 @@ This file focuses on the routing, oracle, and composition risks in `JBUniswapV4H
 
 ## 4. MEV surface
 
-- **Spot-fallback sandwich window.** During warmup, attackers can manipulate spot price to influence route choice.
 - **Buy-side sandwiches: the hook's floor is mint-all; the swapper's minimum protects the surplus.** The hook only guarantees a buyer at least minting the whole input. The pool's surplus above issuance is protected by the swapper's own minimum output (a router `amountOutMinimum`, such as Uniswap's default slippage, or a tagged `amountOutMin`), checked on both legs together. A buy sent with **no minimum** can be sandwiched down to issuance, as on 1.2.0, where the same buy had no floor at all. Base fork, block 52,922,000, project 7 (pool about 50x above issuance), best of the attacks searched in `test/SplitBuyBaseFork.t.sol`:
   - 1 ETH buy, victim sets no minimum: attacker nets 0.92 ETH on 1.3.0 (0.96 ETH on 1.2.0); the victim gets 7,750 tokens (issuance) instead of 80,738.
   - Same buy with a 0.5% minimum: attacker nets 0.022 ETH on both versions; with 1%, 0.040 ETH on both. The victim loses at most its slippage in tokens; the attacker's ETH gain is about that token loss valued at the pool's post-trade price, which a large buy moves far.
   - 10 ETH buy with a 1% minimum: 0.17 ETH on 1.3.0 against 1.75 ETH on 1.2.0, because 1.3.0 stops the pool leg at issuance.
   - With a minimum, the test asserts the victim loses at most its slippage and the attacker nets no more than the same attack nets on 1.2.0 wherever 1.2.0 fills the buy.
 - **Why the pool leg is limited at issuance, not at the TWAP.** A pool-leg limit anchored to the TWAP would make a sandwich of a no-minimum buy unprofitable, but any genuine price move inside the TWAP window would send honest buys to minting while the pool still beats issuance. Derived from the fork table (no anchored variant was built; this assumes the TWAP still sits at the pre-move price and the anchor's tolerance is narrower than the move): after a genuine 1 ETH buy moves project 7's pool (the table's "pumped" state), a 1 ETH buy gets 10,088 tokens from the split but would get 7,750 if the pool were skipped (23% less); a 0.1 ETH buy, 1,590 against 775 (51% less). The swapper's minimum covers the attack case without that cost.
-- **TWAP manipulation cost.** Sustained manipulation is much more expensive than single-block spot manipulation, but it is not impossible.
+- **TWAP manipulation cost (readers of `observe`).** Sustained manipulation is much more expensive than single-block spot manipulation, but it is not impossible. Routing does not read the TWAP.
 
 ## 5. Composition risks
 
@@ -87,9 +84,9 @@ This file focuses on the routing, oracle, and composition risks in `JBUniswapV4H
 
 When the hook routes through Juicebox, the V4 pool is not touched. That can create cross-route arbitrage, and that is by design.
 
-### 8.2 Spot fallback during oracle warmup is accepted
+### 8.2 Routing reads no oracle
 
-The hook uses spot price before enough history exists for the configured TWAP lookback. This is weaker than mature TWAP protection, but the alternative would be blocking swaps during pool warmup.
+Buys and sells swap the pool itself and compare routes with `quoteSwap`, so no TWAP or spot estimate chooses a route, during warmup or after.
 
 ### 8.3 Sell-side beneficiary substitution is accepted under the documented fee model
 
@@ -122,13 +119,13 @@ sell-side cash-out leg, its terminal minimum is the leg's own net preview.
 
 The hook deliberately ignores buyback hook metadata when choosing between Juicebox and V4. Buyback metadata can describe a route that reaches the same pool through another hook layer, which is not a better direct route for a swapper. The live comparison therefore trusts only terminal-reported direct preview amounts.
 
-### 8.7 Price impact ignorance in `estimateUniswapOutput`
+### 8.7 The hook offers no quote view
 
-`estimateUniswapOutput()` uses a linear TWAP quote without liquidity-depth simulation, so large trades in shallow pools can execute well below it. Routing does not use it: buys and sells swap the pool itself, and a sell's cash-out leg is compared with `quoteSwap`, which runs the real pool.
+The hook has no view that quotes a swap. Integrators quote through Uniswap's V4 Quoter, which simulates the hook's routing. Routing reads no TWAP: buys and sells swap the pool itself, and a sell compares routes with `quoteSwap`, which runs the real pool.
 
 ### 8.8 TWAP warmup best-effort fallback
 
-When the TWAP oracle has some observation history but not enough for the preferred 30-minute window, `estimateUniswapOutput` quotes against the longest retained best-effort TWAP. If no usable history exists, it falls back to the manipulable spot price. During this window, routing decisions may be suboptimal. Slippage protection (`amountOutMin`) prevents worst-case execution. This is documented in code and is a bounded startup condition.
+When the TWAP oracle has some observation history but not enough for the preferred 30-minute window, readers of `observe` get only the retained window; `observationCoverageOf` reports it. Routing does not depend on it.
 
 ---
 
@@ -144,11 +141,11 @@ These are standing properties of the system. They describe behavior that is inte
 
 #### A single observation returns the spot tick as the TWAP
 
-With fewer than two observations, `observeTWAP` returns the current spot tick as the TWAP. Routing does not read the TWAP; it affects only `estimateUniswapOutput` and external readers. External callers check the observation count before trusting the TWAP value.
+With fewer than two observations, `observeTWAP` returns the current spot tick as the TWAP. Routing does not read the TWAP; it affects only external readers. External callers check the observation count before trusting the TWAP value.
 
-#### Partial history uses best-effort TWAP; no history falls back to spot
+#### Partial history returns only the retained window
 
-When retained observations do not cover the preferred window, the hook uses the longest retained best-effort TWAP. When no usable observations exist, the oracle returns the spot price, which is manipulable via JIT liquidity. Routing does not use it; external consumers can call `hasObservationCoverage(...)` or `observationCoverageOf(...)` before relying on a quote. The hook does not derive a slippage floor of its own from the TWAP; protection is the caller's tagged `amountOutMin` (when supplied) or their own router-level minimum.
+`observe` reverts when the requested lookback is older than the retained history; the hook picks no fallback. External consumers can call `hasObservationCoverage(...)` or `observationCoverageOf(...)` before relying on a quote. The hook does not derive a slippage floor of its own from the TWAP; protection is the caller's tagged `amountOutMin` (when supplied) or their own router-level minimum.
 
 #### Observation growth is synchronous
 

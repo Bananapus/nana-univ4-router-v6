@@ -12,6 +12,7 @@ import {JBRuleset} from "@bananapus/core-v6/src/structs/JBRuleset.sol";
 
 import {JuiceboxHookTest} from "../JBUniswapV4Hook.t.sol";
 import {MockERC20} from "../mock/MockERC20.sol";
+import {OracleQuote} from "../utils/OracleQuote.sol";
 
 contract MetadataOnlySellPreviewTerminal {
     uint256 internal immutable _liveCashOutAmount;
@@ -197,7 +198,7 @@ contract BuybackCashOutMetadataIgnoredTest is JuiceboxHookTest {
         uint256 previewQuote = hook.calculateExpectedOutputFromSelling(
             123, amountIn, address(token1), IJBTerminal(address(metadataOnlySellTerminal))
         );
-        uint256 v4Quote = hook.estimateUniswapOutput(id, key, amountIn, true);
+        uint256 v4Quote = OracleQuote.quote(hook, manager, key, amountIn, true);
 
         assertEq(previewQuote, 0, "metadata-only preview stays ineligible");
         assertGt(liveCashOutAmount, v4Quote, "direct JB output would beat V4");

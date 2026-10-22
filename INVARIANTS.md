@@ -57,11 +57,8 @@ JB-token detection requires the project to have a **registered ERC-20** (`JBToke
 
 ## A.4 Oracle protections
 
-- Routing reads no TWAP: buys and sells swap the pool itself and compare against the real pool (`quoteSwap`). `estimateUniswapOutput` quotes from the TWAP (`_getTWAPSqrtPrice` over `TWAP_PERIOD = 30 minutes`) for integrators.
-- When observation history is insufficient (`cardinality < 2` or oldest observation < 30min old), `estimateUniswapOutput` falls back to current spot. This is documented and bounded; a tagged `amountOutMin`, when supplied, provides the absolute execution floor. The hook derives no settlement floor of its own from the TWAP. (`JBUniswapV4Hook.sol:990-1014, 410-432`)
-- Once TWAP is expected to be available, observation-read failures cause the swap to revert rather than silently degrade to spot pricing. Fail-closed on mature oracles. (`JBUniswapV4Hook.sol:1017-1019`)
-- `MAX_TWAP_CARDINALITY = 1801` preserves a full 30-minute window at the oracle's maximum one-observation-per-second write cadence, including both endpoints. If a pool still has partial coverage during warmup, consumers can detect that with `hasObservationCoverage(...)` / `observationCoverageOf(...)`, and the hook quotes against the longest retained best-effort window. (`JBUniswapV4Hook.sol:124-136, 1218-1248`)
-- Swap-fee normalization happens **before** the price-ratio conversion inside `estimateUniswapOutput`, mirroring V4 swap math so the estimator's rounding matches actual execution rounding (avoids off-by-one drift at typical fee tiers for small inputs). (`JBUniswapV4Hook.sol:418-445`)
+- Routing reads no TWAP: buys and sells swap the pool itself and compare against the real pool (`quoteSwap`). The oracle serves external readers through `observe`; the hook derives no settlement floor from it, and a tagged `amountOutMin`, when supplied, is the absolute execution floor.
+- `MAX_TWAP_CARDINALITY = 1801` preserves a full 30-minute window at the oracle's maximum one-observation-per-second write cadence, including both endpoints. If a pool still has partial coverage during warmup, consumers can detect that with `hasObservationCoverage(...)` / `observationCoverageOf(...)`; routing does not read the oracle. (`JBUniswapV4Hook.sol:124-136, 1218-1248`)
 - The TWAP arithmetic-mean tick is rounded toward negative infinity for negative tick deltas (Uniswap V3 convention), avoiding silent truncation bias on bearish moves. (`JBUniswapV4Hook.sol:1080-1087`)
 
 ## A.5 Currency and token handling
@@ -124,8 +121,6 @@ V4 `BaseHook`. Holds no persistent project funds — only transient swap-in-flig
 
 - **`calculateExpectedTokensWithCurrency(projectId, paymentToken, paymentAmount) view → uint256`** — Ruleset-weight issuance (not preview), converted the way the terminal store converts (one base-currency unit priced in the payment currency at the payment token's decimals). Live buys use it only when the terminal preview forwards funds to a pay hook; the mint leg's `minReturnedTokens` then enforces it. Returns `0` on controller revert, price-feed revert, or `decimals > 77`. (`JBUniswapV4Hook.sol:298-378`)
 
-- **`estimateUniswapOutput(poolId, key, amountIn, zeroForOne) view → uint256`** — TWAP-quote estimator. Falls back to spot when `_getTWAPSqrtPrice == 0`. Applies combined protocol+LP swap fee BEFORE the price-ratio conversion to mirror V4 swap math. Linear (no liquidity-depth simulation). (`JBUniswapV4Hook.sol:397-467`)
-
 - **`hasObservationCoverage(key, secondsAgo) view → bool`** — Canonical `IGeomeanOracle` coverage check. Returns whether retained observations cover the requested lookback window. (`JBUniswapV4Hook.sol:480-482`)
 
 - **`observationCoverageOf(key) view → uint32`** — Canonical `IGeomeanOracle` warmup helper. Returns the age of the oldest retained initialized observation, or `0` if unavailable. (`JBUniswapV4Hook.sol:489-491`)
@@ -145,7 +140,7 @@ V4 `BaseHook`. Holds no persistent project funds — only transient swap-in-flig
 
 **Internal-only:**
 
-- `_routeThroughJuicebox`, `_settleOutput`, `_createSwapDelta`, `_calculateTokensWithCurrency`, `_exactZeroTaxNet`, `_getPrimaryTerminal`, `_getTokenDecimals`, `_getTWAPSqrtPrice`, `_normalizeToken`, `_observeTWAP`, `_projectIdForRegisteredToken`, `_recordObservation`, `_requireTemporaryAllowanceConsumed`.
+- `_routeThroughJuicebox`, `_settleOutput`, `_createSwapDelta`, `_calculateTokensWithCurrency`, `_exactZeroTaxNet`, `_getPrimaryTerminal`, `_getTokenDecimals`, `_normalizeToken`, `_observeTWAP`, `_projectIdForRegisteredToken`, `_recordObservation`, `_requireTemporaryAllowanceConsumed`.
 
 ## C.2 `Oracle` — `src/libraries/Oracle.sol`
 
@@ -204,7 +199,7 @@ There is no `setChainSpecificConstants` one-shot binder pattern on this contract
 
 9. **MAX_TWAP_CARDINALITY-bounded oracle work.** Ring buffer capped at 1801 slots. Auto-grows on demand; once at cap, only one fresh write per second is retained (same-second writes are no-ops in the oracle library). The cap is large enough to preserve the 30-minute window at one observation per second. (`JBUniswapV4Hook.sol:124-136, 1164-1248`)
 
-10. **TWAP-then-spot fallback chain (integrator quote only).** `estimateUniswapOutput` prefers TWAP when `cardinality >= 2` AND oldest observation `>= TWAP_PERIOD` old; otherwise it falls back to slot0 spot. `amountOutMin` is the absolute floor in either mode.
+10. **No quote view.** The hook exposes no swap quote; integrators quote through Uniswap's V4 Quoter, which simulates the hook. `amountOutMin` is the absolute floor.
 
 11. **PoolManager-only callbacks.** Every state-mutating function is `internal` and inherits `onlyPoolManager` from `BaseHook`. EOAs cannot invoke `_beforeSwap` / `_afterSwap` / `_afterInitialize` / `_afterAddLiquidity` / `_afterRemoveLiquidity` directly.
 
@@ -249,7 +244,6 @@ This repo holds **no privileged role** of its own. All implied centralization fl
 - `_exactZeroTaxNet` zero-tax fee computation: `src/JBUniswapV4Hook.sol:917-949`
 - Oracle initialize: `src/JBUniswapV4Hook.sol:581-590` + `src/libraries/Oracle.sol:71-83`
 - Observation recording (cap-aware guard): `src/JBUniswapV4Hook.sol:1105-1161`
-- TWAP staleness fallback to spot: `src/JBUniswapV4Hook.sol:410-416, 985-1014`
 - `getHookPermissions` declaration: `src/JBUniswapV4Hook.sol:472-489`
 - `observe` / `observeTWAP`: `src/JBUniswapV4Hook.sol:498-552`
 - `_projectIdForRegisteredToken` precise check: `src/JBUniswapV4Hook.sol:1090-1100`

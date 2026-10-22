@@ -6,6 +6,7 @@ import {SwapParams} from "@uniswap/v4-core/src/types/PoolOperation.sol";
 import {IJBTerminal} from "@bananapus/core-v6/src/interfaces/IJBTerminal.sol";
 
 import {BuybackCashOutMetadataIgnoredTest} from "../regression/BuybackCashOutMetadataIgnored.t.sol";
+import {OracleQuote} from "../utils/OracleQuote.sol";
 
 contract BuybackSellMetadataUnderquoteTest is BuybackCashOutMetadataIgnoredTest {
     /// @notice Metadata-only sell previews are ignored for route choice even when a direct terminal call would pay
@@ -23,7 +24,7 @@ contract BuybackSellMetadataUnderquoteTest is BuybackCashOutMetadataIgnoredTest 
             outputToken: address(token1),
             terminal: IJBTerminal(address(metadataOnlySellTerminal))
         });
-        uint256 v4Quote = hook.estimateUniswapOutput({poolId: id, key: key, amountIn: amountIn, zeroForOne: true});
+        uint256 v4Quote = OracleQuote.quote(hook, manager, key, amountIn, true);
 
         assertEq(previewQuote, 0, "metadata-only preview must not influence routing");
         assertGt(liveCashOutAmount, v4Quote, "direct JB output would beat V4");

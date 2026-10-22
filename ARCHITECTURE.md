@@ -6,7 +6,7 @@
 
 ## System overview
 
-`JBUniswapV4Hook` is the runtime hook that inspects swaps, estimates both market and protocol routes, and can override settlement when the protocol path is better. It implements `IGeomeanOracle`, the canonical downstream interface for pool-local TWAP reads. `Oracle` maintains the observation ring buffer used for TWAP lookup and interpolation. The deployment is intentionally immutable after construction.
+`JBUniswapV4Hook` is the runtime hook that inspects swaps, quotes the pool and protocol routes, and can override settlement when the protocol path is better. It implements `IGeomeanOracle`, the canonical downstream interface for pool-local TWAP reads. `Oracle` maintains the observation ring buffer used for TWAP lookup and interpolation. The deployment is intentionally immutable after construction.
 
 ## Core invariants
 
@@ -22,7 +22,7 @@
 | --- | --- | --- |
 | `IGeomeanOracle` | External oracle-read interface for downstream packages | Import from this package instead of redeclaring |
 | `JBUniswapV4Hook` | Routing-aware Uniswap V4 hook and settlement override logic | Immutable runtime core |
-| `Oracle` | Observation ring buffer and TWAP interpolation | Quote-critical |
+| `Oracle` | Observation ring buffer and TWAP interpolation | Read by external TWAP consumers (buyback hook) |
 
 ## Trust boundaries
 
@@ -50,12 +50,12 @@ swap involving a project token
 
 This repo does not own the canonical treasury ledger. It owns route comparison and oracle observation state.
 
-Its route comparison is intentionally asymmetric: helper surfaces can be more permissive for offchain inspection, while live routing trusts stricter terminal preview surfaces and ignores buyback-hook metadata-only hints.
+Route comparison trusts terminal preview surfaces and ignores buyback-hook metadata-only hints. The hook has no quote view; integrators quote through Uniswap's V4 Quoter.
 
 ## Security model
 
-- Oracle upkeep and routing are tightly coupled.
-- Warmup behavior matters because low-history pools fall back toward spot pricing.
+- Swaps keep the oracle current, but routing reads no oracle: it swaps the pool itself and quotes sells with `quoteSwap`.
+- Low-history pools give `observe` readers (such as the buyback hook) a short window; they check coverage themselves.
 - Buy issuance relies on `previewPayFor(...)` (or the ruleset weight when the preview mints nothing for the payer and forwards the pay to a hook, as the buyback hook does when it swaps), and sell estimation on `previewCashOutFrom(...)`, in core. A buyer never gets less than minting the whole input, less a rounding margin.
 - Conservative underestimation is part of the safety model. The hook may prefer V4 over a risky Juicebox route.
 - Because the deployment is immutable, constructor mistakes are expensive to fix.

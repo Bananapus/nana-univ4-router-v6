@@ -23,6 +23,7 @@ import {
     MockJBPrices_RegressionGaps
 } from "../TestRegressionGaps.sol";
 import {IJBTokens, IJBPrices, IJBDirectory} from "../../src/JBUniswapV4Hook.sol";
+import {OracleQuote} from "../utils/OracleQuote.sol";
 
 contract ExtremeDecimalsERC20 is MockERC20 {
     constructor(string memory name, string memory symbol) MockERC20(name, symbol) {}
@@ -131,7 +132,7 @@ contract RegressionBadDecimalsTest is Test {
     }
 
     function test_buySideFallbackWithExtremeDecimalsDegradesToV4() public {
-        uint256 v4Quote = hook.estimateUniswapOutput(id, key, 1 ether, address(paymentToken) < address(projectToken));
+        uint256 v4Quote = OracleQuote.quote(hook, manager, key, 1 ether, address(paymentToken) < address(projectToken));
         assertGt(v4Quote, 0, "the V4 path should be otherwise live");
 
         assertEq(

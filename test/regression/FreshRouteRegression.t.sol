@@ -10,6 +10,7 @@ import {JBPayHookSpecification} from "@bananapus/core-v6/src/structs/JBPayHookSp
 
 import {JuiceboxHookTest} from "../JBUniswapV4Hook.t.sol";
 import {MockERC20} from "../mock/MockERC20.sol";
+import {OracleQuote} from "../utils/OracleQuote.sol";
 
 contract PreviewRevertingLiveSellTerminal {
     uint256 internal immutable _liveCashOutAmount;
@@ -90,7 +91,7 @@ contract PreviewRevertingLiveSellTerminal {
 contract RegressionFreshRegression is JuiceboxHookTest {
     function test_largeBuyOnLinearQuoteGetsAtLeastTheJBOutput() public {
         uint256 amountIn = 5 ether;
-        uint256 quotedV4Out = hook.estimateUniswapOutput(id, key, amountIn, false);
+        uint256 quotedV4Out = OracleQuote.quote(hook, manager, key, amountIn, false);
         uint256 jbLiveOut = quotedV4Out - 1;
 
         mockJBMultiTerminal.setPayReturnAmount(jbLiveOut);
