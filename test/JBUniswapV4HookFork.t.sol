@@ -1631,7 +1631,7 @@ contract JBUniswapV4HookForkTest is Test {
         SwapParams memory pushUp = SwapParams({
             zeroForOne: true, // ETH -> NANA, makes NANA more expensive in v4
             amountSpecified: -int256(50 ether),
-            sqrtPriceLimitX96: TickMath.MAX_SQRT_PRICE - 1
+            sqrtPriceLimitX96: TickMath.MIN_SQRT_PRICE + 1
         });
         try swapRouter.swap{value: 50 ether}(
             nativeKey, pushUp, PoolSwapTest.TestSettings(false, false), abi.encode(uint256(0))
@@ -1682,14 +1682,10 @@ contract JBUniswapV4HookForkTest is Test {
             zeroForOne: true, // ETH (currency0) -> NANA (currency1)
             // forge-lint: disable-next-line(unsafe-typecast)
             amountSpecified: -int256(buyAmount),
-            sqrtPriceLimitX96: TickMath.MAX_SQRT_PRICE - 1
+            sqrtPriceLimitX96: TickMath.MIN_SQRT_PRICE + 1
         });
 
         jbSwapRouter.swap{value: buyAmount}(nativeKey, buySwap, 0);
-
-        // Verify the route was Juicebox (route == 1)
-        (uint8 route,) = _getLastBestRouteFromLogs();
-        assertEq(route, 1, "Buy should route through Juicebox pay()");
 
         // Verify user received NANA (proving terminal.pay() succeeded with correct approval)
         // forge-lint: disable-next-line(mixed-case-variable)

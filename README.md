@@ -106,7 +106,7 @@ script/
 ## Risks and notes
 
 - early pools may not have enough oracle history, which weakens TWAP-based protection
-- buy-side routing trusts `previewPayFor(...)` for live route decisions when a terminal is available
+- buys fill from the pool while its output after fees beats issuance and mint the rest, so a buyer gets at least minting the whole input; the issuance rate comes from `previewPayFor(...)`, or the ruleset weight when the preview mints nothing for the payer and forwards the pay to a hook
 - sell-side routing is only for registered project ERC-20s; hook-held internal credits are claimed into the ERC-20
   before the hook checks exact-input settlement
 - sell-side cash-out previews must be locally settleable by the selected terminal; aggregate project surplus alone does

@@ -553,7 +553,7 @@ contract TwoWayRoutingTest is Test {
 
         // Set expectEmit right before the swap call
         vm.expectEmit(true, false, false, false);
-        emit JBUniswapV4Hook.BestRouteSelected(id, 1, 0, address(0));
+        emit JBUniswapV4Hook.RouteSelected(id, true, 0, address(0));
 
         jbSwapRouter.swap(key, params, 0);
 
@@ -732,7 +732,7 @@ contract TwoWayRoutingTest is Test {
             SwapParams({zeroForOne: true, amountSpecified: -1 ether, sqrtPriceLimitX96: TickMath.MIN_SQRT_PRICE + 1});
 
         vm.expectEmit(true, false, false, false);
-        emit JBUniswapV4Hook.BestRouteSelected(ethId, 1, 0, address(0));
+        emit JBUniswapV4Hook.RouteSelected(ethId, true, 0, address(0));
 
         jbSwapRouter.swap{value: 1 ether}(ethKey, params, 0);
 
@@ -828,8 +828,8 @@ contract TwoWayRoutingTest is Test {
     /// Given both currency0 and currency1 are JB project tokens (projects 123 and 456)
     /// And currency1's project has a very high weight (10_000e18)
     /// When the user swaps zeroForOne (selling currency0 for currency1)
-    /// Then the buy-side project (currency1's project) should be used for routing
-    /// And a BestRouteSelected event should be emitted confirming buy-side priority
+    /// Then paying project 456 mints more than cashing out project 123 reclaims, so the swap is routed as a buy
+    /// And project 456 is paid
     function test_TwoWay_DualJBTokenPool_BuySidePriority() public {
         // Create two new tokens, both will be JB project tokens
         MockERC20 dualToken0 = new MockERC20("DualJB0", "DJB0");
@@ -887,26 +887,19 @@ contract TwoWayRoutingTest is Test {
         PoolId dualId = dualKey.toId();
 
         // Swap zeroForOne: selling currency0 (dualToken0) for currency1 (dualToken1)
-        // tokenOut = dualToken1 = projectB's token
-        // Per source lines 650-660, buy-side project (projectB) gets priority
         dualToken0.approve(address(jbSwapRouter), 1 ether);
 
         SwapParams memory params =
             SwapParams({zeroForOne: true, amountSpecified: -1 ether, sqrtPriceLimitX96: TickMath.MIN_SQRT_PRICE + 1});
 
-        // BestRouteSelected should be emitted - JB wins because projectB has weight 10_000e18
-        // The buy-side project (projectB = 456) is used for routing, not the sell-side (projectA = 123)
+        // The buy split mints the input the pool leg leaves
         vm.expectEmit(true, false, false, false);
-        emit JBUniswapV4Hook.BestRouteSelected(dualId, 1, 0, address(0));
+        emit JBUniswapV4Hook.RouteSelected(dualId, true, 0, address(0));
 
         jbSwapRouter.swap(dualKey, params, 0);
 
-        // Verify JB terminal was called with the buy-side project (projectB)
-        assertEq(
-            mockJBMultiTerminal.lastProjectId(),
-            projectB,
-            "Should route using buy-side project (456), not sell-side (123)"
-        );
+        // The buy-side project (projectB = 456) is paid, not the sell-side one (123)
+        assertEq(mockJBMultiTerminal.lastProjectId(), projectB, "Should route using buy-side project (456)");
     }
 
     // ============================================
