@@ -30,6 +30,7 @@ import {IJBTerminal} from "@bananapus/core-v6/src/interfaces/IJBTerminal.sol";
 import {JBRuleset} from "@bananapus/core-v6/src/structs/JBRuleset.sol";
 import {JBCashOutHookSpecification} from "@bananapus/core-v6/src/structs/JBCashOutHookSpecification.sol";
 import {JBPayHookSpecification} from "@bananapus/core-v6/src/structs/JBPayHookSpecification.sol";
+import {OracleQuote} from "../utils/OracleQuote.sol";
 
 contract RevertingSellPreviewTerminal {
     uint256 public lastProjectId;
@@ -217,7 +218,7 @@ contract RegressionSellPreviewFallbackTest is Test {
     function test_sellSidePreviewRevertForcesWorseV4Route() public {
         uint256 amountIn = 1 ether;
 
-        uint256 v4Estimate = hook.estimateUniswapOutput(key.toId(), key, amountIn, false);
+        uint256 v4Estimate = OracleQuote.quote(hook, manager, key, amountIn, false);
         uint256 quotedSellOutput = hook.calculateExpectedOutputFromSelling(
             123, amountIn, address(paymentToken), IJBTerminal(address(mockTerminal))
         );

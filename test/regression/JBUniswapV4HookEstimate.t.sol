@@ -27,6 +27,7 @@ import {
     MockJBTerminalStore_RegressionGaps
 } from "../TestRegressionGaps.sol";
 import {IJBTokens, IJBPrices, IJBDirectory} from "../../src/JBUniswapV4Hook.sol";
+import {OracleQuote} from "../utils/OracleQuote.sol";
 
 contract RevertingDecimalsERC20 is MockERC20 {
     constructor(string memory name, string memory symbol) MockERC20(name, symbol) {}
@@ -163,7 +164,7 @@ contract JBUniswapV4HookDecimalsTest is Test {
         assertGt(jbEstimate, 0, "Estimate should succeed using default 18 decimals");
 
         // V4 pool still produces a valid quote.
-        uint256 v4Quote = hook.estimateUniswapOutput({poolId: id, key: key, amountIn: amountIn, zeroForOne: zeroForOne});
+        uint256 v4Quote = OracleQuote.quote(hook, manager, key, amountIn, zeroForOne);
         assertGt(v4Quote, 0, "V4 pool should produce a nonzero quote");
 
         // Execute the swap — routing based on JB vs V4 comparison.
@@ -295,7 +296,7 @@ contract JBUniswapV4HookProtocolFeeTest is Test {
         );
     }
 
-    /// @notice Verify that estimateUniswapOutput correctly includes the protocol fee.
+    /// @notice A pool quote net of the protocol fee stays below the JB quote.
     /// With the fix, the V4 quote should be lower than the JB quote, so routing
     /// correctly prefers the JB terminal pay path.
     function test_V4Quote_IncludesProtocolFee_AndRoutesToBetterJBPath() public {
@@ -303,7 +304,7 @@ contract JBUniswapV4HookProtocolFeeTest is Test {
 
         uint256 hookQuote = hook.calculateExpectedTokensWithCurrency(456, address(paymentToken), amountIn);
         uint256 actualTerminalMint = mockJBMultiTerminal.overridePayReturnAmount();
-        uint256 v4Quote = hook.estimateUniswapOutput(id, key, amountIn, zeroForOne);
+        uint256 v4Quote = OracleQuote.quote(hook, manager, key, amountIn, zeroForOne);
 
         // With the fix: V4 quote now correctly includes protocol fee + LP fee,
         // so the V4 quote should be LOWER than the JB quote.
@@ -322,39 +323,5 @@ contract JBUniswapV4HookProtocolFeeTest is Test {
 
         // With the fix, routing should now correctly go to the JB terminal
         assertEq(mockJBMultiTerminal.lastProjectId(), 456, "Should route through Juicebox terminal (better path)");
-    }
-
-    /// @notice Verify that the protocol fee reduces the estimate compared to LP-fee-only.
-    /// This test compares estimates with and without protocol fees on the same pool configuration.
-    function test_ProtocolFee_ReducesEstimate() public {
-        uint256 amountIn = 1 ether;
-
-        // Get the current estimate (with protocol fee set to 1000 pips = 0.1%)
-        uint256 estimateWithProtocolFee = hook.estimateUniswapOutput(id, key, amountIn, zeroForOne);
-
-        // Remove the protocol fee
-        manager.setProtocolFee(key, 0);
-
-        // Get the estimate without protocol fee
-        uint256 estimateWithoutProtocolFee = hook.estimateUniswapOutput(id, key, amountIn, zeroForOne);
-
-        // The estimate with protocol fee should be strictly less than without
-        assertLt(estimateWithProtocolFee, estimateWithoutProtocolFee, "Protocol fee should reduce the output estimate");
-
-        // Verify the difference is approximately correct.
-        // LP fee = 3000 pips (0.3%), protocol fee = 1000 pips (0.1%)
-        // Combined swap fee = protocolFee + lpFee - (protocolFee * lpFee / 1e6)
-        //                   = 1000 + 3000 - (1000 * 3000 / 1e6) = 3997 pips
-        // Without protocol fee: output = amountIn * (1 - 3000/1e6) = 0.997 * amountIn
-        // With protocol fee:    output = amountIn * (1 - 3997/1e6) = 0.996003 * amountIn
-        // Difference should be about 0.000997 * amountIn
-        uint256 difference = estimateWithoutProtocolFee - estimateWithProtocolFee;
-        uint256 expectedDifference = amountIn * 997 / 1_000_000; // 0.0997% of input
-        assertApproxEqAbs(
-            difference,
-            expectedDifference,
-            1, // Allow 1 wei rounding
-            "Difference should match expected protocol fee impact"
-        );
     }
 }

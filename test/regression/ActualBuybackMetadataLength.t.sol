@@ -12,6 +12,7 @@ import {TickMath} from "@uniswap/v4-core/src/libraries/TickMath.sol";
 
 import {JuiceboxHookTest} from "../JBUniswapV4Hook.t.sol";
 import {MockERC20} from "../mock/MockERC20.sol";
+import {OracleQuote} from "../utils/OracleQuote.sol";
 
 contract ActualBuybackMetadataLengthTerminal {
     uint256 internal immutable _liveCashOutAmount;
@@ -104,7 +105,7 @@ contract ActualBuybackMetadataLengthTest is JuiceboxHookTest {
             outputToken: address(token1),
             terminal: IJBTerminal(address(terminal))
         });
-        uint256 v4Quote = hook.estimateUniswapOutput({poolId: id, key: key, amountIn: amountIn, zeroForOne: true});
+        uint256 v4Quote = OracleQuote.quote(hook, manager, key, amountIn, true);
 
         assertEq(preview, 0, "router ignores current 8-word buyback metadata");
         assertLt(v4Quote, liveCashOutAmount, "direct JB output would beat V4");

@@ -23,6 +23,7 @@ import {JBSplits} from "@bananapus/core-v6/src/JBSplits.sol";
 import {JBTerminalStore} from "@bananapus/core-v6/src/JBTerminalStore.sol";
 import {JBTokens} from "@bananapus/core-v6/src/JBTokens.sol";
 import {JBConstants} from "@bananapus/core-v6/src/libraries/JBConstants.sol";
+import {JBMetadataResolver} from "@bananapus/core-v6/src/libraries/JBMetadataResolver.sol";
 import {JBAccountingContext} from "@bananapus/core-v6/src/structs/JBAccountingContext.sol";
 import {JBAfterPayRecordedContext} from "@bananapus/core-v6/src/structs/JBAfterPayRecordedContext.sol";
 import {JBBeforeCashOutRecordedContext} from "@bananapus/core-v6/src/structs/JBBeforeCashOutRecordedContext.sol";
@@ -44,6 +45,7 @@ import {IPoolManager} from "@uniswap/v4-core/src/interfaces/IPoolManager.sol";
 import {IUnlockCallback} from "@uniswap/v4-core/src/interfaces/callback/IUnlockCallback.sol";
 import {FullMath} from "@uniswap/v4-core/src/libraries/FullMath.sol";
 import {Hooks} from "@uniswap/v4-core/src/libraries/Hooks.sol";
+import {LPFeeLibrary} from "@uniswap/v4-core/src/libraries/LPFeeLibrary.sol";
 import {StateLibrary} from "@uniswap/v4-core/src/libraries/StateLibrary.sol";
 import {TickMath} from "@uniswap/v4-core/src/libraries/TickMath.sol";
 import {PoolModifyLiquidityTest} from "@uniswap/v4-core/src/test/PoolModifyLiquidityTest.sol";
@@ -195,8 +197,100 @@ contract BuybackShapedHook is IJBRulesetDataHook, IJBPayHook {
     }
 }
 
-/// @notice Buys of a project token fill from the pool while it beats the payer's issuance rate and mint the rest,
-/// against real Juicebox core contracts and a real PoolManager.
+/// @notice Exact-input swaps in a router's order: swap first, then settle what was used and take the output, so the
+/// PoolManager holds none of the input during the swap.
+contract SplitSellSwapper is IUnlockCallback {
+    IPoolManager internal immutable PM;
+
+    constructor(IPoolManager pm) {
+        PM = pm;
+    }
+
+    receive() external payable {}
+
+    function swap(
+        PoolKey calldata key,
+        bool zeroForOne,
+        uint256 amountIn,
+        bytes calldata hookData
+    )
+        external
+        returns (uint256 used, uint256 out)
+    {
+        (used, out) =
+            abi.decode(PM.unlock(abi.encode(key, zeroForOne, amountIn, hookData, msg.sender)), (uint256, uint256));
+    }
+
+    function unlockCallback(bytes calldata data) external returns (bytes memory) {
+        (PoolKey memory key, bool zeroForOne, uint256 amountIn, bytes memory hookData, address payer) =
+            abi.decode(data, (PoolKey, bool, uint256, bytes, address));
+        BalanceDelta d = PM.swap({
+            key: key,
+            params: SwapParams({
+                zeroForOne: zeroForOne,
+                // forge-lint: disable-next-line(unsafe-typecast)
+                amountSpecified: -int256(amountIn),
+                sqrtPriceLimitX96: zeroForOne ? TickMath.MIN_SQRT_PRICE + 1 : TickMath.MAX_SQRT_PRICE - 1
+            }),
+            hookData: hookData
+        });
+        uint256 used = uint256(uint128(-(zeroForOne ? d.amount0() : d.amount1())));
+        uint256 out = uint256(uint128(zeroForOne ? d.amount1() : d.amount0()));
+        Currency input = zeroForOne ? key.currency0 : key.currency1;
+        PM.sync(input);
+        require(IERC20(Currency.unwrap(input)).transferFrom(payer, address(PM), used));
+        PM.settle();
+        PM.take({currency: zeroForOne ? key.currency1 : key.currency0, to: payer, amount: out});
+        return abi.encode(used, out);
+    }
+}
+
+/// @notice A cash-out data hook that names a buyback registry and accepts only cash-outs whose metadata tells that
+/// registry to skip its pool sale.
+contract SkipCheckingDataHook is IJBRulesetDataHook {
+    address public constant BUYBACK_HOOK = address(0x7E61);
+
+    function beforePayRecordedWith(JBBeforePayRecordedContext calldata context)
+        external
+        pure
+        returns (uint256 weight, JBPayHookSpecification[] memory hookSpecifications)
+    {
+        return (context.weight, hookSpecifications);
+    }
+
+    function beforeCashOutRecordedWith(JBBeforeCashOutRecordedContext calldata context)
+        external
+        pure
+        returns (uint256, uint256, uint256, uint256, JBCashOutHookSpecification[] memory hookSpecifications)
+    {
+        (bool found, bytes memory data) = JBMetadataResolver.getDataFor({
+            id: JBMetadataResolver.getId({purpose: "cashOut", target: BUYBACK_HOOK}), metadata: context.metadata
+        });
+        require(found, "no skip entry");
+        (uint256 minimum, bool skip) = abi.decode(data, (uint256, bool));
+        require(minimum == 0 && skip, "not a skip");
+        return
+            (
+                context.cashOutTaxRate,
+                context.cashOutCount,
+                context.totalSupply,
+                context.surplus.value,
+                hookSpecifications
+            );
+    }
+
+    function hasMintPermissionFor(uint256, JBRuleset memory, address) external pure returns (bool) {
+        return false;
+    }
+
+    function supportsInterface(bytes4 interfaceId) external pure returns (bool) {
+        return interfaceId == type(IJBRulesetDataHook).interfaceId || interfaceId == type(IERC165).interfaceId;
+    }
+}
+
+/// @notice Buys of a project token fill from the pool while it beats the payer's issuance rate and mint the rest, and
+/// sells fill from the pool while it beats the marginal reclaim rate and cash out the rest, against real Juicebox core
+/// contracts and a real PoolManager.
 contract SplitBuyTest is Test {
     using PoolIdLibrary for PoolKey;
     using StateLibrary for IPoolManager;
@@ -215,6 +309,14 @@ contract SplitBuyTest is Test {
     SplitBuySwapper internal swapper;
     PoolModifyLiquidityTest internal liquidityRouter;
     BuybackShapedHook internal dataHook;
+    SplitSellSwapper internal sellSwapper;
+
+    /// @dev The cash-out tax rate and cash-out data hook `_launch` gives a project.
+    uint16 internal cashOutTaxRate;
+    address internal cashOutDataHook;
+
+    /// @dev Whether `_sellSetup` launches the sold project as project 1, the fee project.
+    bool internal sellFeeProject;
 
     receive() external payable {}
 
@@ -254,6 +356,7 @@ contract SplitBuyTest is Test {
         swapper = new SplitBuySwapper(manager);
         liquidityRouter = new PoolModifyLiquidityTest(manager);
         dataHook = new BuybackShapedHook(manager, controller);
+        sellSwapper = new SplitSellSwapper(manager);
 
         uint160 flags = uint160(
             Hooks.AFTER_INITIALIZE_FLAG | Hooks.BEFORE_SWAP_FLAG | Hooks.AFTER_SWAP_FLAG
@@ -290,7 +393,7 @@ contract SplitBuyTest is Test {
         rulesetConfigs[0].approvalHook = IJBRulesetApprovalHook(address(0));
         rulesetConfigs[0].metadata = JBRulesetMetadata({
             reservedPercent: reservedPercent,
-            cashOutTaxRate: 0,
+            cashOutTaxRate: cashOutTaxRate,
             // forge-lint: disable-next-line(unsafe-typecast)
             baseCurrency: uint32(uint160(acceptedToken)),
             pausePay: false,
@@ -306,8 +409,8 @@ contract SplitBuyTest is Test {
             holdFees: false,
             scopeCashOutsToLocalBalances: true,
             useDataHookForPay: withDataHook,
-            useDataHookForCashOut: false,
-            dataHook: withDataHook ? address(dataHook) : address(0),
+            useDataHookForCashOut: cashOutDataHook != address(0),
+            dataHook: withDataHook ? address(dataHook) : cashOutDataHook,
             metadata: 0
         });
         rulesetConfigs[0].splitGroups = new JBSplitGroup[](0);
@@ -481,6 +584,38 @@ contract SplitBuyTest is Test {
         assertGe(priceX192 * 99, uint256(5_000_000) << 192, "never past it");
     }
 
+    /// @notice A dynamic-fee pool's key carries the `DYNAMIC_FEE_FLAG` sentinel, not a fee; the issuance limit uses the
+    /// LP fee in slot0. A split buy on it matches a static pool with that fee, both fresh (0) and once set (1%).
+    function test_split_dynamicFeePool_matchesStaticPool() public {
+        _assertDynamicMatchesStatic({lpFee: 0});
+        _assertDynamicMatchesStatic({lpFee: 10_000});
+    }
+
+    function _assertDynamicMatchesStatic(uint24 lpFee) internal {
+        (uint256 staticId, address staticToken) = _launch(JBConstants.NATIVE_TOKEN, 18, WEIGHT, 0, false);
+        (, address dynamicToken) = _launch(JBConstants.NATIVE_TOKEN, 18, WEIGHT, 0, false);
+        uint256 rate = _mintAll(staticId, JBConstants.NATIVE_TOKEN, 1e18);
+        (PoolKey memory staticKey,) = _pool(address(0), staticToken, rate, 130, 1e20, 10, lpFee);
+        (PoolKey memory dynamicKey,) =
+            _pool(address(0), dynamicToken, rate, 130, 1e20, 10, LPFeeLibrary.DYNAMIC_FEE_FLAG);
+        if (lpFee != 0) {
+            vm.prank(address(hook));
+            manager.updateDynamicLPFee(dynamicKey, lpFee);
+        }
+
+        uint256 staticSupply = _supply(staticToken);
+        uint256 dynamicSupply = _supply(dynamicToken);
+        uint256 staticOut = _buy(staticKey, true, 1 ether, _extreme(true), "");
+        uint256 dynamicOut = _buy(dynamicKey, true, 1 ether, _extreme(true), "");
+
+        assertGt(_supply(staticToken) - staticSupply, 0, "split, not pool-only");
+        assertEq(dynamicOut, staticOut, "same output");
+        assertEq(_supply(dynamicToken) - dynamicSupply, _supply(staticToken) - staticSupply, "same mint leg");
+        (uint160 staticPrice,,,) = manager.getSlot0(staticKey.toId());
+        (uint160 dynamicPrice,,,) = manager.getSlot0(dynamicKey.toId());
+        assertEq(dynamicPrice, staticPrice, "same issuance limit");
+    }
+
     /// @notice A caller limit at the fee-free issuance price keeps a plain V4 swap: partial fill, no mint.
     function test_callerLimitAtIssuance_isPlainSwap() public {
         (, address projectToken, PoolKey memory key) = _nativeSetup(0, 130, 1e20);
@@ -637,5 +772,215 @@ contract SplitBuyTest is Test {
         vm.expectRevert();
         swapper.swap(key, zeroForOne, 1, _extreme(zeroForOne), "");
         assertEq(unit.balanceOf(address(this)), balance, "the buyer keeps the input");
+    }
+
+    //*********************************************************************//
+    // ------------------------------ sells ------------------------------ //
+    //*********************************************************************//
+
+    /// @dev A native-ETH project with `taxRate`, 1,000 ETH of surplus and 100M tokens (half held here by the seller,
+    /// half by the LP), so cashing out pays up to 1e-5 ETH per token. Its pool pays `poolPercent`% of that per token at
+    /// the start, with `liquidity` over `halfWidth` tick spacings on each side. Fee 1%, tick spacing 200.
+    function _sellSetup(
+        uint16 taxRate,
+        uint256 poolPercent,
+        uint128 liquidity,
+        int24 halfWidth
+    )
+        internal
+        returns (uint256 projectId, address projectToken, PoolKey memory key)
+    {
+        // Project 1 collects the terminal's fees; the sold project is another one unless `sellFeeProject`.
+        if (!sellFeeProject) _launch(JBConstants.NATIVE_TOKEN, 18, WEIGHT, 0, false);
+        cashOutTaxRate = taxRate;
+        (projectId, projectToken) = _launch(JBConstants.NATIVE_TOKEN, 18, WEIGHT, 0, false);
+        terminal.pay{value: 1000 ether}(projectId, JBConstants.NATIVE_TOKEN, 1000 ether, address(this), 0, "", "");
+        vm.prank(address(controller));
+        tokens.mintFor({holder: address(this), projectId: projectId, count: 5e25});
+        IERC20(projectToken).approve(address(liquidityRouter), type(uint256).max);
+        IERC20(projectToken).approve(address(sellSwapper), type(uint256).max);
+
+        key = PoolKey({
+            currency0: Currency.wrap(address(0)),
+            currency1: Currency.wrap(projectToken),
+            fee: 10_000,
+            tickSpacing: 200,
+            hooks: IHooks(address(hook))
+        });
+        // 1e5 tokens per ETH at 100%.
+        uint160 sqrtPriceX96 = uint160(Math.sqrt((uint256(1e7) / poolPercent) << 192));
+        manager.initialize(key, sqrtPriceX96);
+        int24 tick = TickMath.getTickAtSqrtPrice(sqrtPriceX96) / 200 * 200;
+        liquidityRouter.modifyLiquidity{value: 1e29}(
+            key,
+            ModifyLiquidityParams({
+                tickLower: tick - halfWidth * 200,
+                tickUpper: tick + halfWidth * 200,
+                liquidityDelta: int256(uint256(liquidity)),
+                salt: 0
+            }),
+            ""
+        );
+    }
+
+    function _sell(PoolKey memory key, uint256 amount, bytes memory hookData) internal returns (uint256 out) {
+        (, out) = sellSwapper.swap(key, false, amount, hookData);
+    }
+
+    /// @dev What the same sell gets from the pool alone: the terminal's preview fails, so the hook leaves it to V4.
+    function _poolOnly(PoolKey memory key, uint256 amount) internal returns (uint256 out) {
+        uint256 snap = vm.snapshotState();
+        vm.mockCallRevert(address(terminal), abi.encodeWithSelector(terminal.previewCashOutFrom.selector), "");
+        out = _sell(key, amount, "");
+        vm.clearMockedCalls();
+        vm.revertToState(snap);
+    }
+
+    /// @dev What cashing out the same tokens at the terminal pays.
+    function _reclaimAll(uint256 projectId, uint256 amount) internal returns (uint256 out) {
+        uint256 snap = vm.snapshotState();
+        out = terminal.cashOutTokensOf({
+            holder: address(this),
+            projectId: projectId,
+            cashOutCount: amount,
+            tokenToReclaim: JBConstants.NATIVE_TOKEN,
+            minTokensReclaimed: 0,
+            beneficiary: payable(address(this)),
+            metadata: ""
+        });
+        vm.revertToState(snap);
+    }
+
+    /// @notice A pool that pays more than the marginal reclaim rate fills until it meets it, and the rest cashes out:
+    /// the seller gets more than the pool alone and more than cashing out everything.
+    function test_sell_split() public {
+        (uint256 projectId, address projectToken, PoolKey memory key) = _sellSetup(5000, 60, 1e22, 30);
+        uint256 amount = 1e24;
+        uint256 poolOnly = _poolOnly(key, amount);
+        uint256 reclaimAll = _reclaimAll(projectId, amount);
+        (uint160 priceBefore,,,) = manager.getSlot0(key.toId());
+
+        uint256 supply = _supply(projectToken);
+        uint256 out = _sell(key, amount, "");
+        (uint160 priceAfter,,,) = manager.getSlot0(key.toId());
+        assertGt(supply - _supply(projectToken), 0, "cash-out leg");
+        assertGt(priceAfter, priceBefore, "pool leg");
+        assertGt(out, poolOnly, "beats the pool alone");
+        assertGt(out, reclaimAll, "beats cashing out everything");
+        assertGt(
+            IERC20(address(tokens.tokenOf(1))).balanceOf(address(hook)),
+            0,
+            "the fee's project 1 tokens stay in the hook"
+        );
+    }
+
+    /// @notice When the cash-out leg would pay less than selling the same tokens in the pool (a steep 90% tax, whose
+    /// average rate is well under its marginal rate, against a deep pool), the whole sell stays in the pool.
+    function test_sell_cashOutWorseThanPool_staysInPool() public {
+        (uint256 projectId, address projectToken, PoolKey memory key) = _sellSetup(9000, 11, 1e23, 30);
+        uint256 amount = 1e24;
+        uint256 poolOnly = _poolOnly(key, amount);
+        uint256 supply = _supply(projectToken);
+        uint256 out = _sell(key, amount, "");
+        assertEq(_supply(projectToken), supply, "nothing cashed out");
+        assertEq(out, poolOnly, "the pool alone");
+        assertGt(out, _reclaimAll(projectId, amount), "which beats cashing out everything");
+    }
+
+    /// @notice The cash-out leg takes at most what the PoolManager holds of the token (the router settles the input
+    /// after the swap), and the outer swap sells the rest in the pool instead of reverting. A tagged minimum covers
+    /// both parts.
+    function test_sell_inventoryCap_restSellsInPool() public {
+        (, address projectToken, PoolKey memory key) = _sellSetup(0, 50, 1e20, 10);
+        uint256 amount = 1e23;
+        uint256 inventory = IERC20(projectToken).balanceOf(address(manager));
+        assertLt(inventory, amount, "the PoolManager holds less than the sell");
+        uint256 poolOnly = _poolOnly(key, amount);
+
+        uint256 snap = vm.snapshotState();
+        uint256 supply = _supply(projectToken);
+        uint256 out = _sell(key, amount, "");
+        assertEq(supply - _supply(projectToken), inventory, "cashes out what the PoolManager holds");
+        assertGt(out, poolOnly, "beats the pool alone");
+        vm.revertToState(snap);
+
+        vm.expectRevert();
+        _sell(key, amount, abi.encodePacked(JBUniswapV4HookData.TAG, abi.encode(out + 1)));
+        assertEq(
+            _sell(key, amount, abi.encodePacked(JBUniswapV4HookData.TAG, abi.encode(out))),
+            out,
+            "a minimum equal to the total passes"
+        );
+    }
+
+    /// @notice The cash-out leg tells the buyback registry a data hook names to skip its pool sale, which could not
+    /// unlock the PoolManager inside this swap.
+    function test_sell_cashOutSkipsBuybackSale() public {
+        cashOutDataHook = address(new SkipCheckingDataHook());
+        (uint256 projectId, address projectToken, PoolKey memory key) = _sellSetup(0, 50, 1e22, 10);
+
+        vm.expectRevert("no skip entry");
+        _reclaimAll(projectId, 1e22);
+
+        uint256 supply = _supply(projectToken);
+        _sell(key, 1e22, "");
+        assertEq(supply - _supply(projectToken), 1e22, "all cashed out");
+    }
+
+    /// @notice Sells of the fee project's token stay in the pool: its cash-out fee would mint its token back to the
+    /// hook mid-sell.
+    function test_sell_feeProject_staysInPool() public {
+        sellFeeProject = true;
+        (uint256 projectId, address projectToken, PoolKey memory key) = _sellSetup(5000, 60, 1e22, 30);
+        assertEq(projectId, 1, "the fee project");
+        uint256 poolOnly = _poolOnly(key, 1e24);
+        uint256 supply = _supply(projectToken);
+        assertEq(_sell(key, 1e24, ""), poolOnly, "the pool alone");
+        assertEq(_supply(projectToken), supply, "nothing cashed out");
+    }
+
+    /// @notice Cases where the reclaim curve's rounding makes the marginal-rate split worse than cashing out everything
+    /// (by about 108 ppm), or than a floor derived from it (which used to revert): the exact comparison picks the best,
+    /// and cashing out everything counts when the PoolManager holds the whole input.
+    function test_sell_reclaimRounding_picksBest() public {
+        _assertSellBest(5000, 50, 214_749_614_204_962_798_835_619, 760_000e18);
+        _assertSellBest(5000, 51, 1e21, 1e24);
+    }
+
+    function _assertSellBest(uint16 taxRate, uint256 poolPercent, uint128 liquidity, uint256 amount) internal {
+        uint256 snap = vm.snapshotState();
+        (uint256 projectId, address projectToken, PoolKey memory key) = _sellSetup(taxRate, poolPercent, liquidity, 30);
+        uint256 inventory = IERC20(projectToken).balanceOf(address(manager));
+        uint256 poolOnly = _poolOnly(key, amount);
+        uint256 reclaimAll = _reclaimAll(projectId, amount);
+        uint256 out = _sell(key, amount, "");
+        assertGe(out, poolOnly, "never below the pool alone");
+        if (amount <= inventory) assertGe(out, reclaimAll, "never below cashing out everything");
+        vm.revertToState(snap);
+    }
+
+    /// @notice Fuzz: across tax rates, pool prices, liquidity and sizes, a sell never gets less than the pool alone,
+    /// and never less than cashing out everything when the PoolManager holds the whole input.
+    function testFuzz_sell_neverBelowPoolOrReclaim(
+        uint16 taxRate,
+        uint256 poolPercent,
+        uint128 liquidity,
+        uint256 amount
+    )
+        public
+    {
+        taxRate = uint16(bound(taxRate, 0, 10_000));
+        poolPercent = bound(poolPercent, 1, 1000);
+        liquidity = uint128(bound(liquidity, 1e15, 1e23));
+        amount = bound(amount, 1e9, 1e25);
+
+        (uint256 projectId, address projectToken, PoolKey memory key) = _sellSetup(taxRate, poolPercent, liquidity, 30);
+        uint256 inventory = IERC20(projectToken).balanceOf(address(manager));
+        uint256 poolOnly = _poolOnly(key, amount);
+        uint256 reclaimAll = _reclaimAll(projectId, amount);
+
+        uint256 out = _sell(key, amount, "");
+        assertGe(out, poolOnly, "never below the pool alone");
+        if (amount <= inventory) assertGe(out, reclaimAll, "never below cashing out everything");
     }
 }

@@ -58,6 +58,7 @@ import {JBCashOutHookSpecification} from "@bananapus/core-v6/src/structs/JBCashO
 import {JBPayHookSpecification} from "@bananapus/core-v6/src/structs/JBPayHookSpecification.sol";
 import {IPermit2} from "@uniswap/permit2/src/interfaces/IPermit2.sol";
 import {IERC165} from "@openzeppelin/contracts/utils/introspection/IERC165.sol";
+import {OracleQuote} from "./utils/OracleQuote.sol";
 
 contract ZeroPreviewCashOutDataHook is IJBRulesetDataHook {
     function beforeCashOutRecordedWith(JBBeforeCashOutRecordedContext calldata context)
@@ -370,17 +371,10 @@ contract JBUniswapV4HookForkTest is Test {
         // Determine zeroForOne based on token ordering: we want WETH -> NANA
         bool zeroForOne = Currency.unwrap(key.currency0) == WETH;
 
-        try hook.estimateUniswapOutput(id, key, 1 ether, zeroForOne) returns (uint256 estimatedOut) {
+        {
+            uint256 estimatedOut = OracleQuote.quote(hook, manager, key, 1 ether, zeroForOne);
             // Should return positive value (may be 0 if pool has no liquidity)
             assertTrue(estimatedOut >= 0, "Should estimate output (may be 0 for empty pool)");
-        } catch Error(string memory reason) {
-            // Estimation may fail if pool has issues (no observations, invalid state)
-            console.log("Uniswap output estimation failed:", reason);
-            // This is acceptable - pool may not have enough TWAP data yet
-        } catch (bytes memory) {
-            // Low-level revert (e.g., division by zero, arithmetic overflow)
-            console.log("Uniswap output estimation reverted with low-level error");
-            // This is acceptable - pool state may be invalid or calculations may overflow
         }
     }
 
@@ -397,10 +391,9 @@ contract JBUniswapV4HookForkTest is Test {
 
         // Get v4 output estimate — WETH -> NANA direction
         bool zeroForOne = Currency.unwrap(key.currency0) == WETH;
-        try hook.estimateUniswapOutput(id, key, testAmount, zeroForOne) returns (uint256 output) {
+        {
+            uint256 output = OracleQuote.quote(hook, manager, key, testAmount, zeroForOne);
             v4Output = output;
-        } catch {
-            v4Output = 0;
         }
 
         // Try to get Juicebox output (if we can find a project)
@@ -435,10 +428,9 @@ contract JBUniswapV4HookForkTest is Test {
 
         // V4 estimate: selling NANA for WETH
         bool zeroForOneNanaToWeth = Currency.unwrap(key.currency0) == NANA;
-        try hook.estimateUniswapOutput(id, key, testAmount, zeroForOneNanaToWeth) returns (uint256 output) {
+        {
+            uint256 output = OracleQuote.quote(hook, manager, key, testAmount, zeroForOneNanaToWeth);
             v4Output = output;
-        } catch {
-            v4Output = 0;
         }
 
         // Juicebox sell-path output (receive WETH when redeeming NANA)
@@ -531,7 +523,7 @@ contract JBUniswapV4HookForkTest is Test {
     // =========================
 
     function _bestRouteSelectedSig() private pure returns (bytes32) {
-        return keccak256("BestRouteSelected(bytes32,uint8,uint256,address)");
+        return keccak256("RouteSelected(bytes32,bool,uint256,address)");
     }
 
     function _getLastBestRouteFromLogs() private view returns (uint8 routeType, uint256 expectedTokens) {
@@ -614,13 +606,12 @@ contract JBUniswapV4HookForkTest is Test {
     }
 
     function _measureDriftBpsForTrade(int24 tickSpacing, uint256 amountIn) private returns (uint256 driftBps) {
-        (PoolKey memory shallowKey, PoolId shallowId) = _createShallowForkPool(tickSpacing);
-        return _measureDriftBpsForTradeOnPool(shallowKey, shallowId, amountIn);
+        (PoolKey memory shallowKey,) = _createShallowForkPool(tickSpacing);
+        return _measureDriftBpsForTradeOnPool(shallowKey, amountIn);
     }
 
     function _measureDriftBpsForTradeOnPool(
         PoolKey memory shallowKey,
-        PoolId shallowId,
         uint256 amountIn
     )
         private
@@ -628,7 +619,7 @@ contract JBUniswapV4HookForkTest is Test {
     {
         bool wethToNana = Currency.unwrap(shallowKey.currency0) == WETH;
 
-        uint256 quote = hook.estimateUniswapOutput(shallowId, shallowKey, amountIn, wethToNana);
+        uint256 quote = OracleQuote.quote(hook, manager, shallowKey, amountIn, wethToNana);
         uint256 actual = _actualV4Output(shallowKey, amountIn, wethToNana);
 
         assertGt(quote, 0, "fork quote should be live");
@@ -647,26 +638,26 @@ contract JBUniswapV4HookForkTest is Test {
     }
 
     function testFork_V4LinearQuoteDriftSweep() public {
-        (PoolKey memory shallowKey, PoolId shallowId) = _createShallowForkPool(120);
+        (PoolKey memory shallowKey,) = _createShallowForkPool(120);
         uint256 snapshot = vm.snapshotState();
 
-        uint256 driftAtPointOne = _measureDriftBpsForTradeOnPool(shallowKey, shallowId, 0.1 ether);
+        uint256 driftAtPointOne = _measureDriftBpsForTradeOnPool(shallowKey, 0.1 ether);
         vm.revertToState(snapshot);
         snapshot = vm.snapshotState();
 
-        uint256 driftAtHalf = _measureDriftBpsForTradeOnPool(shallowKey, shallowId, 0.5 ether);
+        uint256 driftAtHalf = _measureDriftBpsForTradeOnPool(shallowKey, 0.5 ether);
         vm.revertToState(snapshot);
         snapshot = vm.snapshotState();
 
-        uint256 driftAtOne = _measureDriftBpsForTradeOnPool(shallowKey, shallowId, 1 ether);
+        uint256 driftAtOne = _measureDriftBpsForTradeOnPool(shallowKey, 1 ether);
         vm.revertToState(snapshot);
         snapshot = vm.snapshotState();
 
-        uint256 driftAtTwo = _measureDriftBpsForTradeOnPool(shallowKey, shallowId, 2 ether);
+        uint256 driftAtTwo = _measureDriftBpsForTradeOnPool(shallowKey, 2 ether);
         vm.revertToState(snapshot);
         snapshot = vm.snapshotState();
 
-        uint256 driftAtFive = _measureDriftBpsForTradeOnPool(shallowKey, shallowId, 5 ether);
+        uint256 driftAtFive = _measureDriftBpsForTradeOnPool(shallowKey, 5 ether);
 
         emit log_named_uint("drift_bps_at_0.1_eth", driftAtPointOne);
         emit log_named_uint("drift_bps_at_0.5_eth", driftAtHalf);
@@ -815,7 +806,6 @@ contract JBUniswapV4HookForkTest is Test {
             tickSpacing: 120,
             hooks: IHooks(address(hook))
         });
-        PoolId useId = useKey.toId();
 
         // Attempt to re-initialize price to the Juicebox price index
         {
@@ -861,9 +851,10 @@ contract JBUniswapV4HookForkTest is Test {
         uint256 amountIn = 1 ether;
         // Compare expected outputs
         uint256 v4Out = 0;
-        try hook.estimateUniswapOutput(useId, useKey, amountIn, true) returns (uint256 o) {
+        {
+            uint256 o = OracleQuote.quote(hook, manager, useKey, amountIn, true);
             v4Out = o;
-        } catch {}
+        }
 
         uint256 jbOut = 0;
         // JB quote using native ETH (address(0)) as payment token
@@ -995,9 +986,10 @@ contract JBUniswapV4HookForkTest is Test {
         uint256 amountIn = 1000 ether;
 
         uint256 v4Out = 0;
-        try hook.estimateUniswapOutput(useId, useKey, amountIn, nanaIsToken0) returns (uint256 o) {
+        {
+            uint256 o = OracleQuote.quote(hook, manager, useKey, amountIn, nanaIsToken0);
             v4Out = o;
-        } catch {}
+        }
 
         uint256 jbOut = 0;
         // Get terminal for the output token (WETH)
@@ -1077,7 +1069,6 @@ contract JBUniswapV4HookForkTest is Test {
             tickSpacing: 60,
             hooks: IHooks(address(hook))
         });
-        PoolId nativeId = nativeKey.toId();
 
         // Initialize native ETH pool
         manager.initialize(nativeKey, SQRT_PRICE_1_1);
@@ -1110,9 +1101,10 @@ contract JBUniswapV4HookForkTest is Test {
         uint256 buyAmount = 1 ether; // 1 native ETH
 
         uint256 v4Out = 0;
-        try hook.estimateUniswapOutput(nativeId, nativeKey, buyAmount, true) returns (uint256 o) {
+        {
+            uint256 o = OracleQuote.quote(hook, manager, nativeKey, buyAmount, true);
             v4Out = o;
-        } catch {}
+        }
 
         uint256 jbOut = 0;
         // Use native ETH (address(0)) for JB price calculation
@@ -1257,9 +1249,10 @@ contract JBUniswapV4HookForkTest is Test {
         uint256 sellAmount = userNANABalance > 1000 ether ? 1000 ether : userNANABalance / 2;
 
         uint256 v4Out = 0;
-        try hook.estimateUniswapOutput(id, key, sellAmount, nanaIsToken0) returns (uint256 o) {
+        {
+            uint256 o = OracleQuote.quote(hook, manager, key, sellAmount, nanaIsToken0);
             v4Out = o;
-        } catch {}
+        }
 
         // Check for primary terminal that manages WETH (the output token when selling/cashing out)
         IJBTerminal jbTerminal;
@@ -1408,7 +1401,7 @@ contract JBUniswapV4HookForkTest is Test {
         });
 
         // Estimate expected output
-        uint256 expectedOut = hook.estimateUniswapOutput(id, key, amountIn, params.zeroForOne);
+        uint256 expectedOut = OracleQuote.quote(hook, manager, key, amountIn, params.zeroForOne);
         require(expectedOut > 0, "Expected output should be positive");
 
         // Set amountOutMin to 90% of expected (should pass)
@@ -1442,7 +1435,7 @@ contract JBUniswapV4HookForkTest is Test {
         });
 
         // Estimate expected output
-        uint256 expectedOut = hook.estimateUniswapOutput(id, key, amountIn, params.zeroForOne);
+        uint256 expectedOut = OracleQuote.quote(hook, manager, key, amountIn, params.zeroForOne);
         require(expectedOut > 0, "Expected output should be positive");
 
         // Set amountOutMin to 110% of expected (should fail)
@@ -1514,10 +1507,9 @@ contract JBUniswapV4HookForkTest is Test {
 
         // Get expected outputs from both routes
         uint256 v4Out;
-        try hook.estimateUniswapOutput(id, key, sellAmount, nanaIsToken0) returns (uint256 o) {
+        {
+            uint256 o = OracleQuote.quote(hook, manager, key, sellAmount, nanaIsToken0);
             v4Out = o;
-        } catch {
-            v4Out = 0;
         }
 
         // forge-lint: disable-next-line(mixed-case-variable)
@@ -1639,14 +1631,12 @@ contract JBUniswapV4HookForkTest is Test {
             catch {}
 
         // Compare outputs to confirm JB is better
-        PoolId nativeId = nativeKey.toId();
         uint256 buyAmount = 1 ether;
 
         uint256 v4Out;
-        try hook.estimateUniswapOutput(nativeId, nativeKey, buyAmount, true) returns (uint256 o) {
+        {
+            uint256 o = OracleQuote.quote(hook, manager, nativeKey, buyAmount, true);
             v4Out = o;
-        } catch {
-            v4Out = 0;
         }
 
         uint256 jbOut;
@@ -1979,7 +1969,7 @@ contract JBUniswapV4HookForkTest is Test {
         });
         uint256 ethBefore = user.balance;
 
-        // Record logs so we can extract BestRouteSelected event
+        // Record logs so we can extract the RouteSelected event
         vm.recordLogs();
         jbSwapRouter.swap(nativeKey, params, 0);
 
