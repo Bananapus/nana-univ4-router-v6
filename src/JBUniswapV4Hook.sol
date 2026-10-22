@@ -133,6 +133,8 @@ contract JBUniswapV4Hook is BaseHook, IGeomeanOracle {
 
     /// @notice Largest output amount that Uniswap V4 can represent in flash-accounting deltas.
     /// @dev PoolManager settles against signed `int128` deltas, so larger JB outputs must fall back to V4.
+    // Type(int128).max is positive and fits uint128.
+    // forge-lint: disable-next-line(unsafe-typecast)
     uint256 public constant MAX_V4_DELTA = uint256(uint128(type(int128).max));
 
     /// @notice TWAP period in seconds (30 minutes by default)
@@ -506,6 +508,8 @@ contract JBUniswapV4Hook is BaseHook, IGeomeanOracle {
         uint128 liquidity = poolManager.getLiquidity(poolId);
 
         (tickCumulatives, secondsPerLiquidityCumulativeX128s) = observations[poolId].observe({
+            // Oracle timestamps are uint32 and wrap, as in Uniswap V3.
+            // forge-lint: disable-next-line(unsafe-typecast)
             time: uint32(block.timestamp),
             secondsAgos: secondsAgos,
             tick: tick,
@@ -578,6 +582,8 @@ contract JBUniswapV4Hook is BaseHook, IGeomeanOracle {
         PoolId poolId = key.toId();
 
         // Initialize oracle with first observation
+        // Oracle timestamps are uint32 and wrap, as in Uniswap V3.
+        // forge-lint: disable-next-line(unsafe-typecast)
         (uint16 cardinality, uint16 cardinalityNext) = observations[poolId].initialize({time: uint32(block.timestamp)});
 
         states[poolId] = ObservationState({index: 0, cardinality: cardinality, cardinalityNext: cardinalityNext});
@@ -700,6 +706,8 @@ contract JBUniswapV4Hook is BaseHook, IGeomeanOracle {
         address tokenOut = Currency.unwrap(outputCurrency);
 
         // Get input amount (amountSpecified is negative for exact input)
+        // Exact-input swaps have a negative amountSpecified, checked above.
+        // forge-lint: disable-next-line(unsafe-typecast)
         uint256 amountIn = uint256(-params.amountSpecified);
 
         // Check if either token is the ERC-20 that Juicebox has registered for a project.
@@ -750,6 +758,8 @@ contract JBUniswapV4Hook is BaseHook, IGeomeanOracle {
         bool juiceboxBetterThanV4 = address(terminal).code.length > 0 && juiceboxExpectedOutput <= MAX_V4_DELTA
             && juiceboxExpectedOutput > uniswapV4ExpectedTokens;
 
+        // The calls before this event are views, which cannot reenter.
+        // forge-lint: disable-next-item(reentrancy-events)
         emit BestRouteSelected({
             poolId: poolId,
             routeType: juiceboxBetterThanV4 ? 1 : 0,
@@ -759,6 +769,8 @@ contract JBUniswapV4Hook is BaseHook, IGeomeanOracle {
 
         // If Juicebox gives better output, route through Juicebox
         if (juiceboxBetterThanV4) {
+            // The calls before this event are views, which cannot reenter.
+            // forge-lint: disable-next-item(reentrancy-events)
             emit RouteSelected({
                 poolId: poolId, useJuicebox: true, expectedTokens: juiceboxExpectedOutput, caller: msg.sender
             });
@@ -783,6 +795,8 @@ contract JBUniswapV4Hook is BaseHook, IGeomeanOracle {
         }
         // Proceed with normal v4 swap
         // Note: Slippage protection for V4 swaps is enforced in _afterSwap hook
+        // The calls before this event are views, which cannot reenter.
+        // forge-lint: disable-next-item(reentrancy-events)
         emit RouteSelected({
             poolId: poolId, useJuicebox: false, expectedTokens: uniswapV4ExpectedTokens, caller: msg.sender
         });
@@ -1055,13 +1069,17 @@ contract JBUniswapV4Hook is BaseHook, IGeomeanOracle {
             JBRuleset memory, uint256 beneficiaryTokenCount, uint256, JBPayHookSpecification[] memory hookSpecifications
         ) {
             if (beneficiaryTokenCount != 0) return beneficiaryTokenCount;
+
+            // Nothing mints for the payer. If a hook takes the funds, it is a buyback-style swap.
+            bool forwarded;
             for (uint256 i; i < hookSpecifications.length; i++) {
-                // Nothing mints for the payer while a hook takes the funds: a buyback-style swap.
-                if (hookSpecifications[i].amount != 0) {
-                    return calculateExpectedTokensWithCurrency({
+                if (hookSpecifications[i].amount != 0) forwarded = true;
+            }
+            if (forwarded) {
+                return
+                    calculateExpectedTokensWithCurrency({
                         projectId: projectId, paymentToken: token, paymentAmount: amount
                     });
-                }
             }
         } catch {
             // Without a preview there is no trustworthy mint rate, so the buy stays a plain pool swap.
@@ -1108,6 +1126,8 @@ contract JBUniswapV4Hook is BaseHook, IGeomeanOracle {
         secondsAgos[1] = secondsAgo;
 
         (int56[] memory tickCumulatives,) = observations[poolId].observe({
+            // Oracle timestamps are uint32 and wrap, as in Uniswap V3.
+            // forge-lint: disable-next-line(unsafe-typecast)
             time: uint32(block.timestamp),
             secondsAgos: secondsAgos,
             tick: tick,
@@ -1221,6 +1241,8 @@ contract JBUniswapV4Hook is BaseHook, IGeomeanOracle {
         // Write new observation
         (uint16 indexUpdated, uint16 cardinalityUpdated) = observations[poolId].write({
             index: state.index,
+            // Oracle timestamps are uint32 and wrap, as in Uniswap V3.
+            // forge-lint: disable-next-line(unsafe-typecast)
             blockTimestamp: uint32(block.timestamp),
             tick: tick,
             liquidity: liquidity,
@@ -1259,6 +1281,8 @@ contract JBUniswapV4Hook is BaseHook, IGeomeanOracle {
         if (!oldest.initialized) oldest = observations[poolId][0];
         if (!oldest.initialized) return 0;
 
+        // Oracle timestamps are uint32 and wrap, as in Uniswap V3.
+        // forge-lint: disable-next-line(unsafe-typecast)
         uint32 currentTime = uint32(block.timestamp);
         if (oldest.blockTimestamp >= currentTime) return 0;
 
@@ -1340,6 +1364,8 @@ contract JBUniswapV4Hook is BaseHook, IGeomeanOracle {
                 || (zeroForOne ? params.sqrtPriceLimitX96 >= sqrtPriceX96 : params.sqrtPriceLimitX96 <= sqrtPriceX96)
         ) {
             // A plain V4 swap; `_afterSwap` enforces any tagged minimum on its output.
+            // The calls before this event are views, which cannot reenter.
+            // forge-lint: disable-next-item(reentrancy-events)
             emit RouteSelected({poolId: key.toId(), useJuicebox: false, expectedTokens: 0, caller: msg.sender});
             return BeforeSwapDeltaLibrary.ZERO_DELTA;
         }
@@ -1405,6 +1431,8 @@ contract JBUniswapV4Hook is BaseHook, IGeomeanOracle {
             revert JBUniswapV4Hook_InsufficientOutput({amount: amountOut, minimum: amountOutMin});
         }
 
+        // The pool leg skips this hook's callbacks and the mint leg runs under `_routing`, so neither can reenter.
+        // forge-lint: disable-next-item(reentrancy-events)
         emit RouteSelected({
             poolId: key.toId(), useJuicebox: poolAmountIn < amountIn, expectedTokens: amountOut, caller: msg.sender
         });
@@ -1472,6 +1500,8 @@ contract JBUniswapV4Hook is BaseHook, IGeomeanOracle {
 
             // Route the buy through JB. The terminal enforces `amountOutMin` against issued project tokens.
             uint256 payValue = inputCurrency.isAddressZero() ? amountIn : 0;
+            // The terminal is the project's primary terminal from JBDirectory, not caller input.
+            // forge-lint: disable-next-item(arbitrary-send-eth)
             terminal.pay{value: payValue}({
                 projectId: projectId,
                 token: normalizedTokenIn, // Native ETH → JB_NATIVE_TOKEN
@@ -1490,6 +1520,8 @@ contract JBUniswapV4Hook is BaseHook, IGeomeanOracle {
         } else {
             // Route the sell through JB. Native ETH is normalized for terminal accounting.
             address normalizedTokenOut = _normalizeToken(tokenOut);
+            // The hook measures the reclaimed balance itself below.
+            // forge-lint: disable-next-item(unused-return)
             IJBMultiTerminal(address(terminal))
                 .cashOutTokensOf({
                     holder: address(this), // holder (hook owns the JB tokens)
