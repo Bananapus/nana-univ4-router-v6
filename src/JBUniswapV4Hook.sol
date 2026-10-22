@@ -267,13 +267,13 @@ contract JBUniswapV4Hook is BaseHook, IGeomeanOracle {
         // Use the terminal's cash-out preview, which simulates any configured cash-out data hook.
         try IJBCashOutTerminal(address(terminal))
             .previewCashOutFrom({
-            holder: address(this),
-            projectId: projectId,
-            cashOutCount: tokenAmountIn,
-            tokenToReclaim: outputToken,
-            beneficiary: payable(address(this)),
-            metadata: bytes("")
-        }) returns (
+                holder: address(this),
+                projectId: projectId,
+                cashOutCount: tokenAmountIn,
+                tokenToReclaim: outputToken,
+                beneficiary: payable(address(this)),
+                metadata: bytes("")
+            }) returns (
             JBRuleset memory,
             uint256 grossReclaim,
             uint256 cashOutTaxRate,
@@ -1492,14 +1492,14 @@ contract JBUniswapV4Hook is BaseHook, IGeomeanOracle {
             address normalizedTokenOut = _normalizeToken(tokenOut);
             IJBMultiTerminal(address(terminal))
                 .cashOutTokensOf({
-                holder: address(this), // holder (hook owns the JB tokens)
-                projectId: projectId,
-                cashOutCount: amountIn, // Amount of JB tokens to cash out
-                tokenToReclaim: normalizedTokenOut, // Native ETH → JB_NATIVE_TOKEN
-                minTokensReclaimed: amountOutMin, // Minimum tokens required (enforced by JB terminal)
-                beneficiary: payable(address(this)), // beneficiary (hook)
-                metadata: bytes("") // Empty metadata
-            });
+                    holder: address(this), // holder (hook owns the JB tokens)
+                    projectId: projectId,
+                    cashOutCount: amountIn, // Amount of JB tokens to cash out
+                    tokenToReclaim: normalizedTokenOut, // Native ETH → JB_NATIVE_TOKEN
+                    minTokensReclaimed: amountOutMin, // Minimum tokens required (enforced by JB terminal)
+                    beneficiary: payable(address(this)), // beneficiary (hook)
+                    metadata: bytes("") // Empty metadata
+                });
         }
 
         // Measure what the hook actually received. This handles fee-on-transfer tokens and nonstandard terminals whose
