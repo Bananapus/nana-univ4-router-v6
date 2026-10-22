@@ -2,7 +2,7 @@
 
 ## Purpose
 
-`univ4-router-v6` is a Uniswap V4 hook that compares live pool execution against Juicebox-native mint or cash-out routes whenever a project token is traded. It also maintains the TWAP oracle surface that other repos, especially `nana-buyback-hook-v6`, rely on.
+`univ4-router-v6` is a Uniswap V4 hook that fills buys of a project token from the pool while it beats issuance and mints the rest, and compares sells against the project's cash-out route. It also maintains the TWAP oracle surface that other repos, especially `nana-buyback-hook-v6`, rely on.
 
 ## System overview
 
@@ -37,7 +37,10 @@
 ```text
 swap involving a project token
   -> beforeSwap checks whether Juicebox-aware routing applies
-  -> hook estimates the pool route using its oracle
+  -> buy: hook swaps the pool itself up to the issuance limit (price where the pool's output after fees equals
+     issuance), mints the leftover input through the terminal, and settles both legs as one delta;
+     a caller limit at or inside the issuance price (the buyback hook's swaps) stays a plain V4 swap
+  -> sell: hook estimates the pool route using its oracle
   -> hook estimates the Juicebox route from current protocol state
   -> if Juicebox wins, the hook overrides settlement into the protocol path
   -> if the pool wins, the AMM swap continues normally
@@ -54,7 +57,7 @@ Its route comparison is intentionally asymmetric: helper surfaces can be more pe
 
 - Oracle upkeep and routing are tightly coupled.
 - Warmup behavior matters because low-history pools fall back toward spot pricing.
-- Buy and sell estimation rely on `previewPayFor(...)` and `previewCashOutFrom(...)` behavior in core.
+- Buy issuance relies on `previewPayFor(...)` (or the ruleset weight when the preview forwards funds to a pay hook), and sell estimation on `previewCashOutFrom(...)`, in core. A buyer never gets less than minting the whole input, less a rounding margin.
 - Conservative underestimation is part of the safety model. The hook may prefer V4 over a risky Juicebox route.
 - Because the deployment is immutable, constructor mistakes are expensive to fix.
 
@@ -71,6 +74,8 @@ Its route comparison is intentionally asymmetric: helper surfaces can be more pe
   `test/OracleDeepTest.t.sol`
 - preview-to-live routing alignment on buy paths:
   `test/regression/PreviewPayForRouting.t.sol`
+- split buys (pool fill plus mint) and the never-below-mint-all fuzz:
+  `test/SplitBuy.t.sol`, with Base fork evidence in `test/SplitBuyBaseFork.t.sol`
 - sell-path safety under hostile callback conditions:
   `test/regression/SellPathReentrancy.t.sol`
 

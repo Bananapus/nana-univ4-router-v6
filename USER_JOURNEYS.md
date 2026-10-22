@@ -59,9 +59,9 @@ This repo is the UniV4 hook and oracle primitive for Juicebox-aware swaps. It ow
 
 **Main Flow**
 
-1. On buys, compare the pool trade against terminal minting.
+1. On buys, fill from the pool while it beats issuance and mint the rest through the terminal.
 2. On sells, compare the pool trade against the project's cash-out path.
-3. Route through the better option while preserving the hook's slippage and reentrancy protections.
+3. Route sells through the better option, preserving the hook's slippage and reentrancy protections.
 
 **Failure Modes**
 

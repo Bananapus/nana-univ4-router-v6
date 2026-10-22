@@ -12,14 +12,14 @@ This file focuses on the routing, oracle, and composition risks in `JBUniswapV4H
 
 | Priority | Risk | Why it matters | Primary controls |
 |----------|------|----------------|------------------|
-| P0 | Wrong route selection | The hook can send users through a worse path and lose value. | Compare like-for-like previews, keep slippage checks sound, and test routing edges. |
+| P0 | Wrong route selection | The hook can send users through a worse path and lose value. | Buys fill from the pool only while it beats issuance and mint the rest, so a buyer gets at least issuance; sells compare like-for-like previews; slippage checks and routing-edge tests. |
 | P1 | Oracle warmup and low-history fallback | New or thin pools weaken TWAP-based protection and can fall back to spot pricing. | Operational warmup guidance, explicit fallback behavior, and `amountOutMin` enforcement. |
 | P1 | Buyback-hook recursion | Same-pool composition with `nana-buyback-hook-v6` can recurse if the routing guard breaks. | Reentrancy guard plus fail-closed fallback into minting. |
 
 ## 1. Trust assumptions
 
 - **PoolManager and V4 callbacks.** The hook trusts Uniswap V4 callback ordering and signed-delta semantics.
-- **Juicebox preview surfaces.** Buy-side routing trusts `previewPayFor(...)` when available. Sell-side routing trusts `previewCashOutFrom(...)` when available.
+- **Juicebox preview surfaces.** Buy-side routing trusts `previewPayFor(...)` when available, and the larger of that and the ruleset weight when the preview forwards funds to a pay hook (the buy's output floor enforces it). A rate that cannot be priced (for example an accounting currency other than the token-address currency `calculateExpectedTokensWithCurrency` assumes) leaves the buy a plain V4 swap, as in 1.2.0. A pay hook that forwards nothing but mints extra project tokens is not counted, which only lowers the floor. Sell-side routing trusts `previewCashOutFrom(...)` when available.
 - **Project-selected terminals.** The hook trusts the project's primary terminal as the protocol-side execution target.
 - **Oracle readers.** Downstream systems may treat `observe(...)` as a real guardrail even though this is still pool-local oracle state.
 
@@ -32,10 +32,12 @@ This file focuses on the routing, oracle, and composition risks in `JBUniswapV4H
 
 ## 3. Routing risks
 
-- **Three-way routing.** The hook may compare V4 with minting, cash out, or both, depending on which side is the project token.
+- **Buys split between the pool and minting.** A buy swaps the pool itself, limited at the price where the pool's output after LP and protocol fees equals issuance, and mints the leftover input. A caller limit at or inside the fee-free issuance price keeps a plain V4 swap (this is how the buyback hook's swaps stay plain). A swap between two project tokens is routed as a sell of the input.
+- **Buy rounding margin.** The issuance floor is reduced by `issuance / 1e6 + 3` units so a buyback limit derived from a slightly smaller count still reads as inside the issuance price; V4 also rounds each step's input and fee up; on thin liquidity that can eat a pool fill, and the floor on both legs then reverts the swap. A ladder of dust liquidity above issuance can therefore make buys revert (griefing, not loss); paying the terminal directly still works.
+- **Split buys take input from PoolManager reserves.** The mint leg `take`s the leftover input before the caller settles, as the 1.2.0 Juicebox routes do. A PoolManager without reserves of the input currency makes the swap revert, never underpay.
 - **Slippage protection is tag-gated.** A minimum is enforced only when `hookData` begins with `JB_HOOK_DATA_TAG` followed by a 32-byte `amountOutMin` (an explicit zero is a deliberate opt-out). Any other payload — empty, or a generic router's own metadata — carries no minimum: its first word is never mis-decoded as one, so neither a large word (DoS) nor a small word (silent skip) is possible. The hook imposes no floor of its own; an untagged swap proceeds under the caller's own protection (its router min-out or `sqrtPriceLimitX96`).
 - **V4 estimates are approximate.** Large trades can diverge materially from the linearized V4 quote.
-- **Buy-side estimates depend on preview availability.** If the terminal cannot provide a usable preview, the hook intentionally makes the Juicebox buy path ineligible.
+- **Buy-side issuance depends on preview availability.** If the terminal cannot provide a usable preview, the buy stays a plain V4 swap.
 - **Sell-side estimates are conservative.** If `previewCashOutFrom(...)` is unavailable or reverts, or if the selected
   terminal cannot locally settle the previewed gross reclaim plus cash-out hook amounts, the hook intentionally declines
   JB sell routing instead of reviving older static reclaim math.
@@ -50,6 +52,7 @@ This file focuses on the routing, oracle, and composition risks in `JBUniswapV4H
 ## 4. MEV surface
 
 - **Spot-fallback sandwich window.** During warmup, attackers can manipulate spot price to influence route choice.
+- **Buy-side sandwiches stop at issuance.** A front-runner can buy the pool down to the issuance limit and sell back after the buyer, taking pool surplus the buyer would have had. The buyer still gets at least minting the whole input; a router minimum (on the total of both legs) or a tagged `amountOutMin` bounds the loss further. On Base project 7 at block 52,922,000 the best of 30 front-run sizes against a 1 ETH buy took 0.93 ETH, the buyer receiving 7,750 tokens per ETH (issuance) instead of 80,738.
 - **TWAP manipulation cost.** Sustained manipulation is much more expensive than single-block spot manipulation, but it is not impossible.
 
 ## 5. Composition risks
@@ -116,7 +119,7 @@ The hook deliberately ignores buyback hook metadata when choosing between Juiceb
 
 ### 8.7 Price impact ignorance in large V4 trades
 
-`estimateUniswapOutput()` uses a linear TWAP quote without liquidity-depth simulation. For large trades in shallow pools, the actual V4 execution price may be worse than the Juicebox issuance path. A full liquidity-depth check was deemed too complex for the routing hot path. `amountOutMin` slippage protection prevents worst-case execution.
+`estimateUniswapOutput()` uses a linear TWAP quote without liquidity-depth simulation, and live routing uses it only for sells. For large sells in shallow pools, the actual V4 execution price may be worse than the cash-out path. Buys swap the pool itself and need no estimate. A full liquidity-depth check was deemed too complex for the routing hot path. `amountOutMin` slippage protection prevents worst-case execution.
 
 ### 8.8 TWAP warmup best-effort fallback
 
@@ -136,7 +139,7 @@ These are standing properties of the system. They describe behavior that is inte
 
 #### A single observation returns the spot tick as the TWAP
 
-With fewer than two observations, `observeTWAP` returns the current spot tick as the TWAP, and the route comparison may price against it (no tolerance is applied to the comparison itself). A buy-side JB route that leans on this cold-pool spot quote as its `routeMinimum` is only bounded by a tagged `amountOutMin` if the caller supplied one; the mint itself stays ruleset-priced. External callers check the observation count before trusting the TWAP value.
+With fewer than two observations, `observeTWAP` returns the current spot tick as the TWAP, and the route comparison may price against it (no tolerance is applied to the comparison itself). External callers check the observation count before trusting the TWAP value.
 
 #### Partial history uses best-effort TWAP; no history falls back to spot
 
@@ -148,9 +151,9 @@ When retained observations do not cover the preferred window, the hook uses the 
 
 ### Swap routing behavior
 
-#### `_beforeSwap` ignores the caller's `sqrtPriceLimitX96`
+#### `_beforeSwap` uses the caller's `sqrtPriceLimitX96` only to choose a plain buy
 
-When routing through Juicebox, `_beforeSwap` does not apply the caller's `sqrtPriceLimitX96` because no AMM ticks are crossed. For V4-path swaps, the PoolManager applies the limit normally. The hook's own slippage protection via `amountOutMin` governs the Juicebox path.
+On buys, a caller limit at or inside the fee-free issuance price keeps a plain V4 swap; any other limit lets the pool leg run to the issuance limit, which is tighter. When a sell routes through Juicebox, `_beforeSwap` does not apply the caller's `sqrtPriceLimitX96` because no AMM ticks are crossed. For V4-path swaps, the PoolManager applies the limit normally. The hook's own slippage protection via `amountOutMin` governs the Juicebox path.
 
 #### A terminal fee above `MAX_FEE` makes the sell-side estimate ineligible
 
