@@ -606,13 +606,12 @@ contract JBUniswapV4HookForkTest is Test {
     }
 
     function _measureDriftBpsForTrade(int24 tickSpacing, uint256 amountIn) private returns (uint256 driftBps) {
-        (PoolKey memory shallowKey, PoolId shallowId) = _createShallowForkPool(tickSpacing);
-        return _measureDriftBpsForTradeOnPool(shallowKey, shallowId, amountIn);
+        (PoolKey memory shallowKey,) = _createShallowForkPool(tickSpacing);
+        return _measureDriftBpsForTradeOnPool(shallowKey, amountIn);
     }
 
     function _measureDriftBpsForTradeOnPool(
         PoolKey memory shallowKey,
-        PoolId shallowId,
         uint256 amountIn
     )
         private
@@ -639,26 +638,26 @@ contract JBUniswapV4HookForkTest is Test {
     }
 
     function testFork_V4LinearQuoteDriftSweep() public {
-        (PoolKey memory shallowKey, PoolId shallowId) = _createShallowForkPool(120);
+        (PoolKey memory shallowKey,) = _createShallowForkPool(120);
         uint256 snapshot = vm.snapshotState();
 
-        uint256 driftAtPointOne = _measureDriftBpsForTradeOnPool(shallowKey, shallowId, 0.1 ether);
+        uint256 driftAtPointOne = _measureDriftBpsForTradeOnPool(shallowKey, 0.1 ether);
         vm.revertToState(snapshot);
         snapshot = vm.snapshotState();
 
-        uint256 driftAtHalf = _measureDriftBpsForTradeOnPool(shallowKey, shallowId, 0.5 ether);
+        uint256 driftAtHalf = _measureDriftBpsForTradeOnPool(shallowKey, 0.5 ether);
         vm.revertToState(snapshot);
         snapshot = vm.snapshotState();
 
-        uint256 driftAtOne = _measureDriftBpsForTradeOnPool(shallowKey, shallowId, 1 ether);
+        uint256 driftAtOne = _measureDriftBpsForTradeOnPool(shallowKey, 1 ether);
         vm.revertToState(snapshot);
         snapshot = vm.snapshotState();
 
-        uint256 driftAtTwo = _measureDriftBpsForTradeOnPool(shallowKey, shallowId, 2 ether);
+        uint256 driftAtTwo = _measureDriftBpsForTradeOnPool(shallowKey, 2 ether);
         vm.revertToState(snapshot);
         snapshot = vm.snapshotState();
 
-        uint256 driftAtFive = _measureDriftBpsForTradeOnPool(shallowKey, shallowId, 5 ether);
+        uint256 driftAtFive = _measureDriftBpsForTradeOnPool(shallowKey, 5 ether);
 
         emit log_named_uint("drift_bps_at_0.1_eth", driftAtPointOne);
         emit log_named_uint("drift_bps_at_0.5_eth", driftAtHalf);
@@ -807,7 +806,6 @@ contract JBUniswapV4HookForkTest is Test {
             tickSpacing: 120,
             hooks: IHooks(address(hook))
         });
-        PoolId useId = useKey.toId();
 
         // Attempt to re-initialize price to the Juicebox price index
         {
@@ -1071,7 +1069,6 @@ contract JBUniswapV4HookForkTest is Test {
             tickSpacing: 60,
             hooks: IHooks(address(hook))
         });
-        PoolId nativeId = nativeKey.toId();
 
         // Initialize native ETH pool
         manager.initialize(nativeKey, SQRT_PRICE_1_1);
@@ -1634,7 +1631,6 @@ contract JBUniswapV4HookForkTest is Test {
             catch {}
 
         // Compare outputs to confirm JB is better
-        PoolId nativeId = nativeKey.toId();
         uint256 buyAmount = 1 ether;
 
         uint256 v4Out;

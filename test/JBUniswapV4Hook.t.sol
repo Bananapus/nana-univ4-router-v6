@@ -2340,8 +2340,6 @@ contract JuiceboxHookTest is Test {
             tickSpacing: 60,
             hooks: IHooks(address(0))
         });
-        // forge-lint: disable-next-line(mixed-case-variable)
-        PoolId nonJBId = nonJBKey.toId();
 
         // Initialize the pool first
         manager.initialize(nonJBKey, SQRT_PRICE_1_1);
@@ -2396,8 +2394,6 @@ contract JuiceboxHookTest is Test {
             tickSpacing: 60,
             hooks: IHooks(address(0))
         });
-        // forge-lint: disable-next-line(mixed-case-variable)
-        PoolId nonJBId = nonJBKey.toId();
 
         // Initialize the pool first
         manager.initialize(nonJBKey, SQRT_PRICE_1_1);
