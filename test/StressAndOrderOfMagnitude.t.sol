@@ -23,6 +23,8 @@ import {MockERC20, MockERC20WithDecimals} from "./mock/MockERC20.sol";
 import {JuiceboxSwapRouter} from "./utils/JuiceboxSwapRouter.sol";
 // Import Juicebox interfaces and structs from the hook file
 import {IJBTokens, IJBPrices, IJBDirectory} from "../src/JBUniswapV4Hook.sol";
+import {JBAccountingContext} from "@bananapus/core-v6/src/structs/JBAccountingContext.sol";
+import {JBConstants} from "@bananapus/core-v6/src/libraries/JBConstants.sol";
 import {JBRuleset} from "@bananapus/core-v6/src/structs/JBRuleset.sol";
 import {JBRulesetMetadata} from "@bananapus/core-v6/src/structs/JBRulesetMetadata.sol";
 import {JBRulesetMetadataResolver} from "@bananapus/core-v6/src/libraries/JBRulesetMetadataResolver.sol";
@@ -146,6 +148,15 @@ contract MockJBMultiTerminal {
 
     function setTerminalStore(address terminalStore) external {
         TERMINAL_STORE = MockJBTerminalStore(terminalStore);
+    }
+
+    /// @dev The store prices a payment with this context: native ETH in the base currency (ID 1), other tokens in
+    /// their address-derived currency at their own decimals.
+    function accountingContextForTokenOf(uint256, address token) external view returns (JBAccountingContext memory) {
+        if (token == JBConstants.NATIVE_TOKEN) return JBAccountingContext({token: token, decimals: 18, currency: 1});
+        // forge-lint: disable-next-line(unsafe-typecast)
+        return
+            JBAccountingContext({token: token, decimals: MockERC20(token).decimals(), currency: uint32(uint160(token))});
     }
 
     // forge-lint: disable-next-line(mixed-case-function)

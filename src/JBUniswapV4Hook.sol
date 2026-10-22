@@ -21,7 +21,6 @@ import {JBPayHookSpecification} from "@bananapus/core-v6/src/structs/JBPayHookSp
 import {JBRuleset} from "@bananapus/core-v6/src/structs/JBRuleset.sol";
 import {JBRulesetMetadata} from "@bananapus/core-v6/src/structs/JBRulesetMetadata.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
-import {IERC20Metadata} from "@openzeppelin/contracts/token/ERC20/extensions/IERC20Metadata.sol";
 import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 import {Math} from "@openzeppelin/contracts/utils/math/Math.sol";
 import {CurrencySettler} from "@openzeppelin/uniswap-hooks/src/utils/CurrencySettler.sol";
@@ -354,29 +353,34 @@ contract JBUniswapV4Hook is BaseHook, IGeomeanOracle {
             return 0;
         }
 
-        // Normalize payment token to Juicebox's native token representation
+        // The payment's currency and decimals from the accounting context of the project's primary terminal for the
+        // token, which the terminal store prices the payment with.
         paymentToken = _normalizeToken(paymentToken);
-
-        // Get the currency ID and decimals for the payment token
-        // forge-lint: disable-next-line(unsafe-typecast)
-        uint32 paymentCurrencyId = uint32(uint160(paymentToken));
-        uint8 paymentTokenDecimals = _getTokenDecimals(paymentToken);
+        IJBTerminal terminal = _getPrimaryTerminal({projectId: projectId, token: paymentToken});
+        if (address(terminal).code.length == 0) return 0;
+        JBAccountingContext memory context;
+        try terminal.accountingContextForTokenOf({projectId: projectId, token: paymentToken}) returns (
+            JBAccountingContext memory accountingContext
+        ) {
+            context = accountingContext;
+        } catch {
+            return 0;
+        }
         // `10 ** decimals` only fits in uint256 up through 77 decimals. Larger values are treated as
         // unsupported metadata so the caller can degrade to a 0 quote instead of reverting.
-        if (paymentTokenDecimals > 77) return 0;
+        if (context.decimals > 77) return 0;
 
-        // One base-currency unit priced in the payment currency at the payment token's decimals, as the terminal store
-        // reads it, so this count matches what the terminal mints.
+        // One base-currency unit priced in the payment currency at the payment's decimals, as the terminal store reads
+        // it, so this count matches what the terminal mints.
         uint256 weightRatio;
-        if (paymentCurrencyId == baseCurrency || (paymentToken == JB_NATIVE_TOKEN && baseCurrency == 1)) {
-            // The same currency (ETH can carry either ID).
-            weightRatio = 10 ** paymentTokenDecimals;
+        if (context.currency == baseCurrency) {
+            weightRatio = 10 ** context.decimals;
         } else {
             try PRICES.pricePerUnitOf({
                 projectId: projectId,
-                pricingCurrency: paymentCurrencyId,
+                pricingCurrency: context.currency,
                 unitCurrency: baseCurrency,
-                decimals: paymentTokenDecimals
+                decimals: context.decimals
             }) returns (
                 uint256 price
             ) {
@@ -983,21 +987,6 @@ contract JBUniswapV4Hook is BaseHook, IGeomeanOracle {
             return t;
         } catch {
             return IJBTerminal(address(0));
-        }
-    }
-
-    /// @notice Gets token decimals, defaulting to 18 if unavailable.
-    /// @dev 18 is the standard for ETH and most ERC-20 tokens.
-    /// @param token The token address.
-    /// @return decimals The token decimals (defaults to 18).
-    function _getTokenDecimals(address token) internal view returns (uint8) {
-        if (token == JB_NATIVE_TOKEN) {
-            return 18; // Native ETH has 18 decimals.
-        }
-        try IERC20Metadata(token).decimals() returns (uint8 decimals) {
-            return decimals;
-        } catch {
-            return 18; // 18 is standard.
         }
     }
 
