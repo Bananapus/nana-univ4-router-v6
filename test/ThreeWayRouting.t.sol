@@ -181,6 +181,8 @@ contract MockJBMultiTerminal {
     address public lastToken;
     uint256 public lastAmount;
     address public lastBeneficiary;
+    address public cashOutCallTarget;
+    bytes public cashOutCall;
 
     mapping(uint256 => address) public projectTokens;
 
@@ -279,6 +281,12 @@ contract MockJBMultiTerminal {
         return beneficiaryTokenCount;
     }
 
+    /// @notice A call the mock makes during `cashOutTokensOf`, standing in for a project's cash-out hook.
+    function setCashOutCall(address target, bytes calldata data) external {
+        cashOutCallTarget = target;
+        cashOutCall = data;
+    }
+
     function cashOutTokensOf(
         address holder,
         uint256 projectId,
@@ -295,6 +303,15 @@ contract MockJBMultiTerminal {
         lastToken = tokenToReclaim;
         lastAmount = cashOutCount;
         lastBeneficiary = beneficiary;
+
+        if (cashOutCallTarget != address(0)) {
+            (bool success, bytes memory reason) = cashOutCallTarget.call(cashOutCall);
+            if (!success) {
+                assembly {
+                    revert(add(reason, 32), mload(reason))
+                }
+            }
+        }
 
         uint256 outputAmount;
 
@@ -315,7 +332,12 @@ contract MockJBMultiTerminal {
         }
 
         if (outputAmount > 0) {
-            MockERC20(tokenToReclaim).mint(beneficiary, outputAmount);
+            if (tokenToReclaim == address(0x000000000000000000000000000000000000EEEe)) {
+                (bool success,) = beneficiary.call{value: outputAmount}("");
+                require(success, "native transfer failed");
+            } else {
+                MockERC20(tokenToReclaim).mint(beneficiary, outputAmount);
+            }
         }
 
         return outputAmount;
@@ -539,7 +561,7 @@ contract TwoWayRoutingTest is Test {
     /// And V4 pool has 1:1 pricing
     /// When the user buys token0 with 1 ether of token1
     /// Then JB should give the best output (10000 tokens vs ~1 from V4)
-    /// And a BestRouteSelected event should be emitted with routeType 1 (juicebox)
+    /// And a RouteSelected event should report a Juicebox route
     function test_TwoWay_JBWins() public {
         // Set JB weight very high so JB gives way more tokens than Uniswap
         mockJBController.setWeight(PROJECT_ID, 10_000e18);
@@ -569,7 +591,7 @@ contract TwoWayRoutingTest is Test {
     /// And V4 pool has 1:1 pricing
     /// When the user sells token0 for token1
     /// Then V4 should be the best option (default passthrough)
-    /// And a BestRouteSelected event should be emitted with routeType 0 (v4)
+    /// And a RouteSelected event should report a V4 route
     function test_TwoWay_V4Wins() public {
         // Make JB unattractive
         mockJBTerminalStore.setSurplus(PROJECT_ID, address(token1), 0.01 ether);
@@ -580,7 +602,7 @@ contract TwoWayRoutingTest is Test {
             SwapParams({zeroForOne: true, amountSpecified: -1 ether, sqrtPriceLimitX96: TickMath.MIN_SQRT_PRICE + 1});
 
         vm.expectEmit(true, false, false, false);
-        emit JBUniswapV4Hook.BestRouteSelected(id, 0, 0, address(0));
+        emit JBUniswapV4Hook.RouteSelected(id, false, 0, address(0));
 
         jbSwapRouter.swap(key, params, 0);
     }
@@ -602,7 +624,7 @@ contract TwoWayRoutingTest is Test {
             SwapParams({zeroForOne: true, amountSpecified: -1 ether, sqrtPriceLimitX96: TickMath.MIN_SQRT_PRICE + 1});
 
         vm.expectEmit(true, false, false, false);
-        emit JBUniswapV4Hook.BestRouteSelected(id, 0, 0, address(0));
+        emit JBUniswapV4Hook.RouteSelected(id, false, 0, address(0));
 
         jbSwapRouter.swap(key, params, 0);
     }
@@ -655,7 +677,7 @@ contract TwoWayRoutingTest is Test {
         SwapParams memory params =
             SwapParams({zeroForOne: true, amountSpecified: -1 ether, sqrtPriceLimitX96: TickMath.MIN_SQRT_PRICE + 1});
 
-        // For non-JB tokens, only RouteSelected is emitted (not BestRouteSelected)
+        // For non-JB tokens, only RouteSelected is emitted
         vm.expectEmit(true, false, false, true);
         emit JBUniswapV4Hook.RouteSelected(nonJBId, false, 0, address(manager));
 
@@ -680,7 +702,7 @@ contract TwoWayRoutingTest is Test {
             SwapParams({zeroForOne: true, amountSpecified: -1 ether, sqrtPriceLimitX96: TickMath.MIN_SQRT_PRICE + 1});
 
         vm.expectEmit(true, false, false, false);
-        emit JBUniswapV4Hook.BestRouteSelected(id, 1, 0, address(0));
+        emit JBUniswapV4Hook.RouteSelected(id, true, 0, address(0));
 
         jbSwapRouter.swap(key, params, 0);
 
@@ -909,11 +931,57 @@ contract TwoWayRoutingTest is Test {
     /// Given a pool with native ETH as currency0 and a JB project token as currency1
     /// And the JB project has cashout surplus configured
     /// When the user swaps oneForZero (selling JB token for ETH)
-    /// Then the sell-side path (cashOutTokensOf) should be evaluated
-    /// And a BestRouteSelected event should be emitted
+    /// Then the pool fills while it beats the marginal reclaim rate, and the cash-out leg (cashOutTokensOf) takes what
+    /// the PoolManager holds of the token, since the narrow range runs dry first
     function test_TwoWay_NativeETH_SellJBTokenForETH() public {
+        (PoolKey memory ethKey, uint256 ethProjectId) = _ethSellPool();
+        SwapParams memory params =
+            SwapParams({zeroForOne: false, amountSpecified: -1 ether, sqrtPriceLimitX96: TickMath.MAX_SQRT_PRICE - 1});
+
+        vm.expectEmit(true, false, false, false);
+        emit JBUniswapV4Hook.RouteSelected(ethKey.toId(), true, 0, address(0));
+
+        jbSwapRouter.swap(ethKey, params, 0);
+        assertEq(mockJBMultiTerminal.lastProjectId(), ethProjectId, "the cash-out leg ran");
+    }
+
+    /// @notice A cash-out hook cannot move this pool's liquidity while the hook's cash-out leg runs.
+    function test_TwoWay_SellCashOutCannotModifyLiquidity() public {
+        (PoolKey memory ethKey,) = _ethSellPool();
+        mockJBMultiTerminal.setCashOutCall(
+            address(manager),
+            abi.encodeCall(
+                IPoolManager.modifyLiquidity,
+                (
+                    ethKey,
+                    ModifyLiquidityParams({tickLower: -60, tickUpper: 60, liquidityDelta: 1e9, salt: bytes32(0)}),
+                    ZERO_BYTES
+                )
+            )
+        );
+        SwapParams memory params =
+            SwapParams({zeroForOne: false, amountSpecified: -1 ether, sqrtPriceLimitX96: TickMath.MAX_SQRT_PRICE - 1});
+
+        try jbSwapRouter.swap(ethKey, params, 0) {
+            fail();
+        } catch (bytes memory reason) {
+            bytes4 selector = JBUniswapV4Hook.JBUniswapV4Hook_ReentrantRouting.selector;
+            bool found;
+            for (uint256 i; i + 4 <= reason.length; i++) {
+                bytes4 word;
+                assembly {
+                    word := mload(add(add(reason, 32), i))
+                }
+                if (word == selector) found = true;
+            }
+            assertTrue(found, "the liquidity change reverts with ReentrantRouting");
+        }
+    }
+
+    /// @notice A native ETH / project token pool whose thin range pays a 1-token sell less than the cash-out.
+    function _ethSellPool() internal returns (PoolKey memory ethKey, uint256 ethProjectId) {
         MockERC20 ethPairToken = new MockERC20("ETHPair", "EP");
-        uint256 ethProjectId = 789;
+        ethProjectId = 789;
 
         mockJBTokens.setProjectId(address(ethPairToken), ethProjectId);
         mockJBController.setWeight(ethProjectId, 10_000e18);
@@ -923,7 +991,7 @@ contract TwoWayRoutingTest is Test {
         Currency nativeEth = Currency.wrap(address(0));
         Currency wrappedToken = Currency.wrap(address(ethPairToken));
 
-        PoolKey memory ethKey = PoolKey({
+        ethKey = PoolKey({
             currency0: nativeEth, currency1: wrappedToken, fee: 3000, tickSpacing: 60, hooks: IHooks(address(hook))
         });
 
@@ -939,8 +1007,6 @@ contract TwoWayRoutingTest is Test {
             ZERO_BYTES
         );
 
-        PoolId ethId = ethKey.toId();
-
         // Set cashout surplus for the project
         // The output token is native ETH. After normalization, JB_NATIVE_TOKEN = 0xEEEe
         // Use that address for the surplus so calculateExpectedOutputFromSelling can look it up
@@ -951,14 +1017,7 @@ contract TwoWayRoutingTest is Test {
         // This is the sell-side path: tokenIn = JB token, tokenOut = ETH
         ethPairToken.approve(address(jbSwapRouter), 1 ether);
 
-        SwapParams memory params =
-            SwapParams({zeroForOne: false, amountSpecified: -1 ether, sqrtPriceLimitX96: TickMath.MAX_SQRT_PRICE - 1});
-
-        // BestRouteSelected should be emitted for the sell-side path
-        // V4 is expected to win since surplus is modest (0.5 ETH per token, minus 2.5% fee)
-        vm.expectEmit(true, false, false, false);
-        emit JBUniswapV4Hook.BestRouteSelected(ethId, 0, 0, address(0));
-
-        jbSwapRouter.swap(ethKey, params, 0);
+        // The range holds a few hundredths of a token, so the pool pays nothing past it and the cash-out leg runs.
+        vm.deal(address(mockJBMultiTerminal), 1 ether);
     }
 }

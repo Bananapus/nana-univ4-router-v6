@@ -2,7 +2,7 @@
 
 ## Purpose
 
-`univ4-router-v6` is a Uniswap V4 hook that fills buys of a project token from the pool while it beats issuance and mints the rest, and compares sells against the project's cash-out route. It also maintains the TWAP oracle surface that other repos, especially `nana-buyback-hook-v6`, rely on.
+`univ4-router-v6` is a Uniswap V4 hook that fills buys of a project token from the pool while it beats issuance and mints the rest, and sells the best of three exactly quoted ways: the pool alone, cashing out everything, or a pool leg down to the marginal reclaim rate with the rest cashed out. It also maintains the TWAP oracle surface that other repos, especially `nana-buyback-hook-v6`, rely on.
 
 ## System overview
 
@@ -40,10 +40,9 @@ swap involving a project token
   -> buy: hook swaps the pool itself up to the issuance limit (price where the pool's output after fees equals
      issuance), mints the leftover input through the terminal, and settles both legs as one delta;
      a caller limit at or inside the issuance price (the buyback hook's swaps) stays a plain V4 swap
-  -> sell: hook estimates the pool route using its oracle
-  -> hook estimates the Juicebox route from current protocol state
-  -> if Juicebox wins, the hook overrides settlement into the protocol path
-  -> if the pool wins, the AMM swap continues normally
+  -> sell: hook quotes the pool alone, cashing out everything, and a split (pool leg to the marginal reclaim rate,
+     the rest cashed out with buyback-skip metadata) exactly, and executes the best; a cash-out leg takes at most
+     what the PoolManager holds of the token, and the outer swap sells any rest
   -> afterSwap and liquidity callbacks record new observations
 ```
 

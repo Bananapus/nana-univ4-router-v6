@@ -531,7 +531,7 @@ contract JBUniswapV4HookForkTest is Test {
     // =========================
 
     function _bestRouteSelectedSig() private pure returns (bytes32) {
-        return keccak256("BestRouteSelected(bytes32,uint8,uint256,address)");
+        return keccak256("RouteSelected(bytes32,bool,uint256,address)");
     }
 
     function _getLastBestRouteFromLogs() private view returns (uint8 routeType, uint256 expectedTokens) {
@@ -1979,7 +1979,7 @@ contract JBUniswapV4HookForkTest is Test {
         });
         uint256 ethBefore = user.balance;
 
-        // Record logs so we can extract BestRouteSelected event
+        // Record logs so we can extract the RouteSelected event
         vm.recordLogs();
         jbSwapRouter.swap(nativeKey, params, 0);
 
