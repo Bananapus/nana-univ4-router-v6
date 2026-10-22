@@ -28,7 +28,6 @@ import {CurrencySettler} from "@openzeppelin/uniswap-hooks/src/utils/CurrencySet
 import {IPoolManager} from "@uniswap/v4-core/src/interfaces/IPoolManager.sol";
 import {FullMath} from "@uniswap/v4-core/src/libraries/FullMath.sol";
 import {Hooks} from "@uniswap/v4-core/src/libraries/Hooks.sol";
-import {LPFeeLibrary} from "@uniswap/v4-core/src/libraries/LPFeeLibrary.sol";
 import {ProtocolFeeLibrary} from "@uniswap/v4-core/src/libraries/ProtocolFeeLibrary.sol";
 import {StateLibrary} from "@uniswap/v4-core/src/libraries/StateLibrary.sol";
 import {TickMath} from "@uniswap/v4-core/src/libraries/TickMath.sol";
@@ -1640,13 +1639,10 @@ contract JBUniswapV4Hook is BaseHook, IGeomeanOracle {
     /// @return swapFee The combined swap fee in pips.
     function _swapFeeOf(PoolKey memory key, bool zeroForOne) internal view returns (uint24 swapFee) {
         // Read protocol fee from slot0 (directional: lower 12 bits = zeroForOne, upper 12 bits = oneForZero)
-        (,, uint24 protocolFee, uint24 slot0LpFee) = poolManager.getSlot0(PoolIdLibrary.toId(key));
+        // slot0 holds the LP fee V4 swaps with: `key.fee` for static pools, the hook-set fee for dynamic ones.
+        (,, uint24 protocolFee, uint24 lpFee) = poolManager.getSlot0(PoolIdLibrary.toId(key));
 
-        // Determine the LP fee: use key.fee for static pools, slot0LpFee for dynamic pools
-        uint24 lpFee = LPFeeLibrary.isDynamicFee(key.fee) ? slot0LpFee : key.fee;
-
-        // Extract the directional protocol fee and compose with LP fee.
-        uint16 directionalProtocolFee = zeroForOne ? protocolFee.getZeroForOneFee() : protocolFee.getOneForZeroFee();
-        swapFee = directionalProtocolFee == 0 ? lpFee : directionalProtocolFee.calculateSwapFee(lpFee);
+        // Compose the directional protocol fee with the LP fee (a zero protocol fee leaves the LP fee).
+        swapFee = (zeroForOne ? protocolFee.getZeroForOneFee() : protocolFee.getOneForZeroFee()).calculateSwapFee(lpFee);
     }
 }
