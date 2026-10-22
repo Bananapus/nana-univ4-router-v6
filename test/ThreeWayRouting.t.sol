@@ -553,7 +553,7 @@ contract TwoWayRoutingTest is Test {
 
         // Set expectEmit right before the swap call
         vm.expectEmit(true, false, false, false);
-        emit JBUniswapV4Hook.BestRouteSelected(id, 1, 0, address(0));
+        emit JBUniswapV4Hook.RouteSelected(id, true, 0, address(0));
 
         jbSwapRouter.swap(key, params, 0);
 
@@ -732,7 +732,7 @@ contract TwoWayRoutingTest is Test {
             SwapParams({zeroForOne: true, amountSpecified: -1 ether, sqrtPriceLimitX96: TickMath.MIN_SQRT_PRICE + 1});
 
         vm.expectEmit(true, false, false, false);
-        emit JBUniswapV4Hook.BestRouteSelected(ethId, 1, 0, address(0));
+        emit JBUniswapV4Hook.RouteSelected(ethId, true, 0, address(0));
 
         jbSwapRouter.swap{value: 1 ether}(ethKey, params, 0);
 
@@ -822,15 +822,15 @@ contract TwoWayRoutingTest is Test {
     }
 
     // ============================================
-    // Test 10: Dual JB Token Pool - Buy Side Priority
+    // Test 10: Dual JB Token Pool - Routed As A Sell
     // ============================================
 
     /// Given both currency0 and currency1 are JB project tokens (projects 123 and 456)
     /// And currency1's project has a very high weight (10_000e18)
     /// When the user swaps zeroForOne (selling currency0 for currency1)
-    /// Then the buy-side project (currency1's project) should be used for routing
-    /// And a BestRouteSelected event should be emitted confirming buy-side priority
-    function test_TwoWay_DualJBTokenPool_BuySidePriority() public {
+    /// Then the swap is routed as a sell of currency0 (V4 versus a project 123 cash-out)
+    /// And project 456 is never paid
+    function test_TwoWay_DualJBTokenPool_RoutesAsSell() public {
         // Create two new tokens, both will be JB project tokens
         MockERC20 dualToken0 = new MockERC20("DualJB0", "DJB0");
         MockERC20 dualToken1 = new MockERC20("DualJB1", "DJB1");
@@ -887,26 +887,20 @@ contract TwoWayRoutingTest is Test {
         PoolId dualId = dualKey.toId();
 
         // Swap zeroForOne: selling currency0 (dualToken0) for currency1 (dualToken1)
-        // tokenOut = dualToken1 = projectB's token
-        // Per source lines 650-660, buy-side project (projectB) gets priority
+        // tokenIn = dualToken0 = projectA's token, so the swap is routed as a sell of it
         dualToken0.approve(address(jbSwapRouter), 1 ether);
 
         SwapParams memory params =
             SwapParams({zeroForOne: true, amountSpecified: -1 ether, sqrtPriceLimitX96: TickMath.MIN_SQRT_PRICE + 1});
 
-        // BestRouteSelected should be emitted - JB wins because projectB has weight 10_000e18
-        // The buy-side project (projectB = 456) is used for routing, not the sell-side (projectA = 123)
+        // The sell comparison emits BestRouteSelected
         vm.expectEmit(true, false, false, false);
         emit JBUniswapV4Hook.BestRouteSelected(dualId, 1, 0, address(0));
 
         jbSwapRouter.swap(dualKey, params, 0);
 
-        // Verify JB terminal was called with the buy-side project (projectB)
-        assertEq(
-            mockJBMultiTerminal.lastProjectId(),
-            projectB,
-            "Should route using buy-side project (456), not sell-side (123)"
-        );
+        // The buy side (paying projectB) is not a route for a swap between two project tokens.
+        assertTrue(mockJBMultiTerminal.lastProjectId() != projectB, "Should not pay the buy-side project (456)");
     }
 
     // ============================================
