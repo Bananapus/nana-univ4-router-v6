@@ -57,7 +57,7 @@ Its route comparison is intentionally asymmetric: helper surfaces can be more pe
 
 - Oracle upkeep and routing are tightly coupled.
 - Warmup behavior matters because low-history pools fall back toward spot pricing.
-- Buy issuance relies on `previewPayFor(...)` (or the ruleset weight when the preview forwards funds to a pay hook), and sell estimation on `previewCashOutFrom(...)`, in core. A buyer never gets less than minting the whole input, less a rounding margin.
+- Buy issuance relies on `previewPayFor(...)` (or the ruleset weight when the preview mints nothing for the payer and forwards the pay to a hook, as the buyback hook does when it swaps), and sell estimation on `previewCashOutFrom(...)`, in core. A buyer never gets less than minting the whole input, less a rounding margin.
 - Conservative underestimation is part of the safety model. The hook may prefer V4 over a risky Juicebox route.
 - Because the deployment is immutable, constructor mistakes are expensive to fix.
 

@@ -320,7 +320,7 @@ contract JBUniswapV4Hook is BaseHook, IGeomeanOracle {
     /// @notice Estimates how many JB project tokens a user would receive by paying a given amount into the project.
     /// @dev WARNING: This estimate uses the ruleset's static weight. If the project has a data hook that overrides the
     /// weight at payment time, actual token issuance may differ from this helper's output.
-    /// @dev Live buys use this rate only when the terminal preview forwards the payment to a pay hook (see
+    /// @dev Live buys use this rate only when the terminal preview forwards the whole payment to a pay hook (see
     /// `_issuanceOf`), and the buy's output floor then enforces it.
     /// @param projectId The Juicebox project ID
     /// @param paymentToken The token to pay with
@@ -1028,13 +1028,12 @@ contract JBUniswapV4Hook is BaseHook, IGeomeanOracle {
     }
 
     /// @notice The payer's project tokens from the terminal's mint path for `amount`, or 0 when no mint path is usable.
-    /// @dev Reads `previewPayFor` with empty metadata, the metadata the mint leg pays with. A pay hook specification
-    /// that forwards no funds leaves the minted count as previewed. A specification that forwards funds is a
-    /// buyback-style hook taking the pay to its own swap: paid from inside a pool swap, its `poolManager.unlock`
-    /// reverts because the PoolManager is already unlocked, and it falls back to minting at the ruleset's weight, which
-    /// `calculateExpectedTokensWithCurrency` prices; the larger of that and the previewed count is used. A rate above
-    /// what the terminal delivers makes the buy's output floor revert, so an unknown hook can fail the swap but not
-    /// underpay it.
+    /// @dev Reads `previewPayFor` with empty metadata, the metadata the mint leg pays with, and uses its count. A
+    /// preview that mints nothing for the payer while a pay hook specification forwards funds is a buyback-style hook
+    /// taking the pay to its own swap: paid from inside a pool swap, its `poolManager.unlock` reverts because the
+    /// PoolManager is already unlocked, and it falls back to minting at the ruleset's weight, which
+    /// `calculateExpectedTokensWithCurrency` prices. A rate above what the terminal delivers makes the buy's output
+    /// floor revert, so an unknown hook can fail the swap but not underpay it.
     /// @param terminal The project's primary terminal for `token`.
     /// @param projectId The ID of the project whose tokens are being bought.
     /// @param token The input token, in Juicebox's representation.
@@ -1055,16 +1054,15 @@ contract JBUniswapV4Hook is BaseHook, IGeomeanOracle {
         }) returns (
             JBRuleset memory, uint256 beneficiaryTokenCount, uint256, JBPayHookSpecification[] memory hookSpecifications
         ) {
+            if (beneficiaryTokenCount != 0) return beneficiaryTokenCount;
             for (uint256 i; i < hookSpecifications.length; i++) {
-                // A forwarded amount means the previewed count leaves out what the hook delivers.
+                // Nothing mints for the payer while a hook takes the funds: a buyback-style swap.
                 if (hookSpecifications[i].amount != 0) {
-                    tokenCount = calculateExpectedTokensWithCurrency({
+                    return calculateExpectedTokensWithCurrency({
                         projectId: projectId, paymentToken: token, paymentAmount: amount
                     });
-                    return tokenCount > beneficiaryTokenCount ? tokenCount : beneficiaryTokenCount;
                 }
             }
-            return beneficiaryTokenCount;
         } catch {
             // Without a preview there is no trustworthy mint rate, so the buy stays a plain pool swap.
             return 0;
