@@ -21,7 +21,7 @@ Scope: the Uniswap V4 hook surface that serves Juicebox-aware routing and oracle
 | `tokenIn` is JB token? | `tokenOut` is JB token? | Decision |
 |---|---|---|
 | no | no | Pass-through to V4 (`ZERO_DELTA`); `_afterSwap` enforces a tagged `amountOutMin` when present, else no hook-level minimum. |
-| no | yes | Buy: the hook swaps the pool itself, limited at the issuance price after fees, and mints the leftover input through the terminal (`_routeBuy`). A caller limit at or inside the fee-free issuance price keeps a plain V4 swap. |
+| no | yes | Buy: the hook swaps the pool itself, limited at the issuance price after fees, and mints the leftover input through the terminal (`_routeSplit`). A caller limit at or inside the fee-free issuance price keeps a plain V4 swap. |
 | yes | no | Sell-side route comparison: `calculateExpectedOutputFromSelling` (uses `previewCashOutFrom`) vs `estimateUniswapOutput`. |
 | yes | yes | Routed as a sell of the input token. |
 
@@ -29,7 +29,7 @@ JB-token detection requires the project to have a **registered ERC-20** (`JBToke
 
 ## A.1 Routing and best-execution
 
-- A direct buy of a project's registered ERC-20 never returns fewer tokens than minting the whole input at the payer's issuance rate, less a rounding margin of `issuance / 1e6 + 3` units. The pool fills only while its marginal output after LP and protocol fees beats issuance, the leftover mints, and both legs together are checked against that floor (and a tagged `amountOutMin`), so V4 rounding on thin liquidity or an underdelivering mint reverts the swap. (`_routeBuy`)
+- A direct buy of a project's registered ERC-20 never returns fewer tokens than minting the whole input at the payer's issuance rate, less a rounding margin of `issuance / 1e6 + 3` units. The pool fills only while its marginal output after LP and protocol fees beats issuance, the leftover mints, and both legs together are checked against that floor (and a tagged `amountOutMin`), so V4 rounding on thin liquidity or an underdelivering mint reverts the swap. (`_routeSplit`)
 - The buy-side issuance rate is the terminal's `previewPayFor` beneficiary count, or, when that is zero while a pay hook specification forwards funds, the ruleset weight (`calculateExpectedTokensWithCurrency`): a buyback-style hook paid from inside a pool swap cannot unlock the PoolManager and mints at the weight. A reverting preview leaves the buy a plain V4 swap.
 - Sells are route-compared: the hook computes a V4-pool quote (`estimateUniswapOutput`) and a cash-out quote (`previewCashOutFrom`) and routes through whichever yields more output. (`JBUniswapV4Hook.sol:734-803`)
 - The swapper's minimum output is a **tag-gated** discriminator on `hookData` (`_amountOutMinFrom`). A minimum is read only when `hookData` begins with `JB_HOOK_DATA_TAG` and is at least 36 bytes (`tag ++ abi.encode(amountOutMin)`); that explicit minimum — including an explicit zero, a deliberate take-any-price opt-out — is enforced on the settlement balance delta on both routing paths, and the swapper **never receives fewer output tokens than it**. Any other payload — empty, or a generic integration's own metadata — carries no minimum (its first word is never mis-decoded as one), and the hook imposes no floor of its own; such a swap proceeds under the caller's own protection. (`JBUniswapV4Hook.sol:597-636, 664-673`)
@@ -237,7 +237,7 @@ This repo holds **no privileged role** of its own. All implied centralization fl
 - Exact-output rejection: `src/JBUniswapV4Hook.sol:699-701`
 - Route comparison + eligibility: `src/JBUniswapV4Hook.sol:734-803`
 - `routeMinimum` raise for sell: `src/JBUniswapV4Hook.sol:819-825`
-- Buy split and issuance floor: `_routeBuy` in `src/JBUniswapV4Hook.sol`
+- Buy split and issuance floor: `_routeSplit` in `src/JBUniswapV4Hook.sol`
 - `_routeThroughJuicebox` body: `src/JBUniswapV4Hook.sol:1191-1307`
 - Sell-input conservation revert: `src/JBUniswapV4Hook.sol:1271-1284`
 - Zero-output sell revert: `src/JBUniswapV4Hook.sol:1286-1292`
