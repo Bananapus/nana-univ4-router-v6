@@ -347,28 +347,38 @@ contract SplitBuyBaseForkTest is Test {
 
     /// @notice Sandwiches of a buy sent with no minimum, on 1.3.0 and on the deployed 1.2.0 under the same attacks. On
     /// 1.3.0 the victim still gets at least minting everything; the pool's surplus above issuance is exposed.
-    function test_sandwich_victimSetsNoMinimum() public {
-        _sandwiches(10_000);
+    function test_sandwich_victimSetsNoMinimum_p13() public {
+        _sandwiches(13, 10_000);
+    }
+
+    function test_sandwich_victimSetsNoMinimum_p7() public {
+        _sandwiches(7, 10_000);
     }
 
     /// @notice The same attacks on a buy carrying a client's minimum: the unattacked quote less 0.5%. The victim loses
     /// at most that, and the attacker nets no more than the same attack nets on 1.2.0 wherever 1.2.0 fills the buy.
-    function test_sandwich_victimSetsHalfPercentMinimum() public {
-        _sandwiches(50);
+    function test_sandwich_victimSetsHalfPercentMinimum_p13() public {
+        _sandwiches(13, 50);
+    }
+
+    function test_sandwich_victimSetsHalfPercentMinimum_p7() public {
+        _sandwiches(7, 50);
     }
 
     /// @notice The same, with a 1% minimum.
-    function test_sandwich_victimSetsOnePercentMinimum() public {
-        _sandwiches(100);
+    function test_sandwich_victimSetsOnePercentMinimum_p13() public {
+        _sandwiches(13, 100);
     }
 
-    function _sandwiches(uint256 slippageBps) internal {
-        _compareSandwich(13, 0.001 ether, slippageBps);
-        _compareSandwich(13, 0.01 ether, slippageBps);
-        _compareSandwich(13, 0.1 ether, slippageBps);
-        _compareSandwich(7, 0.1 ether, slippageBps);
-        _compareSandwich(7, 1 ether, slippageBps);
-        _compareSandwich(7, 10 ether, slippageBps);
+    function test_sandwich_victimSetsOnePercentMinimum_p7() public {
+        _sandwiches(7, 100);
+    }
+
+    function _sandwiches(uint256 pid, uint256 slippageBps) internal {
+        uint256 base = pid == 13 ? 0.001 ether : 0.1 ether;
+        _compareSandwich(pid, base, slippageBps);
+        _compareSandwich(pid, base * 10, slippageBps);
+        _compareSandwich(pid, base * 100, slippageBps);
     }
 
     function _compareSandwich(uint256 pid, uint256 amount, uint256 slippageBps) internal {
