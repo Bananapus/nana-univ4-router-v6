@@ -1209,20 +1209,7 @@ contract JBUniswapV4Hook is BaseHook, IGeomeanOracle {
         // execution rounding (small inputs at typical fees would otherwise diverge by one unit).
         uint256 amountInAfterFee = amountIn;
         {
-            // Read protocol fee from slot0 (directional: lower 12 bits = zeroForOne, upper 12 bits = oneForZero)
-            (,, uint24 protocolFee, uint24 slot0LpFee) = poolManager.getSlot0(PoolIdLibrary.toId(key));
-
-            // Determine the LP fee: use key.fee for static pools, slot0LpFee for dynamic pools
-            uint24 lpFee;
-            if (LPFeeLibrary.isDynamicFee(key.fee)) {
-                lpFee = slot0LpFee;
-            } else {
-                lpFee = key.fee;
-            }
-
-            // Extract the directional protocol fee and compose with LP fee.
-            uint16 directionalProtocolFee = zeroForOne ? protocolFee.getZeroForOneFee() : protocolFee.getOneForZeroFee();
-            uint24 swapFee = directionalProtocolFee == 0 ? lpFee : directionalProtocolFee.calculateSwapFee(lpFee);
+            uint24 swapFee = _swapFeeOf({key: key, zeroForOne: zeroForOne});
 
             if (swapFee > 0) {
                 amountInAfterFee = FullMath.mulDiv({
@@ -1502,5 +1489,23 @@ contract JBUniswapV4Hook is BaseHook, IGeomeanOracle {
         CurrencySettler.settle({
             currency: outputCurrency, poolManager: poolManager, payer: address(this), amount: amount, burn: false
         });
+    }
+
+    /// @notice The combined fee, in pips, that a swap in `zeroForOne`'s direction pays on `key`'s pool: the LP fee
+    /// composed with the directional protocol fee, as Uniswap V4 charges it on the input.
+    /// @dev Static pools use `key.fee`; dynamic-fee pools use the LP fee stored in slot0.
+    /// @param key The pool key.
+    /// @param zeroForOne Whether the swap sells token0 for token1.
+    /// @return swapFee The combined swap fee in pips.
+    function _swapFeeOf(PoolKey memory key, bool zeroForOne) internal view returns (uint24 swapFee) {
+        // Read protocol fee from slot0 (directional: lower 12 bits = zeroForOne, upper 12 bits = oneForZero)
+        (,, uint24 protocolFee, uint24 slot0LpFee) = poolManager.getSlot0(PoolIdLibrary.toId(key));
+
+        // Determine the LP fee: use key.fee for static pools, slot0LpFee for dynamic pools
+        uint24 lpFee = LPFeeLibrary.isDynamicFee(key.fee) ? slot0LpFee : key.fee;
+
+        // Extract the directional protocol fee and compose with LP fee.
+        uint16 directionalProtocolFee = zeroForOne ? protocolFee.getZeroForOneFee() : protocolFee.getOneForZeroFee();
+        swapFee = directionalProtocolFee == 0 ? lpFee : directionalProtocolFee.calculateSwapFee(lpFee);
     }
 }
