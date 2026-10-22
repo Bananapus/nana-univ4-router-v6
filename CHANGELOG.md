@@ -9,15 +9,6 @@ This is a V5-to-V6 migration changelog, not a package release log or commit hist
 - `JBUniswapV4Hook`
 - `Oracle`
 
-## 1.4.0
-
-- Sells of a project token go whichever of three ways delivers most, each quoted exactly before anything executes: everything in the pool, everything cashed out, or a split that sells in the pool down to the marginal reclaim rate (`3 J(n) - 4 J(n/2)` for a taxed cash-out of `n` tokens, the average rate otherwise) and cashes out the rest. Pool parts are quoted by `quoteSwap`, which runs the same swaps on the same state and reverts; cash-outs by the terminal preview, which the terminal enforces as the leg's minimum. A seller gets at least the pool alone, and at least cashing out everything when the PoolManager holds the whole input.
-- A sell's cash-out leg takes at most what the PoolManager holds of the token at that moment (callers settle their input after the swap). Any rest swaps in the pool instead of reverting, and `_afterSwap` checks a tagged `amountOutMin` against all of it. Buys are unchanged.
-- The hook's cash-outs carry metadata telling the project's buyback hook to skip its pool sale, keyed to the registry the data hook names with `BUYBACK_HOOK()` (a revnet's) or to the data hook itself. Previews carry the same metadata.
-- Sells of the fee project's own token (project 1) stay in the pool: its cash-out fee would mint its token back to the hook mid-sell.
-- Adding or removing liquidity in a pool of this hook reverts with `JBUniswapV4Hook_ReentrantRouting` while a terminal leg runs, so a project's hooks cannot move the pool under a quoted split.
-- New `quoteSwap(PoolKey, SwapParams, uint160, uint256)`, which always reverts with `JBUniswapV4Hook_SwapQuote(legAmountIn, legAmountOut, restAmountOut)`. `BestRouteSelected` is removed; `RouteSelected` reports every route. `estimateUniswapOutput` is removed (routing no longer used it); integrators quote through Uniswap's V4 Quoter, which simulates the hook's routing.
-
 ## 1.3.0
 
 - Buys of a project token fill from the pool while its output after LP and protocol fees beats the payer's issuance rate, and mint the leftover input through the terminal, settled as one swap delta. A buyer gets at least minting the whole input (less `issuance / 1e6 + 3` units of rounding margin), checked on both legs together, and the pool's fills when they beat it; a large buy no longer reverts or stops partway when the pool runs out of liquidity.
@@ -26,7 +17,13 @@ This is a V5-to-V6 migration changelog, not a package release log or commit hist
 - A swap between two project tokens is a buy (the split above) when paying the output token's project mints at least what cashing out the input reclaims, and a sell of the input otherwise; a quote V4's deltas cannot carry leaves its side ineligible, as in 1.2.0.
 - Buys whose input arrives short (fee-on-transfer input) now revert instead of routing on the reported amount.
 - `calculateExpectedTokensWithCurrency` prices a payment the way the terminal store does: the currency and decimals come from the project's primary terminal accounting context for the token (no terminal or context returns 0), one base-currency unit is priced in that currency, then `amount * weight / price`. Its count matches what the terminal mints, whatever the project's accounting currency.
-- No ABI or storage change; the oracle state of a deployed 1.2.x hook is layout-compatible.
+- Sells of a project token go whichever of three ways delivers most, each quoted exactly before anything executes: everything in the pool, everything cashed out, or a split that sells in the pool down to the marginal reclaim rate (`3 J(n) - 4 J(n/2)` for a taxed cash-out of `n` tokens, the average rate otherwise) and cashes out the rest. Pool parts are quoted by `quoteSwap`, which runs the same swaps on the same state and reverts; cash-outs by the terminal preview, which the terminal enforces as the leg's minimum. A seller gets at least the pool alone, and at least cashing out everything when the PoolManager holds the whole input.
+- A sell's cash-out leg takes at most what the PoolManager holds of the token at that moment (callers settle their input after the swap). Any rest swaps in the pool instead of reverting, and `_afterSwap` checks a tagged `amountOutMin` against all of it.
+- The hook's cash-outs carry metadata telling the project's buyback hook to skip its pool sale, keyed to the registry the data hook names with `BUYBACK_HOOK()` (a revnet's) or to the data hook itself. Previews carry the same metadata.
+- Sells of the fee project's own token (project 1) stay in the pool: its cash-out fee would mint its token back to the hook mid-sell.
+- Adding or removing liquidity in a pool of this hook reverts with `JBUniswapV4Hook_ReentrantRouting` while a terminal leg runs, so a project's hooks cannot move the pool under a quoted split.
+- New `quoteSwap(PoolKey, SwapParams, uint160, uint256)`, which always reverts with `JBUniswapV4Hook_SwapQuote(legAmountIn, legAmountOut, restAmountOut)`. `BestRouteSelected` is removed; `RouteSelected` reports every route. `estimateUniswapOutput` is removed (routing no longer used it); integrators quote through Uniswap's V4 Quoter, which simulates the hook's routing.
+- No storage change; the oracle state of a deployed 1.2.x hook is layout-compatible.
 
 ## Summary
 
