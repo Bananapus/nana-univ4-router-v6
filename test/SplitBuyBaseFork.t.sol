@@ -3,8 +3,16 @@ pragma solidity 0.8.28;
 
 import {Test, Vm} from "forge-std/Test.sol";
 
+import {IJBController} from "@bananapus/core-v6/src/interfaces/IJBController.sol";
+import {IJBRulesetApprovalHook} from "@bananapus/core-v6/src/interfaces/IJBRulesetApprovalHook.sol";
 import {IJBTerminal} from "@bananapus/core-v6/src/interfaces/IJBTerminal.sol";
 import {JBConstants} from "@bananapus/core-v6/src/libraries/JBConstants.sol";
+import {JBAccountingContext} from "@bananapus/core-v6/src/structs/JBAccountingContext.sol";
+import {JBFundAccessLimitGroup} from "@bananapus/core-v6/src/structs/JBFundAccessLimitGroup.sol";
+import {JBRulesetConfig} from "@bananapus/core-v6/src/structs/JBRulesetConfig.sol";
+import {JBRulesetMetadata} from "@bananapus/core-v6/src/structs/JBRulesetMetadata.sol";
+import {JBSplitGroup} from "@bananapus/core-v6/src/structs/JBSplitGroup.sol";
+import {JBTerminalConfig} from "@bananapus/core-v6/src/structs/JBTerminalConfig.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {Math} from "@openzeppelin/contracts/utils/math/Math.sol";
 import {IHooks} from "@uniswap/v4-core/src/interfaces/IHooks.sol";
@@ -16,11 +24,12 @@ import {BalanceDelta} from "@uniswap/v4-core/src/types/BalanceDelta.sol";
 import {Currency} from "@uniswap/v4-core/src/types/Currency.sol";
 import {PoolId, PoolIdLibrary} from "@uniswap/v4-core/src/types/PoolId.sol";
 import {PoolKey} from "@uniswap/v4-core/src/types/PoolKey.sol";
-import {SwapParams} from "@uniswap/v4-core/src/types/PoolOperation.sol";
+import {ModifyLiquidityParams, SwapParams} from "@uniswap/v4-core/src/types/PoolOperation.sol";
+import {PoolModifyLiquidityTest} from "@uniswap/v4-core/src/test/PoolModifyLiquidityTest.sol";
 
 import {JBUniswapV4Hook} from "../src/JBUniswapV4Hook.sol";
 
-/// @notice Exact-input swaps on a native/project-token pool, in a router's order: swap, settle what was used, take the
+/// @notice Exact-input swaps, in a router's order: swap, settle what was used, take the
 /// output, then check the caller's minimum output.
 contract ForkSwapper is IUnlockCallback {
     IPoolManager internal immutable PM;
@@ -60,15 +69,15 @@ contract ForkSwapper is IUnlockCallback {
         });
         uint256 used = uint256(uint128(zeroForOne ? -d.amount0() : -d.amount1()));
         uint256 out = uint256(uint128(zeroForOne ? d.amount1() : d.amount0()));
-        if (zeroForOne) {
+        Currency input = zeroForOne ? key.currency0 : key.currency1;
+        if (input.isAddressZero()) {
             PM.settle{value: used}();
-            PM.take({currency: key.currency1, to: payer, amount: out});
         } else {
-            PM.sync(key.currency1);
-            require(IERC20(Currency.unwrap(key.currency1)).transferFrom(payer, address(PM), used));
+            PM.sync(input);
+            require(IERC20(Currency.unwrap(input)).transferFrom(payer, address(PM), used));
             PM.settle();
-            PM.take({currency: key.currency0, to: payer, amount: out});
         }
+        PM.take({currency: zeroForOne ? key.currency1 : key.currency0, to: payer, amount: out});
         return abi.encode(used, out);
     }
 }
@@ -86,6 +95,9 @@ contract SplitBuyBaseForkTest is Test {
     IJBTerminal internal constant TERMINAL = IJBTerminal(0x130f5Dd2bD8805443Cf41755253D778a75a67f53);
     address internal constant TOKEN_13 = 0x761A27084Efd69b94889F699D7A7493EC42f9622;
     address internal constant TOKEN_7 = 0xF6627cF19317C33B457f77452876e6e297c4942F;
+
+    /// @dev An address with no code on Base, to own the project the two-token pool test launches.
+    address internal constant OWNER = address(0x5B1D7);
 
     ForkSwapper internal swapper;
 
@@ -648,5 +660,111 @@ contract SplitBuyBaseForkTest is Test {
                 vm.toString(updated),
                 " |"
             ));
+    }
+
+    /// @notice A pool of two project tokens: project 7's token and a new project's token that mints 1 per project 7
+    /// token paid. Buys of the new token, with the pool above and below issuance and at four sizes, leave the buyer at
+    /// least what 1.2.0 does (unspent input valued at minting), and sells of it match 1.2.0.
+    function test_compare_twoProjectTokenPool() public {
+        uint256[4] memory sizes = [uint256(1 ether), 10 ether, 100 ether, 1000 ether];
+        for (uint256 above; above < 2; above++) {
+            for (uint256 i; i < sizes.length; i++) {
+                for (uint256 sell; sell < 2; sell++) {
+                    uint256 snap = vm.snapshotState();
+                    PoolKey memory key = _twoTokenPool(above == 1 ? 13 : 7);
+                    (uint256 deployed, uint256 updated) = _compareTwoTokenSwap(key, sizes[i], sell == 1);
+                    vm.revertToState(snap);
+                    _logCompare(sell == 1 ? "dual sell" : "dual buy", 7, above, sizes[i], "split", deployed, updated);
+                    assertGe(updated, deployed, "1.3.0 leaves the swapper at least what 1.2.0 does");
+                }
+            }
+        }
+    }
+
+    /// @dev Launches a project that accepts project 7's token, mints 1 of its token per project 7 token, and pools the
+    /// two at `tenthsPerToken7 / 10` of its token per project 7 token on the live hook.
+    function _twoTokenPool(uint256 tenthsPerToken7) internal returns (PoolKey memory key) {
+        IJBController controller = IJBController(address(JBUniswapV4Hook(payable(HOOK)).DIRECTORY().controllerOf(7)));
+        JBAccountingContext[] memory contexts = new JBAccountingContext[](1);
+        // forge-lint: disable-next-line(unsafe-typecast)
+        contexts[0] = JBAccountingContext({token: TOKEN_7, decimals: 18, currency: uint32(uint160(TOKEN_7))});
+        JBTerminalConfig[] memory terminals = new JBTerminalConfig[](1);
+        terminals[0] = JBTerminalConfig({terminal: TERMINAL, accountingContextsToAccept: contexts});
+        JBRulesetConfig[] memory rulesets = new JBRulesetConfig[](1);
+        rulesets[0].weight = 1e18;
+        rulesets[0].approvalHook = IJBRulesetApprovalHook(address(0));
+        // forge-lint: disable-next-line(unsafe-typecast)
+        rulesets[0].metadata.baseCurrency = uint32(uint160(TOKEN_7));
+        rulesets[0].splitGroups = new JBSplitGroup[](0);
+        rulesets[0].fundAccessLimitGroups = new JBFundAccessLimitGroup[](0);
+        // Launching a project on Base carries a 0.0001 ETH creation fee.
+        uint256 pid = controller.launchProjectFor{value: 0.0001 ether}({
+            owner: OWNER, projectUri: "", rulesetConfigurations: rulesets, terminalConfigurations: terminals, memo: ""
+        });
+        vm.prank(OWNER);
+        address token = address(controller.deployERC20For({projectId: pid, name: "X", symbol: "X", salt: bytes32(0)}));
+
+        bool sevenFirst = TOKEN_7 < token;
+        key = PoolKey({
+            currency0: Currency.wrap(sevenFirst ? TOKEN_7 : token),
+            currency1: Currency.wrap(sevenFirst ? token : TOKEN_7),
+            fee: 10_000,
+            tickSpacing: 200,
+            hooks: IHooks(HOOK)
+        });
+        PM.initialize(
+            key, uint160(Math.sqrt(sevenFirst ? tenthsPerToken7 * 2 ** 192 / 10 : 10 * 2 ** 192 / tenthsPerToken7))
+        );
+
+        // Fund the new project's terminal with a payment, then pool about 300 of each token.
+        deal(TOKEN_7, address(this), 100_000 ether, true);
+        IERC20(TOKEN_7).approve(address(TERMINAL), 1000 ether);
+        TERMINAL.pay({
+            projectId: pid,
+            token: TOKEN_7,
+            amount: 1000 ether,
+            beneficiary: address(this),
+            minReturnedTokens: 0,
+            memo: "",
+            metadata: ""
+        });
+        deal(token, address(this), 100_000 ether, true);
+        PoolModifyLiquidityTest router = new PoolModifyLiquidityTest(PM);
+        IERC20(TOKEN_7).approve(address(router), type(uint256).max);
+        IERC20(token).approve(address(router), type(uint256).max);
+        router.modifyLiquidity(
+            key,
+            ModifyLiquidityParams({
+                tickLower: TickMath.minUsableTick(200),
+                tickUpper: TickMath.maxUsableTick(200),
+                liquidityDelta: 300 ether,
+                salt: 0
+            }),
+            ""
+        );
+        IERC20(TOKEN_7).approve(address(swapper), type(uint256).max);
+        IERC20(token).approve(address(swapper), type(uint256).max);
+    }
+
+    /// @dev One swap on 1.2.0 and on 1.3.0 from the same state: a buy pays project 7's token for the new token, a sell
+    /// the reverse. Unspent buy input is valued at minting (1 per project 7 token).
+    function _compareTwoTokenSwap(
+        PoolKey memory key,
+        uint256 amount,
+        bool sell
+    )
+        internal
+        returns (uint256 deployed, uint256 updated)
+    {
+        bool zeroForOne = (Currency.unwrap(key.currency0) == TOKEN_7) != sell;
+        uint160 limit = zeroForOne ? TickMath.MIN_SQRT_PRICE + 1 : TickMath.MAX_SQRT_PRICE - 1;
+        uint256 snap = vm.snapshotState();
+        (uint256 used, uint256 out) = swapper.swap(key, zeroForOne, amount, limit, 0);
+        deployed = sell ? out : out + amount - used;
+        vm.revertToState(snap);
+        _upgrade();
+        (used, out) = swapper.swap(key, zeroForOne, amount, limit, 0);
+        updated = sell ? out : out + amount - used;
+        vm.revertToState(snap);
     }
 }

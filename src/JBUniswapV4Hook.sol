@@ -664,7 +664,8 @@ contract JBUniswapV4Hook is BaseHook, IGeomeanOracle {
     /// @notice The main routing engine. Buys of a project token fill from the pool while it beats issuance and mint the
     /// rest (`_routeBuy`); sells go to whichever of V4 and a Juicebox cash-out quotes more. If no JB token is involved,
     /// the swap proceeds through V4 normally.
-    /// @dev When both currencies are project tokens, the swap is routed as a sell of the input token.
+    /// @dev When both currencies are project tokens, the swap is a buy when paying the output's project mints at least
+    /// what cashing out the input reclaims, and a sell of the input otherwise.
     /// @param key The pool key identifying the V4 pool
     /// @param params The swap parameters (direction, amount, price limit)
     /// @param hookData Must contain amountOutMin as uint256 (minimum tokens user accepts)
@@ -717,25 +718,43 @@ contract JBUniswapV4Hook is BaseHook, IGeomeanOracle {
         // Check if either token is the ERC-20 that Juicebox has registered for a project.
         // Credit-only project balances are intentionally out of scope for V4 pool routing.
         uint256 projectId = _projectIdForRegisteredToken(tokenIn);
+        uint256 buyProjectId = _projectIdForRegisteredToken(tokenOut);
 
-        // Buying a project token with a token that is not one: fill from the pool while it beats issuance and mint
-        // the rest. A swap between two project tokens is routed as a sell of the input.
-        if (projectId == 0) {
-            projectId = _projectIdForRegisteredToken(tokenOut);
-            if (projectId != 0) {
-                return (
-                    BaseHook.beforeSwap.selector,
-                    _routeBuy({
-                        key: key, params: params, projectId: projectId, amountIn: amountIn, amountOutMin: amountOutMin
-                    }),
-                    0
-                );
+        // A swap between two project tokens buys the output when paying its project mints at least what cashing out
+        // the input reclaims, and is otherwise routed as a sell of the input.
+        if (projectId != 0 && buyProjectId != 0) {
+            IJBTerminal buyTerminal = _getPrimaryTerminal({projectId: buyProjectId, token: tokenIn});
+            uint256 issuedTokenCount = address(buyTerminal).code.length == 0
+                ? 0
+                : _issuanceOf({terminal: buyTerminal, projectId: buyProjectId, token: tokenIn, amount: amountIn});
+            uint256 reclaim = calculateExpectedOutputFromSelling({
+                projectId: projectId,
+                tokenAmountIn: amountIn,
+                outputToken: tokenOut,
+                terminal: _getPrimaryTerminal({projectId: projectId, token: tokenOut})
+            });
+            // A quote V4's signed deltas cannot carry leaves its side ineligible, as in 1.2.0.
+            if (issuedTokenCount > MAX_V4_DELTA || (reclaim <= MAX_V4_DELTA && issuedTokenCount < reclaim)) {
+                buyProjectId = 0;
             }
+        }
+
+        // Buying a project token: fill from the pool while it beats issuance and mint the rest.
+        if (buyProjectId != 0) {
+            return (
+                BaseHook.beforeSwap.selector,
+                _routeBuy({
+                    key: key, params: params, projectId: buyProjectId, amountIn: amountIn, amountOutMin: amountOutMin
+                }),
+                0
+            );
         }
 
         if (projectId == 0) {
             // No JB token involved, proceed with normal Uniswap swap.
             // A tagged minimum is enforced for this V4 settlement in `_afterSwap`.
+            // The calls before this event are views, which cannot reenter.
+            // forge-lint: disable-next-item(reentrancy-events)
             emit RouteSelected({poolId: poolId, useJuicebox: false, expectedTokens: 0, caller: msg.sender});
             return (BaseHook.beforeSwap.selector, BeforeSwapDeltaLibrary.ZERO_DELTA, 0);
         }

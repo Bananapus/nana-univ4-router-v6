@@ -19,7 +19,7 @@ This file focuses on the routing, oracle, and composition risks in `JBUniswapV4H
 ## 1. Trust assumptions
 
 - **PoolManager and V4 callbacks.** The hook trusts Uniswap V4 callback ordering and signed-delta semantics.
-- **Juicebox preview surfaces.** Buy-side routing trusts `previewPayFor(...)` when available, and the ruleset weight when the preview mints nothing for the payer while forwarding funds to a pay hook (the buy's output floor enforces it). A rate that cannot be priced (for example an accounting currency other than the token-address currency `calculateExpectedTokensWithCurrency` assumes, or a missing feed) leaves the buy a plain V4 swap, as in 1.2.0. A pay hook that forwards nothing but mints extra project tokens is not counted, which only lowers the floor. Sell-side routing trusts `previewCashOutFrom(...)` when available.
+- **Juicebox preview surfaces.** Buy-side routing trusts `previewPayFor(...)` when available, and the ruleset weight when the preview mints nothing for the payer while forwarding funds to a pay hook (the buy's output floor enforces it). The weight is priced with the primary terminal's accounting context for the input token, as the terminal store prices it; a rate that cannot be priced (no terminal or context, or a missing feed) leaves the buy a plain V4 swap, as in 1.2.0. The split also assumes issuance is linear in the amount paid: a pay data hook whose rate depends on the payment size, or a dust input V4 rounds to zero, can make a split buy revert where 1.2.0 minted the whole input (a revert, never an underpayment). A pay hook that forwards nothing but mints extra project tokens is not counted, which only lowers the floor. Sell-side routing trusts `previewCashOutFrom(...)` when available.
 - **Project-selected terminals.** The hook trusts the project's primary terminal as the protocol-side execution target.
 - **Oracle readers.** Downstream systems may treat `observe(...)` as a real guardrail even though this is still pool-local oracle state.
 
@@ -32,7 +32,7 @@ This file focuses on the routing, oracle, and composition risks in `JBUniswapV4H
 
 ## 3. Routing risks
 
-- **Buys split between the pool and minting.** A buy swaps the pool itself, limited at the price where the pool's output after LP and protocol fees equals issuance, and mints the leftover input. A caller limit at or inside the fee-free issuance price keeps a plain V4 swap (this is how the buyback hook's swaps stay plain). A swap between two project tokens is routed as a sell of the input.
+- **Buys split between the pool and minting.** A buy swaps the pool itself, limited at the price where the pool's output after LP and protocol fees equals issuance, and mints the leftover input. A caller limit at or inside the fee-free issuance price keeps a plain V4 swap (this is how the buyback hook's swaps stay plain). A swap between two project tokens is such a buy when paying the output's project mints at least what cashing out the input reclaims, and a sell of the input otherwise.
 - **Buy rounding margin.** The issuance floor is reduced by `issuance / 1e6 + 3` units so a buyback limit derived from a slightly smaller count still reads as inside the issuance price; V4 also rounds each step's input and fee up; on thin liquidity that can eat a pool fill, and the floor on both legs then reverts the swap. A ladder of dust liquidity above issuance can therefore make buys revert (griefing, not loss); paying the terminal directly still works.
 - **Split buys take input from PoolManager reserves.** The mint leg `take`s the leftover input before the caller settles, as the 1.2.0 Juicebox routes do. A PoolManager without reserves of the input currency makes the swap revert, never underpay.
 - **Slippage protection is tag-gated.** A minimum is enforced only when `hookData` begins with `JB_HOOK_DATA_TAG` followed by a 32-byte `amountOutMin` (an explicit zero is a deliberate opt-out). Any other payload — empty, or a generic router's own metadata — carries no minimum: its first word is never mis-decoded as one, so neither a large word (DoS) nor a small word (silent skip) is possible. The hook imposes no floor of its own; an untagged swap proceeds under the caller's own protection (its router min-out or `sqrtPriceLimitX96`).
@@ -166,6 +166,6 @@ On buys, a caller limit at or inside the fee-free issuance price keeps a plain V
 
 ### Other notes
 
-#### The buy helper truncates currency IDs to `uint32`
+#### The buy helper reads the terminal's accounting context
 
-`_getBuyHelper` uses `uint32(uint160(paymentToken))` for currency comparison. The collision probability (~0.001% with ~10k active tokens) is negligible, and a collision would affect only the view-only preview estimation, not actual swap execution.
+`calculateExpectedTokensWithCurrency` takes the payment currency and decimals from the primary terminal's `accountingContextForTokenOf`, the values the terminal store prices the payment with, so it does not derive currency IDs from token addresses.

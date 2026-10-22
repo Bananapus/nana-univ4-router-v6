@@ -66,8 +66,7 @@ JB-token detection requires the project to have a **registered ERC-20** (`JBToke
 ## A.5 Currency and token handling
 
 - Native ETH is normalized via `_normalizeToken`: Uniswap's `address(0)` maps to Juicebox's `JB_NATIVE_TOKEN` (`0xEEee...EEeE`) before terminal lookup and preview calls. Both sides of the swap are normalized consistently. (`JBUniswapV4Hook.sol:1033-1039`)
-- Token decimals are read with `try IERC20Metadata.decimals()`; failures default to `18`. Tokens advertising more than `77` decimals are treated as unsupported (would overflow `10**decimals`) and the route degrades to `0`. (`JBUniswapV4Hook.sol:330-333, 966-979`)
-- Currency-ID collisions on `uint32(uint160(token))` are bounded to view-only preview helpers and never affect live execution path selection (collision rate ~0.001% at ~10k active tokens; see `RISKS.md §9 Accepted risks and notes`).
+- The weight-based rate reads the payment's currency and decimals from the primary terminal's accounting context for the token, as the terminal store does. No terminal or context, or more than `77` decimals (would overflow `10**decimals`), returns `0`.
 
 ---
 
@@ -210,7 +209,7 @@ There is no `setChainSpecificConstants` one-shot binder pattern on this contract
 
 12. **Project-token identification is precise.** `_projectIdForRegisteredToken(token)` returns non-zero only when `TOKENS.tokenOf(projectId) == token`. Credit-only projects (no registered ERC-20) and projects with a different registered token both fall through to the normal V4 swap path. (`JBUniswapV4Hook.sol:1090-1100`)
 
-13. **Cross-project determinism.** A swap between two project tokens is routed as a sell of the input token. The router never evaluates two Juicebox paths.
+13. **Cross-project determinism.** A swap between two project tokens is a buy of the output when its issuance for the input fits V4's deltas and is at least the input's reclaim (a reclaim V4's deltas cannot carry is ignored), and a sell of the input otherwise. Ties go to the buy, as in 1.2.0. Only the chosen side's Juicebox path executes.
 
 14. **No swap-time external configuration.** The hook reads only PoolManager state (`slot0`, `liquidity`) and the per-pool oracle ring buffer during `_beforeSwap` route comparison. No registry lookups, no storage-mutation reads, no off-chain oracle calls. Behavior on a given block is fully determined by on-chain state at that block.
 

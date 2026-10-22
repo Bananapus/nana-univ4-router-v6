@@ -80,4 +80,38 @@ contract RegressionDeltaEncoding is JuiceboxHookTest {
         assertEq(mockJBMultiTerminal.lastProjectId(), 123, "router should select the eligible sell route");
         assertGt(token1.balanceOf(address(this)) - balanceBefore, v4Quote, "sell route should beat the V4 fallback");
     }
+
+    function test_oversizedSellQuoteDoesNotSuppressEligibleBuyRoute() public {
+        uint256 amountIn = 1 ether;
+        uint256 buyProjectId = 456;
+
+        mockJBTokens.setProjectId(address(token1), buyProjectId);
+        mockJBMultiTerminal.setProjectToken(buyProjectId, address(token1));
+        mockJBMultiTerminal.setPayReturnAmount(100 ether);
+
+        // The sell-side reclaim cannot be represented in V4's signed-delta accounting domain.
+        mockJBTerminalStore.setSurplus(123, address(token1), 2 * hook.MAX_V4_DELTA());
+        assertGt(
+            hook.calculateExpectedOutputFromSelling(
+                123, amountIn, address(token1), IJBTerminal(address(mockJBMultiTerminal))
+            ),
+            hook.MAX_V4_DELTA(),
+            "sell-side quote must be ineligible"
+        );
+
+        token0.approve(address(jbSwapRouter), amountIn);
+        jbSwapRouter.swap(
+            key,
+            SwapParams({
+                zeroForOne: true,
+                // Safe: amountIn is 1 ether.
+                // forge-lint: disable-next-line(unsafe-typecast)
+                amountSpecified: -int256(amountIn),
+                sqrtPriceLimitX96: TickMath.MIN_SQRT_PRICE + 1
+            }),
+            0
+        );
+
+        assertEq(mockJBMultiTerminal.lastProjectId(), buyProjectId, "router should select the eligible buy route");
+    }
 }
