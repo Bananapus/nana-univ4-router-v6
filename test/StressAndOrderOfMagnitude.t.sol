@@ -779,12 +779,13 @@ contract StressAndOrderOfMagnitudeTest is Test {
 
         // Set price for this token's currency
         uint32 customCurrencyId = uint32(uint160(address(customToken)));
-        mockJBPrices.setPricePerUnitOf(projectId, 1, customCurrencyId, 1e18); // 1:1 with base currency
+        // 1:1 with base currency: one base unit priced in this token at its decimals, as the terminal store reads it
+        mockJBPrices.setPricePerUnitOf(projectId, customCurrencyId, 1, oneUnit);
 
         uint256 expectedTokens = hook.calculateExpectedTokensWithCurrency(projectId, address(customToken), oneUnit);
 
-        // With weight = 1000e18 and 1 full unit of payment (normalized to 18 decimals = 1e18):
-        //   tokens = mulDiv(1000e18, 1e18, 1e18) = 1000e18
+        // With weight = 1000e18 and 1 full unit of payment:
+        //   tokens = mulDiv(oneUnit, 1000e18, oneUnit) = 1000e18
         // This should be the same regardless of the payment token's native decimals.
         assertEq(
             expectedTokens,
@@ -858,15 +859,13 @@ contract StressAndOrderOfMagnitudeTest is Test {
         assertLt(expectedTokensMillionEth, type(uint256).max, "Result should fit in uint256");
 
         // Test with price conversion factor (non-1:1 price)
-        // Set up a 2:1 price (2 base currency per payment token)
+        // Set up a 2:1 price (2 base currency per payment token, so one base unit is 0.5 payment tokens)
         uint32 token1CurrencyId = uint32(uint160(address(token1)));
-        mockJBPrices.setPricePerUnitOf(projectId, 1, token1CurrencyId, 2e18);
+        mockJBPrices.setPricePerUnitOf(projectId, token1CurrencyId, 1, 0.5e18);
 
         uint256 expectedWithPrice = hook.calculateExpectedTokensWithCurrency(projectId, address(token1), 100 ether);
 
-        // tokens = mulDiv(uint112.max, 100e18, 1e18) then mulDiv(intermediate, 2e18, 1e18)
-        //        = uint112.max * 100 * 2
-        //        = uint112.max * 200
+        // tokens = mulDiv(100e18, uint112.max, 0.5e18) = uint112.max * 200
         uint256 expectedWithPriceExact = uint256(maxWeight) * 200;
         assertEq(
             expectedWithPrice,

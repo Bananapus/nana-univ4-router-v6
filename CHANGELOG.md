@@ -16,6 +16,7 @@ This is a V5-to-V6 migration changelog, not a package release log or commit hist
 - The buy-side TWAP comparison is removed. A tagged `amountOutMin` on a split buy covers both legs together.
 - A swap between two project tokens is routed as a sell of the input token.
 - Buys whose input arrives short (fee-on-transfer input) now revert instead of routing on the reported amount.
+- `calculateExpectedTokensWithCurrency` converts currencies the way the terminal store does (one base-currency unit priced in the payment currency at the payment token's decimals, then `amount * weight / price`), so its count matches what the terminal mints.
 - No ABI or storage change; the oracle state of a deployed 1.2.x hook is layout-compatible.
 
 ## Summary

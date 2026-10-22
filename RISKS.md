@@ -19,7 +19,7 @@ This file focuses on the routing, oracle, and composition risks in `JBUniswapV4H
 ## 1. Trust assumptions
 
 - **PoolManager and V4 callbacks.** The hook trusts Uniswap V4 callback ordering and signed-delta semantics.
-- **Juicebox preview surfaces.** Buy-side routing trusts `previewPayFor(...)` when available, and the larger of that and the ruleset weight when the preview forwards funds to a pay hook (the buy's output floor enforces it). A rate that cannot be priced (for example an accounting currency other than the token-address currency `calculateExpectedTokensWithCurrency` assumes) leaves the buy a plain V4 swap, as in 1.2.0. A pay hook that forwards nothing but mints extra project tokens is not counted, which only lowers the floor. Sell-side routing trusts `previewCashOutFrom(...)` when available.
+- **Juicebox preview surfaces.** Buy-side routing trusts `previewPayFor(...)` when available, and the larger of that and the ruleset weight when the preview forwards funds to a pay hook (the buy's output floor enforces it). A rate that cannot be priced (for example an accounting currency other than the token-address currency `calculateExpectedTokensWithCurrency` assumes, or a missing feed) leaves the buy a plain V4 swap, as in 1.2.0. A pay hook that forwards nothing but mints extra project tokens is not counted, which only lowers the floor. Sell-side routing trusts `previewCashOutFrom(...)` when available.
 - **Project-selected terminals.** The hook trusts the project's primary terminal as the protocol-side execution target.
 - **Oracle readers.** Downstream systems may treat `observe(...)` as a real guardrail even though this is still pool-local oracle state.
 

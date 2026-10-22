@@ -363,36 +363,30 @@ contract JBUniswapV4Hook is BaseHook, IGeomeanOracle {
         // unsupported metadata so the caller can degrade to a 0 quote instead of reverting.
         if (paymentTokenDecimals > 77) return 0;
 
-        // Get the price: how much baseCurrency per 1 unit of payment token
-        // pricePerUnitOf returns the pricingCurrency cost for one unit of unitCurrency
-        uint256 baseCurrencyPerPaymentToken;
-        // If payment currency is the same as base currency, use 1:1 conversion
-        if (paymentCurrencyId == baseCurrency) {
-            // Same currency IDs - direct match
-            baseCurrencyPerPaymentToken = 1e18;
-        } else if (paymentToken == JB_NATIVE_TOKEN && baseCurrency == 1) {
-            // Both represent ETH but have different IDs (0xeeee vs 1)
-            baseCurrencyPerPaymentToken = 1e18;
+        // One base-currency unit priced in the payment currency at the payment token's decimals, as the terminal store
+        // reads it, so this count matches what the terminal mints.
+        uint256 weightRatio;
+        if (paymentCurrencyId == baseCurrency || (paymentToken == JB_NATIVE_TOKEN && baseCurrency == 1)) {
+            // The same currency (ETH can carry either ID).
+            weightRatio = 10 ** paymentTokenDecimals;
         } else {
-            // Different currencies - need price conversion
             try PRICES.pricePerUnitOf({
-                projectId: projectId, pricingCurrency: baseCurrency, unitCurrency: paymentCurrencyId, decimals: 18
+                projectId: projectId,
+                pricingCurrency: paymentCurrencyId,
+                unitCurrency: baseCurrency,
+                decimals: paymentTokenDecimals
             }) returns (
                 uint256 price
             ) {
-                baseCurrencyPerPaymentToken = price;
+                weightRatio = price;
             } catch {
                 return 0;
             }
+            if (weightRatio == 0) return 0;
         }
 
-        // Calculate tokens based on the payment amount and weight.
-        uint256 estimatedTokens = _calculateTokensWithCurrency({
-            tokensPerBaseCurrency: tokensPerBaseCurrency,
-            paymentAmount: paymentAmount,
-            paymentTokenDecimals: paymentTokenDecimals,
-            baseCurrencyPerPaymentToken: baseCurrencyPerPaymentToken
-        });
+        uint256 estimatedTokens =
+            FullMath.mulDiv({a: paymentAmount, b: tokensPerBaseCurrency, denominator: weightRatio});
 
         // Apply reserved rate: beneficiary only receives (1 - reservedPercent) of tokens
         // Reserved tokens go to team/contributors, not to the payer
@@ -793,39 +787,6 @@ contract JBUniswapV4Hook is BaseHook, IGeomeanOracle {
             poolId: poolId, useJuicebox: false, expectedTokens: uniswapV4ExpectedTokens, caller: msg.sender
         });
         return (BaseHook.beforeSwap.selector, BeforeSwapDeltaLibrary.ZERO_DELTA, 0);
-    }
-
-    /// @notice Converts a payment amount (in any token decimals) into the expected number of project tokens using the
-    /// ruleset weight and a price-oracle conversion factor.
-    /// @dev Normalizes payment amount to 18 decimals, then calculates tokens based on weight and price conversion
-    /// @param tokensPerBaseCurrency The project's weight (tokens per base currency unit)
-    /// @param paymentAmount The payment amount in the token's native decimals
-    /// @param paymentTokenDecimals The decimals of the payment token
-    /// @param baseCurrencyPerPaymentToken The price conversion rate (base currency per payment token, scaled by 1e18)
-    /// @return expectedTokens The expected number of tokens to be received
-    function _calculateTokensWithCurrency(
-        uint256 tokensPerBaseCurrency,
-        uint256 paymentAmount,
-        uint8 paymentTokenDecimals,
-        uint256 baseCurrencyPerPaymentToken
-    )
-        internal
-        pure
-        returns (uint256 expectedTokens)
-    {
-        // Normalize payment amount to 18 decimals
-        uint256 paymentAmount18 =
-            paymentTokenDecimals == 18 ? paymentAmount : (paymentAmount * 1e18) / (10 ** paymentTokenDecimals);
-
-        // Calculate tokens: if price conversion is 1:1, simplify; otherwise apply price conversion
-        if (baseCurrencyPerPaymentToken == 1e18) {
-            // Direct calculation: (weight * paymentAmount18) / 1e18
-            expectedTokens = FullMath.mulDiv({a: tokensPerBaseCurrency, b: paymentAmount18, denominator: 1e18});
-        } else {
-            // Two-step calculation: first multiply by weight, then apply price conversion
-            uint256 intermediate = FullMath.mulDiv({a: tokensPerBaseCurrency, b: paymentAmount18, denominator: 1e18});
-            expectedTokens = FullMath.mulDiv({a: intermediate, b: baseCurrencyPerPaymentToken, denominator: 1e18});
-        }
     }
 
     /// @notice Reads an explicit `amountOutMin` from `hookData` when it carries the Juicebox tag.

@@ -1366,21 +1366,17 @@ contract JuiceboxHookTest is Test {
     function testCalculateExpectedTokensWithNonOneToOnePrice() public {
         mockJBController.setWeight(123, 1000e18);
 
-        // Set price: 2 token1 = 1 ETH (so baseCurrencyPerPaymentToken = 0.5e18)
-        // This means 1 token1 = 0.5 ETH, so baseCurrencyPerPaymentToken = 0.5e18
-        // Note: pricePerUnitOf(projectId, baseCurrency, paymentCurrencyId, 18) returns baseCurrency per
-        // paymentCurrencyId So we set: prices[projectId][baseCurrency][paymentCurrencyId] = price
+        // Set price: 2 token1 = 1 ETH. Like the terminal store, the hook asks for one base-currency unit priced in
+        // the payment currency at the payment token's decimals: prices[projectId][paymentCurrency][baseCurrency].
         uint32 token1CurrencyId = uint32(uint160(address(token1)));
         uint256 baseCurrency = 1; // ETH
-        mockJBPrices.setPricePerUnitOf(123, baseCurrency, token1CurrencyId, 0.5e18);
+        mockJBPrices.setPricePerUnitOf(123, token1CurrencyId, baseCurrency, 2e18);
 
-        // Calculate expected tokens for 2 ether of token1
-        // Expected: (1000e18 * 2e18 * 0.5e18) / (1e18 * 1e18) = 1000e18
+        // Calculate expected tokens for 2 ether of token1: 2e18 * 1000e18 / 2e18 = 1000e18
         uint256 expectedTokens = hook.calculateExpectedTokensWithCurrency(123, address(token1), 2 ether);
 
-        // Manual calculation using FullMath to match the hook's logic
-        uint256 intermediate = FullMath.mulDiv(1000e18, 2 ether, 1e18);
-        uint256 calculated = FullMath.mulDiv(intermediate, 0.5e18, 1e18);
+        // Manual calculation matching the terminal store
+        uint256 calculated = FullMath.mulDiv(2 ether, 1000e18, 2e18);
 
         assertEq(expectedTokens, calculated, "Non-1:1 price calculation should match");
         assertEq(expectedTokens, 1000 ether, "Should receive 1000 tokens for 2 token1 at 0.5 ETH/token");
@@ -1421,37 +1417,15 @@ contract JuiceboxHookTest is Test {
         mockJBTokens.setProjectId(address(usdc), projectId);
         mockJBController.setWeight(projectId, 1000e18); // 1000 tokens per ETH
 
-        // Set 1:1 price (1 USDC = 1 ETH, but accounting for decimals)
-        // 1 USDC (1e6) should equal 1 ETH (1e18)
-        // So price = 1e18 / 1e6 = 1e12 (scaled by 1e18) = 1e30
+        // Set 1:1 price (1 ETH = 1 USDC): one ETH priced in USDC at USDC's 6 decimals.
         uint32 usdcCurrencyId = uint32(uint160(address(usdc)));
         uint256 baseCurrency = 1; // ETH
-        mockJBPrices.setPricePerUnitOf(projectId, baseCurrency, usdcCurrencyId, 1e30); // 1e18 * 1e12
+        mockJBPrices.setPricePerUnitOf(projectId, usdcCurrencyId, baseCurrency, 1e6);
 
         // Test _getTokenDecimals() indirectly via calculateExpectedTokensWithCurrency
-        // Pay with 1 USDC (1e6 units)
+        // Pay with 1 USDC (1e6 units): 1e6 * 1000e18 / 1e6 = 1000e18
         uint256 usdcAmount = 1e6; // 1 USDC
         uint256 expectedTokens = hook.calculateExpectedTokensWithCurrency(projectId, address(usdc), usdcAmount);
-
-        // Expected calculation:
-        // 1. Normalize USDC to 18 decimals: 1e6 * 1e18 / 1e6 = 1e18
-        // 2. Apply price: 1e18 * 1e30 / 1e18 = 1e30 (but this seems wrong...)
-        // Actually, let's recalculate:
-        // baseCurrencyPerPaymentToken = 1e30 (1 ETH per 1e-12 USDC? No, that's wrong)
-        // Let me think: pricePerUnitOf returns baseCurrency per unitCurrency, scaled by decimals
-        // If 1 USDC = 1 ETH, then price = 1e18 (for 18 decimals)
-        // But USDC has 6 decimals, so we need to account for that
-        // pricePerUnitOf(projectId, baseCurrency=1, unitCurrency=usdc, decimals=18)
-        // This should return: how much baseCurrency (ETH) per 1 unit of unitCurrency (USDC)
-        // 1 USDC = 1 ETH, so price = 1e18 (scaled)
-        mockJBPrices.setPricePerUnitOf(projectId, baseCurrency, usdcCurrencyId, 1e18);
-
-        // Recalculate with correct price
-        expectedTokens = hook.calculateExpectedTokensWithCurrency(projectId, address(usdc), usdcAmount);
-
-        // Manual calculation:
-        // paymentAmount18 = 1e6 * 1e18 / 1e6 = 1e18
-        // tokens = (1000e18 * 1e18 * 1e18) / (1e18 * 1e18) = 1000e18
         assertGt(expectedTokens, 0, "Should calculate tokens for 6-decimal token");
         // Should receive approximately 1000 tokens (accounting for rounding)
         assertGe(expectedTokens, 999e18, "Should receive close to 1000 tokens for 1 USDC");
@@ -1468,23 +1442,20 @@ contract JuiceboxHookTest is Test {
         mockJBTokens.setProjectId(address(wbtc), projectId);
         mockJBController.setWeight(projectId, 1000e18); // 1000 tokens per ETH
 
-        // Set price: 1 WBTC = 30 ETH (example)
-        // pricePerUnitOf returns baseCurrency per unitCurrency, scaled by 1e18
-        // So: 30 ETH per WBTC = 30e18
+        // Set price: 1 WBTC = 30 ETH, so one ETH is 1/30 WBTC, priced at WBTC's 8 decimals (rounded down, as a feed
+        // would).
         uint32 wbtcCurrencyId = uint32(uint160(address(wbtc)));
         uint256 baseCurrency = 1; // ETH
-        mockJBPrices.setPricePerUnitOf(projectId, baseCurrency, wbtcCurrencyId, 30e18);
+        mockJBPrices.setPricePerUnitOf(projectId, wbtcCurrencyId, baseCurrency, 3_333_333);
 
         // Pay with 0.1 WBTC (0.1 * 1e8 = 1e7 units)
         uint256 wbtcAmount = 1e7; // 0.1 WBTC
         uint256 expectedTokens = hook.calculateExpectedTokensWithCurrency(projectId, address(wbtc), wbtcAmount);
 
-        // Manual calculation:
-        // paymentAmount18 = 1e7 * 1e18 / 1e8 = 1e17
-        // tokens = (1000e18 * 1e17 * 30e18) / (1e18 * 1e18) = 3000e17 = 300e18
-        assertGt(expectedTokens, 0, "Should calculate tokens for 8-decimal token");
-        // Should receive approximately 300 tokens (0.1 WBTC * 30 ETH/WBTC * 1000 tokens/ETH)
-        assertGe(expectedTokens, 299e18, "Should receive close to 300 tokens for 0.1 WBTC");
+        // Like the terminal store: 1e7 * 1000e18 / 3_333_333, about 3000 tokens (0.1 WBTC * 30 ETH/WBTC * 1000
+        // tokens/ETH).
+        assertEq(expectedTokens, FullMath.mulDiv(wbtcAmount, 1000e18, 3_333_333), "the terminal store's count");
+        assertGe(expectedTokens, 2999e18, "Should receive close to 3000 tokens for 0.1 WBTC");
     }
 
     /// @notice Test 9.2: Tokens with 0 decimals
@@ -1501,15 +1472,13 @@ contract JuiceboxHookTest is Test {
         // Set 1:1 price
         uint32 tokenCurrencyId = uint32(uint160(address(zeroDecToken)));
         uint256 baseCurrency = 1;
-        mockJBPrices.setPricePerUnitOf(projectId, baseCurrency, tokenCurrencyId, 1e18);
+        mockJBPrices.setPricePerUnitOf(projectId, tokenCurrencyId, baseCurrency, 1);
 
         // Pay with 1000 tokens (1000 units, since 0 decimals)
         uint256 tokenAmount = 1000;
         uint256 expectedTokens = hook.calculateExpectedTokensWithCurrency(projectId, address(zeroDecToken), tokenAmount);
 
-        // Manual calculation:
-        // paymentAmount18 = 1000 * 1e18 / 1 = 1000e18
-        // tokens = (1000e18 * 1000e18 * 1e18) / (1e18 * 1e18) = 1000e18
+        // 1000 * 1000e18 / 1 = 1e24
         assertGt(expectedTokens, 0, "Should calculate tokens for 0-decimal token");
         assertGe(expectedTokens, 999e18, "Should receive close to 1000 tokens");
     }
@@ -1544,7 +1513,7 @@ contract JuiceboxHookTest is Test {
         // Set 1:1 price
         uint32 tokenCurrencyId = uint32(uint160(address(testToken)));
         uint256 baseCurrency = 1;
-        mockJBPrices.setPricePerUnitOf(projectId, baseCurrency, tokenCurrencyId, 1e18);
+        mockJBPrices.setPricePerUnitOf(projectId, tokenCurrencyId, baseCurrency, 10 ** decimals);
 
         // Pay with 1 unit of token (1 * 10^decimals)
         uint256 tokenAmount = 10 ** decimals;
