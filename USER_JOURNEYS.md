@@ -64,7 +64,7 @@ This repo is the UniV4 hook and oracle primitive for Juicebox-aware swaps. It ow
 
 **Failure Modes**
 
-- dust swaps or dynamic fees distort route comparison
+- dust swaps distort route comparison (dynamic-fee pools cannot use this hook)
 - hidden fee-free-surplus state can make a zero-tax cash-out settle below its gross preview
 - sign-convention mistakes around slippage
 - reentrancy on the sell path changes assumptions

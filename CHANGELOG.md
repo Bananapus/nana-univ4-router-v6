@@ -23,6 +23,14 @@ This is a V5-to-V6 migration changelog, not a package release log or commit hist
 - Sells of the fee project's own token (project 1) stay in the pool: its cash-out fee would mint its token back to the hook mid-sell.
 - Adding or removing liquidity in a pool of this hook reverts with `JBUniswapV4Hook_ReentrantRouting` while a terminal leg runs, so a project's hooks cannot move the pool under a quoted split.
 - New `quoteSwap(PoolKey, SwapParams, uint160, uint256)`, which always reverts with `JBUniswapV4Hook_SwapQuote(legAmountIn, legAmountOut, restAmountOut)`. `BestRouteSelected` is removed; `RouteSelected` reports every route. `estimateUniswapOutput` is removed (routing no longer used it); integrators quote through Uniswap's V4 Quoter, which simulates the hook's routing.
+- Oracle growth is lazy: a full buffer raises `cardinalityNext` and each slot is written when first reached. 1.2.x initialized new slots inside the crossing swap, which costs about 17.3M gas from 1,024 to 1,801 slots, over Ethereum's per-transaction gas cap, so a busy pool would freeze swaps and LP withdrawals.
+- Liquidity changes record the oracle observation with the liquidity in range before the change, not after.
+- A cash-out leg is used only when its net average price is not past the caller's `sqrtPriceLimitX96`.
+- Sells of a revnet that pays its fee to itself (REV) stay in the pool, as project 1's do.
+- A buy larger than the PoolManager's balance of the input token is a plain V4 swap instead of reverting.
+- A buy's pool leg is quoted first; when V4's per-step rounding would make it deliver less than minting, the whole buy mints instead of reverting.
+- Exact-output swaps are plain V4 swaps (`JBUniswapV4Hook_ExactOutputSwapsNotSupported` is removed). Dynamic-fee pools are rejected at initialization (`JBUniswapV4Hook_DynamicFeeNotSupported`).
+- The unused `TWAP_PERIOD` and `TWAP_SLIPPAGE_DENOMINATOR` constants are removed. `_routing` is transient.
 - No storage change; the oracle state of a deployed 1.2.x hook is layout-compatible.
 
 ## Summary

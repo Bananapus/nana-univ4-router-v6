@@ -48,7 +48,9 @@ JB-token detection requires the project to have a **registered ERC-20** (`JBToke
 
 ## A.3 Settlement integrity
 
-- Exact-output swaps (`params.amountSpecified > 0`) are **not supported** and revert `JBUniswapV4Hook_ExactOutputSwapsNotSupported`. Only exact-input semantics are honored. (`JBUniswapV4Hook.sol:699-701`)
+- Exact-output swaps (`params.amountSpecified > 0`) are plain V4 swaps: the hook returns a zero delta and routes nothing. Juicebox routing prices exact inputs only.
+- A cash-out leg is used only when its net average price is not past the caller's `sqrtPriceLimitX96` (`_pastLimitOf`).
+- Dynamic-fee pools cannot be initialized with this hook (`JBUniswapV4Hook_DynamicFeeNotSupported`).
 - On sell-side ERC-20 routes, the hook asserts the pre/post input-token balance is unchanged after the JB cash-out. A partial-fill terminal that returns or leaves project tokens behind reverts `JBUniswapV4Hook_SellInputReturned` before PoolManager settlement. (`JBUniswapV4Hook.sol:1209-1212, 1271-1284`)
 - A non-zero sell that yields zero output reverts `JBUniswapV4Hook_JuiceboxSellDidNotDeliver` rather than settling a degenerate zero-output swap. (`JBUniswapV4Hook.sol:1286-1292`)
 - Temporary ERC-20 allowances granted to the terminal are checked for **exact consumption** post-call. Any leftover allowance reverts `JBUniswapV4Hook_TemporaryAllowanceNotConsumed`, preventing a terminal from holding live spend authority on the hook's residual balance across transactions. (`JBUniswapV4Hook.sol:1163-1174, 1226-1248`)
@@ -77,7 +79,7 @@ There are no operator powers on this hook. After deployment:
 - **No owner.** No `Ownable`, no `_DEPLOYER`, no governance role.
 - **No pause.** Swaps cannot be paused, blocked, or fee-switched on hooked pools.
 - **No upgrade.** Hook bytecode is fixed; recovery from a bug requires a new hook deployment + pool migration.
-- **No retunable parameters.** `TWAP_PERIOD = 1800`, `MAX_TWAP_CARDINALITY = 1801`, `TWAP_SLIPPAGE_DENOMINATOR = 10000`, `JB_HOOK_DATA_TAG`, `MAX_V4_DELTA = type(int128).max`, `JB_NATIVE_TOKEN`, `UNISWAP_NATIVE_ETH` are all `public constant`. (`JBUniswapV4Hook.sol:124-146`)
+- **No retunable parameters.** `MAX_TWAP_CARDINALITY = 1801`, `JB_HOOK_DATA_TAG`, `MAX_V4_DELTA = type(int128).max`, `JB_NATIVE_TOKEN`, `UNISWAP_NATIVE_ETH` are all `public constant`. (`JBUniswapV4Hook.sol:124-146`)
 - **No registry / mapping.** Pool-to-routing settings, allowlists, blocklists — none exist. The hook applies uniformly to every pool that initializes against it.
 - **No setChainSpecificConstants.** Unlike `JBBuybackHook` / `JBRouterTerminal`, this hook has no one-shot deployer-only setter. All chain wiring is in the constructor.
 
@@ -102,13 +104,13 @@ V4 `BaseHook`. Holds no persistent project funds — only transient swap-in-flig
 
 **PoolManager-only callbacks (the only state-mutating external surface):**
 
-- **`_beforeSwap(_, key, params, hookData) → (selector, BeforeSwapDelta, uint24)`** — PoolManager only. Reads an explicit `amountOutMin` only when `hookData` begins with `JB_HOOK_DATA_TAG ++ abi.encode(amountOutMin)` (`0` when absent), rejects exact-output, identifies JB project tokens via `_projectIdForRegisteredToken`, queries the terminals' previews, and routes the buy or sell through `_routeSplit`.
-  - **Invariants:** Recursive routing reverts (`_routing` flag); exact-output rejected; quotes above `MAX_V4_DELTA` ineligible; buys deliver at least issuance on the whole input less the rounding margin; sells deliver the best of the pool alone, the all-reclaim preview (when the PoolManager holds the input) and a split.
+- **`_beforeSwap(_, key, params, hookData) → (selector, BeforeSwapDelta, uint24)`** — PoolManager only. Reads an explicit `amountOutMin` only when `hookData` begins with `JB_HOOK_DATA_TAG ++ abi.encode(amountOutMin)` (`0` when absent), leaves exact-output swaps to the pool, identifies JB project tokens via `_projectIdForRegisteredToken`, queries the terminals' previews, and routes the buy or sell through `_routeSplit`.
+  - **Invariants:** Recursive routing reverts (transient `_routing` flag); exact-output swaps are plain; quotes above `MAX_V4_DELTA` ineligible; buys deliver at least issuance on the whole input less the rounding margin; sells deliver the best of the pool alone, the all-reclaim preview (when the PoolManager holds the input) and a split.
 
 - **`_afterSwap(_, key, params, delta, hookData) → (selector, int128)`** — PoolManager only. For swaps the pool settles in whole or in part, validates the pool's output plus a partial split's legs (`_splitAmountOut`, reset here) against a tagged `amountOutMin` (`_amountOutMinFrom`) when present. Records a fresh oracle observation.
   - **Invariants:** a tagged minimum (when present) is enforced on real V4 swaps; untagged/empty `hookData` carries no minimum and is allowed (no revert, no hook floor); observation written exactly once. (`JBUniswapV4Hook.sol:585-640`)
 
-- **`_afterInitialize(_, key, _, _) → selector`** — PoolManager only. Initializes the per-pool `Oracle.Observation` array via `Oracle.initialize`, sets `ObservationState{index:0, cardinality:1, cardinalityNext:1}`.
+- **`_afterInitialize(_, key, _, _) → selector`** — PoolManager only. Rejects dynamic-fee pools, initializes the per-pool `Oracle.Observation` array via `Oracle.initialize`, sets `ObservationState{index:0, cardinality:1, cardinalityNext:1}`.
   - **Invariants:** one-shot per pool; first observation timestamp is `block.timestamp`. (`JBUniswapV4Hook.sol:581-590`)
 
 - **`_afterAddLiquidity(_, key, _, _, _, _) → (selector, BalanceDelta)`** — PoolManager only. Records an observation; returns zero balance delta. (`JBUniswapV4Hook.sol:562-576`)
@@ -187,9 +189,9 @@ There is no `setChainSpecificConstants` one-shot binder pattern on this contract
 
 3. **Live routing trusts only terminal-direct previews.** Buyback-hook metadata-only quotes are explicitly excluded from `_beforeSwap` route scoring. `calculateExpectedTokensWithCurrency` prices a buy only when the preview forwards funds to a pay hook, and the terminal's `minReturnedTokens` enforces it.
 
-4. **Reentrancy guard composes safely with buyback hooks.** `_routing` is a simple bool that survives across `poolManager.unlock`. Composed `buyback -> V4 -> this -> JB -> buyback` cycles revert at the second `_beforeSwap` entry. The buyback hook's swaps are plain V4 swaps here (their limit is inside the issuance price), and a buyback hook paid by this hook's mint leg finds the PoolManager unlocked and mints at the weight.
+4. **Reentrancy guard composes safely with buyback hooks.** `_routing` is a transient bool, set for the terminal leg and cleared after it, so it lasts only within the transaction. Composed `buyback -> V4 -> this -> JB -> buyback` cycles revert at the second `_beforeSwap` entry. The buyback hook's swaps are plain V4 swaps here (their limit is inside the issuance price), and a buyback hook paid by this hook's mint leg finds the PoolManager unlocked and mints at the weight.
 
-5. **No exact-output, no admin surface, no upgrade path.** The hook's runtime is fully constrained at deployment. The only mutable storage is the per-pool oracle ring buffer + observation state + transient `_routing` flag.
+5. **No exact-output routing, no admin surface, no upgrade path.** The hook's runtime is fully constrained at deployment. The only mutable storage is the per-pool oracle ring buffer + observation state + transient `_routing` flag.
 
 6. **Balance-delta accounting everywhere.** Pre-existing hook balances are never swept into PoolManager settlement; only the delta produced by *this* terminal call moves. Stranded-token griefing blocked.
 
@@ -230,7 +232,7 @@ This repo holds **no privileged role** of its own. All implied centralization fl
 
 - Reentrancy guard set/check: `src/JBUniswapV4Hook.sol:178, 682-683, 1203, 1304`
 - `amountOutMin` required: `src/JBUniswapV4Hook.sol:688-693`
-- Exact-output rejection: `src/JBUniswapV4Hook.sol:699-701`
+- Exact-output passthrough, cash-out price limit (`_pastLimitOf`), buy pool-leg quote: `_beforeSwap`, `_routeSplit`, `_routeSell` in `src/JBUniswapV4Hook.sol`
 - Buy split and issuance floor: `_routeSplit` in `src/JBUniswapV4Hook.sol`
 - Sell choice, inventory cap: `_routeSell`; pool quotes: `quoteSwap` in `src/JBUniswapV4Hook.sol`
 - Buyback skip metadata: `_cashOutMetadataOf` in `src/JBUniswapV4Hook.sol`
@@ -247,4 +249,4 @@ This repo holds **no privileged role** of its own. All implied centralization fl
 - `getHookPermissions` declaration: `src/JBUniswapV4Hook.sol:472-489`
 - `observe` / `observeTWAP`: `src/JBUniswapV4Hook.sol:498-552`
 - `_projectIdForRegisteredToken` precise check: `src/JBUniswapV4Hook.sol:1090-1100`
-- Constants (`TWAP_PERIOD`, `MAX_TWAP_CARDINALITY`, `MAX_V4_DELTA`, `JB_NATIVE_TOKEN`, `UNISWAP_NATIVE_ETH`): `src/JBUniswapV4Hook.sol:124-146`
+- Constants (`MAX_TWAP_CARDINALITY`, `MAX_V4_DELTA`, `JB_NATIVE_TOKEN`, `UNISWAP_NATIVE_ETH`): `src/JBUniswapV4Hook.sol:124-146`
