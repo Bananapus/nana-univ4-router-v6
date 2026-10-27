@@ -670,6 +670,20 @@ contract TestObserve is Test {
             (uint160(100) << 128) / 150 ether,
             "charged at the liquidity before the removal"
         );
+
+        // 100 seconds at 100 ether; a change out of range leaves active liquidity as it was.
+        uint160 afterRemove = _secondsPerLiquidityNow();
+        vm.warp(10_300);
+        modifyLiquidityRouter.modifyLiquidity(
+            key,
+            ModifyLiquidityParams({tickLower: 600, tickUpper: 1200, liquidityDelta: 50 ether, salt: bytes32(0)}),
+            ZERO_BYTES
+        );
+        assertEq(
+            _secondsPerLiquidityNow() - afterRemove,
+            (uint160(100) << 128) / 100 ether,
+            "an out-of-range change does not alter the charge"
+        );
     }
 
     function _modifyLiquidity(int256 liquidityDelta) internal {

@@ -346,11 +346,21 @@ contract SkipCheckingDataHook is IJBRulesetDataHook {
     }
 }
 
+/// @notice A cash-out hook that accepts its share and nothing else.
+contract PlainCashOutHook is IJBCashOutHook {
+    function afterCashOutRecordedWith(JBAfterCashOutRecordedContext calldata) external payable {}
+
+    function supportsInterface(bytes4 interfaceId) external pure returns (bool) {
+        return interfaceId == type(IJBCashOutHook).interfaceId || interfaceId == type(IERC165).interfaceId;
+    }
+}
+
 /// @notice A cash-out data hook that takes a share of each cash-out, like a revnet's fee hook, and names the project
 /// it pays that fee to as `FEE_REVNET_ID`.
 contract FeeRevnetDataHook is IJBRulesetDataHook, IJBCashOutHook {
     // forge-lint: disable-next-line(mixed-case-variable)
     uint256 public FEE_REVNET_ID;
+    IJBCashOutHook internal immutable OTHER_HOOK = new PlainCashOutHook();
 
     receive() external payable {}
 
@@ -371,8 +381,10 @@ contract FeeRevnetDataHook is IJBRulesetDataHook, IJBCashOutHook {
         view
         returns (uint256, uint256, uint256, uint256, JBCashOutHookSpecification[] memory hookSpecifications)
     {
-        hookSpecifications = new JBCashOutHookSpecification[](1);
-        hookSpecifications[0] =
+        // Another hook without `FEE_REVNET_ID` comes first.
+        hookSpecifications = new JBCashOutHookSpecification[](2);
+        hookSpecifications[0] = JBCashOutHookSpecification({hook: OTHER_HOOK, noop: false, amount: 1, metadata: ""});
+        hookSpecifications[1] =
             JBCashOutHookSpecification({hook: IJBCashOutHook(address(this)), noop: false, amount: 1, metadata: ""});
         return
             (
@@ -1208,7 +1220,9 @@ contract SplitBuyTest is Test {
         if (poolInput != address(0)) IERC20(poolInput).approve(address(routerSwapper), type(uint256).max);
         _dust(key, dustPositions);
 
-        _assertNeverWorseThanPlain(key, zeroForOne, amountIn, _limit(key, zeroForOne, limitTicks), routerOrder);
+        _assertNeverWorseThanPlain(
+            key, zeroForOne, projectToken, amountIn, _limit(key, zeroForOne, limitTicks), routerOrder
+        );
     }
 
     /// @notice Fuzz: a sell across tax rates, pool shapes, sizes, price limits and both settle orders succeeds wherever
@@ -1234,14 +1248,16 @@ contract SplitBuyTest is Test {
         IERC20(projectToken).approve(address(swapper), type(uint256).max);
         IERC20(projectToken).approve(address(routerSwapper), type(uint256).max);
 
-        _assertNeverWorseThanPlain(key, false, amount, _limit(key, false, limitTicks), routerOrder);
+        _assertNeverWorseThanPlain(key, false, projectToken, amount, _limit(key, false, limitTicks), routerOrder);
     }
 
     /// @dev Swaps once with the terminal's previews failing, so the hook leaves the whole swap to the pool, then once
-    /// for real from the same state, and checks the real swap against the plain one.
+    /// for real from the same state, and checks the real swap against the plain one and its terminal leg against the
+    /// price limit.
     function _assertNeverWorseThanPlain(
         PoolKey memory key,
         bool zeroForOne,
+        address projectToken,
         uint256 amountIn,
         uint160 limit,
         bool routerOrder
@@ -1251,28 +1267,33 @@ contract SplitBuyTest is Test {
         uint256 snap = vm.snapshotState();
         vm.mockCallRevert(address(terminal), abi.encodeWithSelector(terminal.previewPayFor.selector), "");
         vm.mockCallRevert(address(terminal), abi.encodeWithSelector(terminal.previewCashOutFrom.selector), "");
-        (bool plainOk, uint256 plainUsed, uint256 plainOut) = _trySwap(key, zeroForOne, amountIn, limit, routerOrder);
+        (bool plainOk,, uint256 plainOut) = _trySwap(key, zeroForOne, amountIn, limit, routerOrder);
         vm.clearMockedCalls();
         vm.revertToState(snap);
 
-        (bool ok, uint256 used, uint256 out) = _trySwap(key, zeroForOne, amountIn, limit, routerOrder);
+        // The terminal leg moves the other currency in or out of the terminal, and mints or burns the project token.
+        Currency other = Currency.unwrap(key.currency0) == projectToken ? key.currency1 : key.currency0;
+        uint256 terminalBalance = other.balanceOf(address(terminal));
+        uint256 supply = _supply(projectToken);
+        (bool ok,, uint256 out) = _trySwap(key, zeroForOne, amountIn, limit, routerOrder);
         if (!plainOk) return;
         assertTrue(ok, "succeeds wherever the plain swap does");
         // The hook's rounding margin: a millionth plus 3 units.
         assertGe(out + plainOut / 1_000_000 + 3, plainOut, "never below the plain swap");
 
-        // Input the plain swap left unused (it stopped at the limit) must earn at least the limit price.
-        if (used <= plainUsed) return;
-        uint256 extra = used - plainUsed;
-        uint256 floor = plainOut
-            + (zeroForOne
-                    ? FullMath.mulDiv({
-                        a: FullMath.mulDiv({a: extra, b: limit, denominator: 1 << 96}), b: limit, denominator: 1 << 96
-                    })
-                    : FullMath.mulDiv({
-                        a: FullMath.mulDiv({a: extra, b: 1 << 96, denominator: limit}), b: 1 << 96, denominator: limit
-                    }));
-        assertGe(out + floor / 1_000_000 + 3, floor, "extra input within the price limit");
+        // The terminal leg's average price is within the limit; the pool keeps its own legs within it.
+        bool buy = Currency.unwrap(zeroForOne ? key.currency1 : key.currency0) == projectToken;
+        (uint256 legIn, uint256 legOut) = buy
+            ? (other.balanceOf(address(terminal)) - terminalBalance, _supply(projectToken) - supply)
+            : (supply - _supply(projectToken), terminalBalance - other.balanceOf(address(terminal)));
+        uint256 floor = zeroForOne
+            ? FullMath.mulDiv({
+                a: FullMath.mulDiv({a: legIn, b: limit, denominator: 1 << 96}), b: limit, denominator: 1 << 96
+            })
+            : FullMath.mulDiv({
+                a: FullMath.mulDiv({a: legIn, b: 1 << 96, denominator: limit}), b: 1 << 96, denominator: limit
+            });
+        assertGe(legOut + floor / 1_000_000 + 3, floor, "terminal leg within the price limit");
     }
 
     function _trySwap(
