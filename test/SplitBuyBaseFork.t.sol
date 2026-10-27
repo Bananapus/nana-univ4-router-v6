@@ -317,7 +317,7 @@ contract SplitBuyBaseForkTest is Test {
     /// @dev Front-runs a buy of `amount` with a pool buy limited at issuance (the attacker's best), then sells the
     /// attacker's tokens back. Front-runs are `k * k * amount / 300` for `k` in 1..30 without a minimum (up to 3x the
     /// buy), and `k * k * amount / 60_000` for `k` in 1..60 with one (up to 6%, where attacks still pass the minimum).
-    /// The victim's buy carries the unattacked quote less `slippageBps` (10_000 sends no minimum). Runs on 1.3.0 when
+    /// The victim's buy carries the unattacked quote less `slippageBps` (10_000 sends no minimum). Runs on 2.0.0 when
     /// `upgraded`, else on the deployed 1.2.0 hook. Returns the attacker's best profit, the victim's worst loss against
     /// the unattacked buy among buys that went through, how many attacks made the victim's buy revert, the unattacked
     /// output, and whether the unattacked buy used its whole input.
@@ -357,8 +357,8 @@ contract SplitBuyBaseForkTest is Test {
         vm.revertToState(start);
     }
 
-    /// @notice Sandwiches of a buy sent with no minimum, on 1.3.0 and on the deployed 1.2.0 under the same attacks. On
-    /// 1.3.0 the victim still gets at least minting everything; the pool's surplus above issuance is exposed.
+    /// @notice Sandwiches of a buy sent with no minimum, on 2.0.0 and on the deployed 1.2.0 under the same attacks. On
+    /// 2.0.0 the victim still gets at least minting everything; the pool's surplus above issuance is exposed.
     function test_sandwich_victimSetsNoMinimum_p13() public {
         _sandwiches(13, 10_000);
     }
@@ -434,7 +434,7 @@ contract SplitBuyBaseForkTest is Test {
     {
         emit log_string(string.concat(
                 "sandwich | ",
-                upgraded ? "1.3.0" : "1.2.0",
+                upgraded ? "2.0.0" : "1.2.0",
                 " | ",
                 vm.toString(pid),
                 " | ",
@@ -456,7 +456,7 @@ contract SplitBuyBaseForkTest is Test {
     }
 
     //*********************************************************************//
-    // ------------------- 1.3.0 against 1.2.0, case by case ------------- //
+    // ------------------- 2.0.0 against 1.2.0, case by case ------------- //
     //*********************************************************************//
 
     /// @dev What a buy leaves the buyer: the tokens, plus unspent input valued at minting (the buyer can still pay the
@@ -476,7 +476,7 @@ contract SplitBuyBaseForkTest is Test {
     }
 
     /// @notice Every honest buy in every pool state, with the router-standard extreme limit (the split path) and with a
-    /// limit at the fee-free issuance price (the plain-swap path): 1.3.0 leaves the buyer at least what 1.2.0 does,
+    /// limit at the fee-free issuance price (the plain-swap path): 2.0.0 leaves the buyer at least what 1.2.0 does,
     /// with unspent input valued at minting.
     function test_compare_honestBuys() public {
         uint256[6] memory sizes = [uint256(0.0001 ether), 0.001 ether, 0.01 ether, 0.1 ether, 1 ether, 10 ether];
@@ -508,7 +508,7 @@ contract SplitBuyBaseForkTest is Test {
         _logCompare(
             "buy", pid, state, amount, limit == TickMath.MIN_SQRT_PRICE + 1 ? "split" : "plain", deployed, updated
         );
-        assertGe(updated, deployed, "1.3.0 leaves the buyer at least what 1.2.0 does");
+        assertGe(updated, deployed, "2.0.0 leaves the buyer at least what 1.2.0 does");
     }
 
     /// @dev A sell that counts a revert (a pool already at its price bound) as no output.
@@ -545,7 +545,7 @@ contract SplitBuyBaseForkTest is Test {
     }
 
     /// @notice Each attack from the sandwich search, run on both versions against a victim whose client quotes on the
-    /// version it uses and sends no minimum: 1.3.0 leaves the victim at least what 1.2.0 does under the same attack.
+    /// version it uses and sends no minimum: 2.0.0 leaves the victim at least what 1.2.0 does under the same attack.
     function test_compare_attackedBuys_noMinimum_p13() public {
         _compareAttacks(13, 10_000);
     }
@@ -605,13 +605,13 @@ contract SplitBuyBaseForkTest is Test {
                 vm.toString(amount),
                 " | min bps ",
                 slippageBps == 10_000 ? "none" : vm.toString(slippageBps),
-                " | worst 1.2.0 minus 1.3.0 ",
+                " | worst 1.2.0 minus 2.0.0 ",
                 vm.toString(worstGap),
                 " | at front-run ",
                 vm.toString(worstX),
                 " |"
             ));
-        assertEq(worstGap, 0, "1.3.0 leaves the victim at least what 1.2.0 does under the same attack");
+        assertEq(worstGap, 0, "2.0.0 leaves the victim at least what 1.2.0 does under the same attack");
     }
 
     function _attackedVictimValue(
@@ -675,7 +675,7 @@ contract SplitBuyBaseForkTest is Test {
                     (uint256 deployed, uint256 updated) = _compareTwoTokenSwap(key, sizes[i], sell == 1);
                     vm.revertToState(snap);
                     _logCompare(sell == 1 ? "dual sell" : "dual buy", 7, above, sizes[i], "split", deployed, updated);
-                    assertGe(updated, deployed, "1.3.0 leaves the swapper at least what 1.2.0 does");
+                    assertGe(updated, deployed, "2.0.0 leaves the swapper at least what 1.2.0 does");
                 }
             }
         }
@@ -746,7 +746,7 @@ contract SplitBuyBaseForkTest is Test {
         IERC20(token).approve(address(swapper), type(uint256).max);
     }
 
-    /// @dev One swap on 1.2.0 and on 1.3.0 from the same state: a buy pays project 7's token for the new token, a sell
+    /// @dev One swap on 1.2.0 and on 2.0.0 from the same state: a buy pays project 7's token for the new token, a sell
     /// the reverse. Unspent buy input is valued at minting (1 per project 7 token).
     function _compareTwoTokenSwap(
         PoolKey memory key,

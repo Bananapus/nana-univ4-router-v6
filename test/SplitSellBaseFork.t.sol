@@ -117,7 +117,7 @@ contract SplitSellBaseForkTest is Test {
     // ------------------------------ tests ------------------------------ //
     //*********************************************************************//
 
-    /// @notice Sells of 1 to 400 project 13 tokens in three pool states: 1.3.0 gives at least the deployed 1.2.0 hook,
+    /// @notice Sells of 1 to 400 project 13 tokens in three pool states: 2.0.0 gives at least the deployed 1.2.0 hook,
     /// and at least cashing out everything when the PoolManager holds enough of the token for the cash-out leg.
     function test_compare_sells_p13() public {
         _compareSells(13, [uint256(1 ether), 10 ether, 50 ether, 100 ether, 200 ether, 400 ether]);
@@ -159,7 +159,7 @@ contract SplitSellBaseForkTest is Test {
                         vm.toString(deployed),
                         " | all-reclaim ",
                         vm.toString(all),
-                        " | 1.3.0 ",
+                        " | 2.0.0 ",
                         vm.toString(updated),
                         " |"
                     ));
@@ -193,7 +193,7 @@ contract SplitSellBaseForkTest is Test {
                         vm.toString(amount / 1e18),
                         " | 1.2.0 ",
                         vm.toString(deployed),
-                        " | 1.3.0 ",
+                        " | 2.0.0 ",
                         vm.toString(updated),
                         " |"
                     ));
@@ -241,7 +241,7 @@ contract SplitSellBaseForkTest is Test {
                 vm.toString(deployedProfit / 1e18),
                 " victim loss bps ",
                 vm.toString(deployedHonest == 0 ? 0 : deployedLoss * 10_000 / deployedHonest),
-                " | 1.3.0 honest ",
+                " | 2.0.0 honest ",
                 vm.toString(honest),
                 " profit tokens ",
                 vm.toString(profit / 1e18),
@@ -251,7 +251,7 @@ contract SplitSellBaseForkTest is Test {
             ));
         assertGe(honest, deployedHonest, "unattacked, never below the deployed hook");
         if (slippageBps != 10_000) {
-            // 1.2.0 reverts these victims' sells; 1.3.0 fills them within their minimum, which leaves the attacker at
+            // 1.2.0 reverts these victims' sells; 2.0.0 fills them within their minimum, which leaves the attacker at
             // most that slippage.
             assertLe(loss, honest * slippageBps / 10_000, "the victim loses at most its slippage");
         }

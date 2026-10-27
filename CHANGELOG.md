@@ -9,7 +9,7 @@ This is a V5-to-V6 migration changelog, not a package release log or commit hist
 - `JBUniswapV4Hook`
 - `Oracle`
 
-## 1.3.0
+## 2.0.0
 
 - Buys of a project token fill from the pool while its output after LP and protocol fees beats the payer's issuance rate, and mint the leftover input through the terminal, settled as one swap delta. A buyer gets at least minting the whole input (less `issuance / 1e6 + 3` units of rounding margin), checked on both legs together, and the pool's fills when they beat it; a large buy no longer reverts or stops partway when the pool runs out of liquidity.
 - A buy whose price limit is at or inside the fee-free issuance price stays a plain V4 swap. The buyback hook's swaps are such buys, so a terminal pay never mints through this hook from inside its own swap.
