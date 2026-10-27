@@ -35,70 +35,6 @@ contract RouterProperties is Test {
         return token == UNISWAP_NATIVE_ETH ? JB_NATIVE_TOKEN : token;
     }
 
-    /// @notice Mirrors the eligibility + tie-break + better-than-V4 decision in `_beforeSwap` (src 795-810).
-    /// @dev `*Available` collapses the `address != 0 && code.length > 0` precondition into a single bool because
-    /// code-length is not part of the arithmetic decision being verified.
-    function _decide(
-        bool buyAvailable,
-        bool sellAvailable,
-        uint256 buyOut,
-        uint256 sellOut,
-        uint256 v4Out
-    )
-        internal
-        pure
-        returns (bool routeViaBuySide, bool routeViaSellSide, bool juiceboxBetterThanV4, uint256 juiceboxExpectedOutput)
-    {
-        bool buySideEligible = buyAvailable && buyOut > 0 && buyOut <= MAX_V4_DELTA;
-        bool sellSideEligible = sellAvailable && sellOut > 0 && sellOut <= MAX_V4_DELTA;
-        routeViaBuySide = buySideEligible && (!sellSideEligible || buyOut >= sellOut);
-        routeViaSellSide = sellSideEligible && (!buySideEligible || sellOut > buyOut);
-        juiceboxExpectedOutput = routeViaSellSide ? sellOut : buyOut;
-        juiceboxBetterThanV4 = (routeViaBuySide || routeViaSellSide) && juiceboxExpectedOutput > v4Out;
-    }
-
-    /// @notice Mirrors the `routeMinimum` raise applied once a JB route wins (src 825-838).
-    function _routeMinimum(
-        bool routeViaSellSide,
-        bool routeViaBuySide,
-        uint256 amountOutMin,
-        uint256 juiceboxExpectedOutput,
-        uint256 v4Out
-    )
-        internal
-        pure
-        returns (uint256 routeMinimum)
-    {
-        routeMinimum = amountOutMin;
-        if (routeViaSellSide && juiceboxExpectedOutput > routeMinimum) {
-            routeMinimum = juiceboxExpectedOutput;
-        } else if (routeViaBuySide && v4Out + 1 > routeMinimum) {
-            routeMinimum = v4Out + 1;
-        }
-    }
-
-    /// @notice Mirrors `_calculateTokensWithCurrency` (src 868-891).
-    function _calculateTokensWithCurrency(
-        uint256 tokensPerBaseCurrency,
-        uint256 paymentAmount,
-        uint8 paymentTokenDecimals,
-        uint256 baseCurrencyPerPaymentToken
-    )
-        internal
-        pure
-        returns (uint256 expectedTokens)
-    {
-        uint256 paymentAmount18 =
-            paymentTokenDecimals == 18 ? paymentAmount : (paymentAmount * 1e18) / (10 ** paymentTokenDecimals);
-
-        if (baseCurrencyPerPaymentToken == 1e18) {
-            expectedTokens = FullMath.mulDiv({a: tokensPerBaseCurrency, b: paymentAmount18, denominator: 1e18});
-        } else {
-            uint256 intermediate = FullMath.mulDiv({a: tokensPerBaseCurrency, b: paymentAmount18, denominator: 1e18});
-            expectedTokens = FullMath.mulDiv({a: intermediate, b: baseCurrencyPerPaymentToken, denominator: 1e18});
-        }
-    }
-
     /// @notice Mirrors the arithmetic-mean-tick rounding in `_observeTWAP` (src 1102-1108).
     function _meanTick(int56 tickCumulativeDelta, uint32 secondsAgo) internal pure returns (int24 arithmeticMeanTick) {
         // forge-lint: disable-next-line(unsafe-typecast)
@@ -135,155 +71,7 @@ contract RouterProperties is Test {
     }
 
     //*********************************************************************//
-    // -- Property 2: route decision is mutually-exclusive + best-exec -- //
-    //*********************************************************************//
-
-    function _prop_routeDecisionMutex(
-        bool buyAvailable,
-        bool sellAvailable,
-        uint256 buyOut,
-        uint256 sellOut,
-        uint256 v4Out
-    )
-        internal
-        pure
-    {
-        (bool routeViaBuySide, bool routeViaSellSide, bool jbBetter, uint256 jbOut) =
-            _decide(buyAvailable, sellAvailable, buyOut, sellOut, v4Out);
-
-        // D.13 tie-break determinism: never both sides at once.
-        assert(!(routeViaBuySide && routeViaSellSide));
-
-        // A JB route is only "better than V4" if exactly one side was selected.
-        if (jbBetter) {
-            assert(routeViaBuySide || routeViaSellSide);
-            // A.1 best-execution floor: the winning JB quote strictly beats the V4 quote.
-            assert(jbOut > v4Out);
-            // The selected output is the chosen side's quote.
-            assert(jbOut == (routeViaSellSide ? sellOut : buyOut));
-            // Selected side is eligible: positive and within V4 delta capacity (A.1 / A.3).
-            assert(jbOut > 0 && jbOut <= MAX_V4_DELTA);
-        }
-
-        // Ineligible (zero / over-cap / unavailable) sides can never be selected (A.1, MAX_V4_DELTA gate).
-        if (!buyAvailable || buyOut == 0 || buyOut > MAX_V4_DELTA) assert(!routeViaBuySide);
-        if (!sellAvailable || sellOut == 0 || sellOut > MAX_V4_DELTA) assert(!routeViaSellSide);
-    }
-
-    function check_routeDecisionMutex(
-        bool buyAvailable,
-        bool sellAvailable,
-        uint256 buyOut,
-        uint256 sellOut,
-        uint256 v4Out
-    )
-        public
-        pure
-    {
-        _prop_routeDecisionMutex(buyAvailable, sellAvailable, buyOut, sellOut, v4Out);
-    }
-
-    function testFuzz_routeDecisionMutex(
-        bool buyAvailable,
-        bool sellAvailable,
-        uint256 buyOut,
-        uint256 sellOut,
-        uint256 v4Out
-    )
-        public
-        pure
-    {
-        _prop_routeDecisionMutex(buyAvailable, sellAvailable, buyOut, sellOut, v4Out);
-    }
-
-    //*********************************************************************//
-    // -- Property 3: tie favors buy side (D.13) ------------------------ //
-    //*********************************************************************//
-
-    function _prop_tieFavorsBuySide(uint256 quote, uint256 v4Out) internal pure {
-        // Both sides available with the SAME positive eligible quote => buy side must win the tie.
-        vm.assume(quote > 0 && quote <= MAX_V4_DELTA);
-        (bool routeViaBuySide, bool routeViaSellSide,,) = _decide(true, true, quote, quote, v4Out);
-        assert(routeViaBuySide);
-        assert(!routeViaSellSide);
-    }
-
-    function check_tieFavorsBuySide(uint256 quote, uint256 v4Out) public pure {
-        // Bound the symbolic domain so the eligibility precondition is non-vacuous.
-        if (quote == 0 || quote > MAX_V4_DELTA) return;
-        (bool routeViaBuySide, bool routeViaSellSide,,) = _decide(true, true, quote, quote, v4Out);
-        assert(routeViaBuySide);
-        assert(!routeViaSellSide);
-    }
-
-    function testFuzz_tieFavorsBuySide(uint256 quote, uint256 v4Out) public pure {
-        _prop_tieFavorsBuySide(quote, v4Out);
-    }
-
-    //*********************************************************************//
-    // -- Property 4: routeMinimum never drops below the user floor ----- //
-    //*********************************************************************//
-
-    function _prop_routeMinimumFloor(
-        bool routeViaSellSide,
-        bool routeViaBuySide,
-        uint256 amountOutMin,
-        uint256 jbOut,
-        uint256 v4Out
-    )
-        internal
-        pure
-    {
-        // Only one JB side can be active, matching `_beforeSwap`.
-        vm.assume(!(routeViaSellSide && routeViaBuySide));
-        // Constrain the eligible domain so `v4Out + 1` cannot overflow (eligible quotes <= MAX_V4_DELTA).
-        vm.assume(v4Out < type(uint256).max);
-
-        uint256 routeMinimum = _routeMinimum(routeViaSellSide, routeViaBuySide, amountOutMin, jbOut, v4Out);
-
-        // Cross-cutting invariant D.1 / A.1: the enforced floor is never weaker than the user's amountOutMin.
-        assert(routeMinimum >= amountOutMin);
-
-        // Sell route raises the floor to the previewed reclaim when that exceeds amountOutMin (A.1 src 826-832).
-        if (routeViaSellSide && jbOut > amountOutMin) assert(routeMinimum == jbOut);
-        // Buy route raises the floor to strictly-beat-V4 when that exceeds amountOutMin (A.1 src 833-837).
-        if (routeViaBuySide && !routeViaSellSide && v4Out + 1 > amountOutMin) assert(routeMinimum == v4Out + 1);
-    }
-
-    function check_routeMinimumFloor(
-        bool routeViaSellSide,
-        bool routeViaBuySide,
-        uint256 amountOutMin,
-        uint256 jbOut,
-        uint256 v4Out
-    )
-        public
-        pure
-    {
-        if (routeViaSellSide && routeViaBuySide) return;
-        if (v4Out == type(uint256).max) return;
-
-        uint256 routeMinimum = _routeMinimum(routeViaSellSide, routeViaBuySide, amountOutMin, jbOut, v4Out);
-        assert(routeMinimum >= amountOutMin);
-        if (routeViaSellSide && jbOut > amountOutMin) assert(routeMinimum == jbOut);
-        if (routeViaBuySide && !routeViaSellSide && v4Out + 1 > amountOutMin) assert(routeMinimum == v4Out + 1);
-    }
-
-    function testFuzz_routeMinimumFloor(
-        bool routeViaSellSide,
-        bool routeViaBuySide,
-        uint256 amountOutMin,
-        uint256 jbOut,
-        uint256 v4Out
-    )
-        public
-        pure
-    {
-        _prop_routeMinimumFloor(routeViaSellSide, routeViaBuySide, amountOutMin, jbOut, v4Out);
-    }
-
-    //*********************************************************************//
-    // -- Property 5: zero-tax net fee math (gross - gross/40 capped) --- //
+    // -- Property 2: zero-tax net fee math (gross - gross/40 capped) --- //
     //*********************************************************************//
 
     /// @notice Mirrors the non-feeless zero-tax branch of `_exactZeroTaxNet` (src 961-969):
@@ -318,7 +106,7 @@ contract RouterProperties is Test {
     }
 
     //*********************************************************************//
-    // -- Property 6: positive-tax sell net = gross - standardFee ------- //
+    // -- Property 3: positive-tax sell net = gross - standardFee ------- //
     //*********************************************************************//
 
     function _prop_positiveTaxNet(uint256 gross) internal pure {
@@ -340,7 +128,7 @@ contract RouterProperties is Test {
     }
 
     //*********************************************************************//
-    // -- Property 7: TWAP mean-tick rounds toward negative infinity ---- //
+    // -- Property 4: TWAP mean-tick rounds toward negative infinity ---- //
     //*********************************************************************//
 
     function _prop_meanTickRounding(int56 tickCumulativeDelta, uint32 secondsAgo) internal pure {
@@ -376,7 +164,7 @@ contract RouterProperties is Test {
     }
 
     //*********************************************************************//
-    // -- Property 8: createSwapDelta MAX_V4_DELTA gate (fuzz only) ----- //
+    // -- Property 5: createSwapDelta MAX_V4_DELTA gate (fuzz only) ----- //
     //*********************************************************************//
 
     /// @notice Mirrors `_createSwapDelta`'s overflow guards (src 913-925). An eligible (in-cap) pair must encode
@@ -413,17 +201,8 @@ contract RouterProperties is Test {
     }
 
     //*********************************************************************//
-    // -- Property 9: decimal normalization (fuzz only, mulDiv-heavy) --- //
+    // -- Property 6: reserved split never exceeds gross (fuzz only) ---- //
     //*********************************************************************//
-
-    function testFuzz_calculateTokens18DecimalIsExact(uint256 weight, uint256 paymentAmount) public pure {
-        // 18-decimal payment with 1:1 conversion => tokens == weight * amount / 1e18 (no decimal scaling).
-        weight = bound(weight, 0, 1e30);
-        paymentAmount = bound(paymentAmount, 0, 1e30);
-        uint256 got = _calculateTokensWithCurrency(weight, paymentAmount, 18, 1e18);
-        uint256 expected = FullMath.mulDiv(weight, paymentAmount, 1e18);
-        assertEq(got, expected, "18-dec path must equal weight*amount/1e18");
-    }
 
     function testFuzz_calculateTokensReservedNeverExceedsGross(uint256 estimated, uint16 reservedPercent) public pure {
         // The reserved-percent reduction (src 376-384) never increases the payer's token count.
@@ -444,7 +223,7 @@ contract RouterProperties is Test {
     }
 
     //*********************************************************************//
-    // -- Property 10: estimateUniswapOutput fee-then-ratio (fuzz only)- //
+    // -- Property 7: estimateUniswapOutput fee-then-ratio (fuzz only)- //
     //*********************************************************************//
 
     /// @notice Mirrors the small-sqrt-price branch of `estimateUniswapOutput` (src 457-463): fee is applied to the

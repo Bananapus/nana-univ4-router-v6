@@ -9,5 +9,7 @@ library JBUniswapV4HookData {
     /// @dev `JBUniswapV4Hook` reads a minimum only from `hookData` that begins with this tag and is at least 36 bytes
     /// (`TAG ++ abi.encode(amountOutMin)`). Any other payload carries no minimum, so a foreign first word is never
     /// mis-decoded as one. A JB-aware caller builds it as `abi.encodePacked(JBUniswapV4HookData.TAG, abi.encode(min))`.
+    // The tag is the hash's first four bytes by design.
+    // forge-lint: disable-next-line(unsafe-typecast)
     bytes4 internal constant TAG = bytes4(keccak256("JBUniswapV4Hook.amountOutMin.v1"));
 }

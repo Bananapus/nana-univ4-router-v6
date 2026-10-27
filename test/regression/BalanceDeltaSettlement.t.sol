@@ -476,45 +476,11 @@ contract BalanceDeltaSettlement_BuyTest is Test {
         );
     }
 
-    /// @notice When a terminal reports returning 5000e18 tokens but only mints 4500e18
-    ///         (simulating fee-on-transfer), the hook should settle the actual 4500e18,
-    ///         not the reported 5000e18. The swap succeeds and the user receives the
-    ///         correct (lower) amount.
-    function test_BuySide_FeeOnTransfer_SettlesActualBalance() public {
-        uint256 amountIn = 1 ether;
-
-        // Record balances before the swap.
-        uint256 projectTokenBefore = projectToken.balanceOf(address(this));
-        uint256 paymentTokenBefore = paymentToken.balanceOf(address(this));
-
-        // Execute a swap buying project tokens.
-        SwapParams memory params = SwapParams({
-            zeroForOne: zeroForOne,
-            // forge-lint: disable-next-line(unsafe-typecast)
-            amountSpecified: -int256(amountIn),
-            sqrtPriceLimitX96: zeroForOne ? TickMath.MIN_SQRT_PRICE + 1 : TickMath.MAX_SQRT_PRICE - 1
-        });
-
-        // The swap should succeed (with the fix, the hook measures actual balance delta).
-        jbSwapRouter.swap(key, params, 0);
-
-        // Check balances after the swap.
-        uint256 projectTokenAfter = projectToken.balanceOf(address(this));
-        uint256 paymentTokenAfter = paymentToken.balanceOf(address(this));
-
-        // Verify the terminal was called.
-        assertEq(fotTerminal.lastPayProjectId(), PROJECT_ID, "Terminal should have been called for project 123");
-        assertEq(fotTerminal.lastPayBeneficiary(), address(hook), "Hook should be the pay beneficiary");
-
-        // User should have spent 1 ether of payment tokens.
-        assertEq(paymentTokenBefore - paymentTokenAfter, amountIn, "User should have spent exactly 1 ether");
-
-        // User should have received ACTUAL_AMOUNT (4500e18), NOT REPORTED_AMOUNT (5000e18).
-        uint256 tokensReceived = projectTokenAfter - projectTokenBefore;
-        assertEq(tokensReceived, ACTUAL_AMOUNT, "User should receive the actual minted amount, not the reported amount");
-
-        // Explicitly verify the key invariant: received != reported.
-        assertTrue(tokensReceived < REPORTED_AMOUNT, "Received amount must be less than the inflated reported amount");
+    /// @notice When a terminal previews 5000e18 tokens but only delivers 4500e18 (simulating fee-on-transfer), the hook
+    ///         measures the delivered balance, finds it under the issuance the buy was priced at, and reverts instead
+    ///         of settling the buyer under the mint.
+    function test_BuySide_FeeOnTransfer_RevertsUnderIssuance() public {
+        _expectBuyReverts();
     }
 
     /// @notice When the fee-on-transfer gap is zero (actual == reported), the hook
@@ -539,14 +505,14 @@ contract BalanceDeltaSettlement_BuyTest is Test {
         assertEq(tokensReceived, 5000e18, "With no fee gap, user should receive the full reported amount");
     }
 
-    /// @notice When the fee-on-transfer takes a large fee (50%), the hook should
-    ///         still settle the correct reduced amount without reverting.
-    function test_BuySide_LargeFeeOnTransfer_SettlesReducedAmount() public {
-        uint256 reported = 5000e18;
-        uint256 actual = 2500e18; // 50% fee
+    /// @notice A 50% delivery shortfall also reverts rather than settling the reduced amount.
+    function test_BuySide_LargeFeeOnTransfer_RevertsUnderIssuance() public {
+        fotTerminal.setAmounts(5000e18, 2500e18);
+        _expectBuyReverts();
+    }
 
-        fotTerminal.setAmounts(reported, actual);
-
+    /// @dev Buys 1 ether of project tokens and expects the swap to revert.
+    function _expectBuyReverts() internal {
         uint256 amountIn = 1 ether;
         uint256 projectTokenBefore = projectToken.balanceOf(address(this));
 
@@ -557,10 +523,10 @@ contract BalanceDeltaSettlement_BuyTest is Test {
             sqrtPriceLimitX96: zeroForOne ? TickMath.MIN_SQRT_PRICE + 1 : TickMath.MAX_SQRT_PRICE - 1
         });
 
+        vm.expectRevert();
         jbSwapRouter.swap(key, params, 0);
 
-        uint256 tokensReceived = projectToken.balanceOf(address(this)) - projectTokenBefore;
-        assertEq(tokensReceived, actual, "With 50% fee, user should receive only the actual amount");
+        assertEq(projectToken.balanceOf(address(this)), projectTokenBefore, "no tokens settled");
     }
 }
 

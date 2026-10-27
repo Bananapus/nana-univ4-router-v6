@@ -88,7 +88,7 @@ contract PreviewRevertingLiveSellTerminal {
 }
 
 contract RegressionFreshRegression is JuiceboxHookTest {
-    function test_poc_largeBuyMisroutesToV4OnLinearQuote() public {
+    function test_largeBuyOnLinearQuoteGetsAtLeastTheJBOutput() public {
         uint256 amountIn = 5 ether;
         uint256 quotedV4Out = hook.estimateUniswapOutput(id, key, amountIn, false);
         uint256 jbLiveOut = quotedV4Out - 1;
@@ -110,8 +110,9 @@ contract RegressionFreshRegression is JuiceboxHookTest {
 
         uint256 actualV4Out = token0.balanceOf(address(this)) - initialToken0Balance;
 
-        assertLt(actualV4Out, jbLiveOut, "actual V4 output should be worse than executable JB buy output");
-        assertEq(mockJBMultiTerminal.lastProjectId(), 0, "router should have incorrectly skipped the JB route");
+        // The buy fills from the pool only while it beats issuance and mints the rest, so a linear V4 quote that
+        // overstates the pool cannot leave the buyer under the executable JB output.
+        assertGe(actualV4Out, jbLiveOut, "the buyer gets at least the executable JB buy output");
     }
 
     function test_poc_sellPreviewFailureForcesWorseV4Route() public {

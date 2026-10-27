@@ -9,6 +9,16 @@ This is a V5-to-V6 migration changelog, not a package release log or commit hist
 - `JBUniswapV4Hook`
 - `Oracle`
 
+## 2.0.0
+
+- Buys of a project token fill from the pool while its output after LP and protocol fees beats the payer's issuance rate, and mint the leftover input through the terminal, settled as one swap delta. A buyer gets at least minting the whole input (less `issuance / 1e6 + 3` units of rounding margin), checked on both legs together, and the pool's fills when they beat it; a large buy no longer reverts or stops partway when the pool runs out of liquidity.
+- A buy whose price limit is at or inside the fee-free issuance price stays a plain V4 swap. The buyback hook's swaps are such buys, so a terminal pay never mints through this hook from inside its own swap.
+- The buy-side TWAP comparison is removed. A tagged `amountOutMin` on a split buy covers both legs together.
+- A swap between two project tokens is a buy (the split above) when paying the output token's project mints at least what cashing out the input reclaims, and a sell of the input otherwise; a quote V4's deltas cannot carry leaves its side ineligible, as in 1.2.0.
+- Buys whose input arrives short (fee-on-transfer input) now revert instead of routing on the reported amount.
+- `calculateExpectedTokensWithCurrency` prices a payment the way the terminal store does: the currency and decimals come from the project's primary terminal accounting context for the token (no terminal or context returns 0), one base-currency unit is priced in that currency, then `amount * weight / price`. Its count matches what the terminal mints, whatever the project's accounting currency.
+- No ABI or storage change; the oracle state of a deployed 1.2.x hook is layout-compatible.
+
 ## Summary
 
 - The hook is now built for the V6 core preview model. Buy-side routing relies on `previewPayFor(...)`; sell-side routing relies on `previewCashOutFrom(...)`.

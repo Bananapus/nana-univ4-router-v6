@@ -130,7 +130,7 @@ contract RegressionLargeTradeMisrouteTest is Test {
         );
     }
 
-    function test_largeBuyCanMisrouteToV4BelowJBQuote() public {
+    function test_largeBuyGetsAtLeastTheJBQuote() public {
         uint256 amountIn = 10 ether;
         uint256 jbQuote = hook.calculateExpectedTokensWithCurrency(123, address(paymentToken), amountIn);
         uint256 v4Estimate = hook.estimateUniswapOutput(id, key, amountIn, true);
@@ -152,7 +152,8 @@ contract RegressionLargeTradeMisrouteTest is Test {
         );
         uint256 received = projectToken.balanceOf(address(this)) - balanceBefore;
 
-        assertEq(mockJBMultiTerminal.lastProjectId(), 0, "the hook routed through V4 instead of Juicebox");
-        assertLt(received, jbQuote, "the user received less than the available JB mint path");
+        // The pool fills only while it beats issuance; the rest mints, so the buyer never gets less than the mint.
+        assertEq(mockJBMultiTerminal.lastProjectId(), 123, "the leftover minted through Juicebox");
+        assertGe(received, jbQuote, "the user received at least the available JB mint path");
     }
 }

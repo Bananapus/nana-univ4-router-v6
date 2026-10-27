@@ -277,6 +277,8 @@ library Oracle {
 
             // ensure that the target is chronologically at or after the oldest observation
             if (!lte({time: time, a: beforeOrAt.blockTimestamp, b: target})) {
+                // A target older than the oldest observation ends the search, as in Uniswap V3.
+                // forge-lint: disable-next-item(require-revert-in-loop)
                 revert Oracle_TargetPredatesOldestObservation({
                     oldestTimestamp: beforeOrAt.blockTimestamp, targetTimestamp: target
                 });
@@ -347,6 +349,8 @@ library Oracle {
                 uint32 observationTimeDelta = atOrAfter.blockTimestamp - beforeOrAt.blockTimestamp;
                 uint32 targetDelta = target - beforeOrAt.blockTimestamp;
                 // forge-lint: disable-start(divide-before-multiply)
+                // The interpolated secondsPerLiquidity cumulative fits uint160, as in Uniswap V3.
+                // forge-lint: disable-start(unsafe-typecast)
                 // NOTE: The divide-before-multiply here loses up to (observationTimeDelta - 1) units of
                 // tickCumulative precision. For realistic observation intervals (seconds to minutes) and
                 // tick ranges, this is bounded and economically insignificant.
@@ -363,6 +367,7 @@ library Oracle {
                                     * targetDelta) / observationTimeDelta
                         )
                 );
+                // forge-lint: disable-end(unsafe-typecast)
                 // forge-lint: disable-end(divide-before-multiply)
             }
         }
