@@ -828,7 +828,7 @@ contract TwoWayRoutingTest is Test {
 
     /// Given amountSpecified > 0 (exact output swap)
     /// When the user attempts the swap
-    /// Then the hook leaves it to the pool, which delivers exactly the requested output
+    /// Then the hook leaves it to the pool, which fills what it can of the requested output
     function test_TwoWay_ExactOutputSwap_isPlainSwap() public {
         token1.mint(address(this), 10 ether);
         token1.approve(address(jbSwapRouter), 10 ether);

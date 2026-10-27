@@ -4,6 +4,7 @@ pragma solidity 0.8.28;
 import {Test} from "forge-std/Test.sol";
 
 import {IJBController} from "@bananapus/core-v6/src/interfaces/IJBController.sol";
+import {IJBCashOutHook} from "@bananapus/core-v6/src/interfaces/IJBCashOutHook.sol";
 import {IJBPayHook} from "@bananapus/core-v6/src/interfaces/IJBPayHook.sol";
 import {IJBRulesetApprovalHook} from "@bananapus/core-v6/src/interfaces/IJBRulesetApprovalHook.sol";
 import {IJBRulesetDataHook} from "@bananapus/core-v6/src/interfaces/IJBRulesetDataHook.sol";
@@ -25,6 +26,7 @@ import {JBTokens} from "@bananapus/core-v6/src/JBTokens.sol";
 import {JBConstants} from "@bananapus/core-v6/src/libraries/JBConstants.sol";
 import {JBMetadataResolver} from "@bananapus/core-v6/src/libraries/JBMetadataResolver.sol";
 import {JBAccountingContext} from "@bananapus/core-v6/src/structs/JBAccountingContext.sol";
+import {JBAfterCashOutRecordedContext} from "@bananapus/core-v6/src/structs/JBAfterCashOutRecordedContext.sol";
 import {JBAfterPayRecordedContext} from "@bananapus/core-v6/src/structs/JBAfterPayRecordedContext.sol";
 import {JBBeforeCashOutRecordedContext} from "@bananapus/core-v6/src/structs/JBBeforeCashOutRecordedContext.sol";
 import {JBBeforePayRecordedContext} from "@bananapus/core-v6/src/structs/JBBeforePayRecordedContext.sol";
@@ -341,6 +343,56 @@ contract SkipCheckingDataHook is IJBRulesetDataHook {
 
     function supportsInterface(bytes4 interfaceId) external pure returns (bool) {
         return interfaceId == type(IJBRulesetDataHook).interfaceId || interfaceId == type(IERC165).interfaceId;
+    }
+}
+
+/// @notice A cash-out data hook that takes a share of each cash-out, like a revnet's fee hook, and names the project
+/// it pays that fee to as `FEE_REVNET_ID`.
+contract FeeRevnetDataHook is IJBRulesetDataHook, IJBCashOutHook {
+    // forge-lint: disable-next-line(mixed-case-variable)
+    uint256 public FEE_REVNET_ID;
+
+    receive() external payable {}
+
+    function setFeeRevnetId(uint256 feeRevnetId) external {
+        FEE_REVNET_ID = feeRevnetId;
+    }
+
+    function beforePayRecordedWith(JBBeforePayRecordedContext calldata context)
+        external
+        pure
+        returns (uint256 weight, JBPayHookSpecification[] memory hookSpecifications)
+    {
+        return (context.weight, hookSpecifications);
+    }
+
+    function beforeCashOutRecordedWith(JBBeforeCashOutRecordedContext calldata context)
+        external
+        view
+        returns (uint256, uint256, uint256, uint256, JBCashOutHookSpecification[] memory hookSpecifications)
+    {
+        hookSpecifications = new JBCashOutHookSpecification[](1);
+        hookSpecifications[0] =
+            JBCashOutHookSpecification({hook: IJBCashOutHook(address(this)), noop: false, amount: 1, metadata: ""});
+        return
+            (
+                context.cashOutTaxRate,
+                context.cashOutCount,
+                context.totalSupply,
+                context.surplus.value,
+                hookSpecifications
+            );
+    }
+
+    function afterCashOutRecordedWith(JBAfterCashOutRecordedContext calldata) external payable {}
+
+    function hasMintPermissionFor(uint256, JBRuleset memory, address) external pure returns (bool) {
+        return false;
+    }
+
+    function supportsInterface(bytes4 interfaceId) external pure returns (bool) {
+        return interfaceId == type(IJBRulesetDataHook).interfaceId || interfaceId == type(IJBCashOutHook).interfaceId
+            || interfaceId == type(IERC165).interfaceId;
     }
 }
 
@@ -1045,6 +1097,25 @@ contract SplitBuyTest is Test {
         assertEq(_supply(projectToken), supply, "nothing cashed out");
     }
 
+    /// @notice Sells of the token a cash-out hook pays its fee in (its `FEE_REVNET_ID`) stay in the pool, for the
+    /// same reason; sells of other projects' tokens still cash out.
+    function test_sell_feeRevnetHook_staysInPool() public {
+        FeeRevnetDataHook feeHook = new FeeRevnetDataHook();
+        cashOutDataHook = address(feeHook);
+        (uint256 projectId, address projectToken, PoolKey memory key) = _sellSetup(5000, 60, 1e22, 30);
+        uint256 supply = _supply(projectToken);
+
+        uint256 snap = vm.snapshotState();
+        _sell(key, 1e24, "");
+        assertLt(_supply(projectToken), supply, "another project's fee: cashes out");
+        vm.revertToState(snap);
+
+        feeHook.setFeeRevnetId(projectId);
+        uint256 poolOnly = _poolOnly(key, 1e24);
+        assertEq(_sell(key, 1e24, ""), poolOnly, "the pool alone");
+        assertEq(_supply(projectToken), supply, "nothing cashed out");
+    }
+
     /// @notice Cases where the reclaim curve's rounding makes the marginal-rate split worse than cashing out everything
     /// (by about 108 ppm), or than a floor derived from it (which used to revert): the exact comparison picks the best,
     /// and cashing out everything counts when the PoolManager holds the whole input.
@@ -1190,18 +1261,18 @@ contract SplitBuyTest is Test {
         // The hook's rounding margin: a millionth plus 3 units.
         assertGe(out + plainOut / 1_000_000 + 3, plainOut, "never below the plain swap");
 
-        // At an average price no worse than the plain swap's, the routed swap adds no slippage of its own. Otherwise
-        // it may trail the limit by the LP fee, as a plain swap can, and no further.
-        if ((out + out / 1_000_000 + 3) * plainUsed >= plainOut * used) return;
-        uint256 netUsed = used * (1e6 - key.fee) / 1e6;
-        uint256 floor = zeroForOne
-            ? FullMath.mulDiv({
-                a: FullMath.mulDiv({a: netUsed, b: limit, denominator: 1 << 96}), b: limit, denominator: 1 << 96
-            })
-            : FullMath.mulDiv({
-                a: FullMath.mulDiv({a: netUsed, b: 1 << 96, denominator: limit}), b: 1 << 96, denominator: limit
-            });
-        assertGe(out + floor / 1_000_000 + 3, floor, "within the price limit");
+        // Input the plain swap left unused (it stopped at the limit) must earn at least the limit price.
+        if (used <= plainUsed) return;
+        uint256 extra = used - plainUsed;
+        uint256 floor = plainOut
+            + (zeroForOne
+                    ? FullMath.mulDiv({
+                        a: FullMath.mulDiv({a: extra, b: limit, denominator: 1 << 96}), b: limit, denominator: 1 << 96
+                    })
+                    : FullMath.mulDiv({
+                        a: FullMath.mulDiv({a: extra, b: 1 << 96, denominator: limit}), b: 1 << 96, denominator: limit
+                    }));
+        assertGe(out + floor / 1_000_000 + 3, floor, "extra input within the price limit");
     }
 
     function _trySwap(
