@@ -32,7 +32,7 @@ library OracleQuote {
         (uint160 sqrtPriceX96,, uint24 protocolFee, uint24 lpFee) = manager.getSlot0(PoolIdLibrary.toId(key));
 
         uint32 window = hook.observationCoverageOf(key);
-        if (window > hook.TWAP_PERIOD()) window = hook.TWAP_PERIOD();
+        if (window > uint32(1800)) window = uint32(1800);
         if (window != 0) {
             uint32[] memory secondsAgos = new uint32[](2);
             secondsAgos[0] = window;

@@ -10,6 +10,7 @@ import {StateLibrary} from "@uniswap/v4-core/src/libraries/StateLibrary.sol";
 import {SwapParams, ModifyLiquidityParams} from "@uniswap/v4-core/src/types/PoolOperation.sol";
 import {PoolModifyLiquidityTest} from "@uniswap/v4-core/src/test/PoolModifyLiquidityTest.sol";
 import {PoolSwapTest} from "@uniswap/v4-core/src/test/PoolSwapTest.sol";
+import {BalanceDelta} from "@uniswap/v4-core/src/types/BalanceDelta.sol";
 import {PoolKey} from "@uniswap/v4-core/src/types/PoolKey.sol";
 import {PoolId, PoolIdLibrary} from "@uniswap/v4-core/src/types/PoolId.sol";
 import {Currency, CurrencyLibrary} from "@uniswap/v4-core/src/types/Currency.sol";
@@ -827,8 +828,8 @@ contract TwoWayRoutingTest is Test {
 
     /// Given amountSpecified > 0 (exact output swap)
     /// When the user attempts the swap
-    /// Then it should revert (error wrapped by PoolManager)
-    function test_TwoWay_ExactOutputSwap_Reverts() public {
+    /// Then the hook leaves it to the pool, which delivers exactly the requested output
+    function test_TwoWay_ExactOutputSwap_isPlainSwap() public {
         token1.mint(address(this), 10 ether);
         token1.approve(address(jbSwapRouter), 10 ether);
 
@@ -838,9 +839,14 @@ contract TwoWayRoutingTest is Test {
             sqrtPriceLimitX96: TickMath.MAX_SQRT_PRICE - 1
         });
 
-        // The hook reverts with ExactOutputSwapsNotSupported, wrapped by PoolManager
-        vm.expectRevert();
-        jbSwapRouter.swap(key, params, 0);
+        vm.expectCall(address(mockJBMultiTerminal), abi.encodeWithSelector(IJBTerminal.pay.selector), 0);
+        vm.expectCall(
+            address(mockJBMultiTerminal), abi.encodeWithSelector(mockJBMultiTerminal.cashOutTokensOf.selector), 0
+        );
+        BalanceDelta delta = jbSwapRouter.swap(key, params, 0);
+        // This pool runs out of depth before 1 token0, so V4 fills what it can.
+        assertGt(delta.amount0(), 0, "the pool fills the exact output");
+        assertLt(delta.amount1(), 0, "the caller pays token1");
     }
 
     // ============================================

@@ -11,6 +11,7 @@ import {StateLibrary} from "@uniswap/v4-core/src/libraries/StateLibrary.sol";
 import {SwapParams, ModifyLiquidityParams} from "@uniswap/v4-core/src/types/PoolOperation.sol";
 import {PoolModifyLiquidityTest} from "@uniswap/v4-core/src/test/PoolModifyLiquidityTest.sol";
 import {PoolSwapTest} from "@uniswap/v4-core/src/test/PoolSwapTest.sol";
+import {BalanceDelta} from "@uniswap/v4-core/src/types/BalanceDelta.sol";
 import {PoolKey} from "@uniswap/v4-core/src/types/PoolKey.sol";
 import {PoolId, PoolIdLibrary} from "@uniswap/v4-core/src/types/PoolId.sol";
 import {Currency, CurrencyLibrary} from "@uniswap/v4-core/src/types/Currency.sol";
@@ -1347,10 +1348,8 @@ contract JBUniswapV4HookForkTest is Test {
     // Error Condition Tests (Fork)
     // ============================================================
 
-    /// @notice Test that exact output swaps revert with proper error
-    /// @dev Verifies JBUniswapV4Hook_ExactOutputSwapsNotSupported error is thrown
-    /// @dev Note: The error is wrapped by Uniswap v4, so we check for any revert
-    function testFork_ExactOutputSwapsNotSupported() public {
+    /// @notice Exact-output swaps skip routing and settle as plain pool swaps.
+    function testFork_ExactOutputSwaps_arePlainSwaps() public {
         address user = testUser;
         vm.deal(user, 10 ether);
         vm.startPrank(user);
@@ -1368,9 +1367,8 @@ contract JBUniswapV4HookForkTest is Test {
             sqrtPriceLimitX96: nanaIsToken0 ? TickMath.MIN_SQRT_PRICE + 1 : TickMath.MAX_SQRT_PRICE - 1
         });
 
-        // Should revert - the error is wrapped by Uniswap v4's error handling
-        vm.expectRevert();
-        jbSwapRouter.swap(key, params, 0); // 1% slippage
+        BalanceDelta delta = jbSwapRouter.swap(key, params, 0);
+        assertEq(nanaIsToken0 ? delta.amount1() : delta.amount0(), 1 ether, "exact output delivered by the pool");
 
         vm.stopPrank();
     }

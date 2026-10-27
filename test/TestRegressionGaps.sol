@@ -943,7 +943,7 @@ contract TestRegressionGaps_SpotFallbackSandwichWindow is Test {
 
         // The retained window is only 12 seconds, so the full TWAP window is not covered.
         assertEq(hook.observationCoverageOf(key), 12, "Retained oracle history should be 12 seconds");
-        assertFalse(hook.hasObservationCoverage(key, hook.TWAP_PERIOD()), "Full TWAP window should not be covered yet");
+        assertFalse(hook.hasObservationCoverage(key, uint32(1800)), "Full TWAP window should not be covered yet");
 
         uint256 estimateBestEffort = OracleQuote.quote(hook, manager, key, 1 ether, true);
         assertGt(estimateBestEffort, 0, "Should use best-effort retained history before full TWAP coverage");
@@ -967,7 +967,7 @@ contract TestRegressionGaps_SpotFallbackSandwichWindow is Test {
         _doSwap(true, -50 ether);
 
         assertEq(hook.observationCoverageOf(key), 12, "Retained oracle history should be 12 seconds");
-        assertFalse(hook.hasObservationCoverage(key, hook.TWAP_PERIOD()), "Full TWAP window should not be covered yet");
+        assertFalse(hook.hasObservationCoverage(key, uint32(1800)), "Full TWAP window should not be covered yet");
 
         uint256 postPushEstimate = OracleQuote.quote(hook, manager, key, 1 ether, true);
         console.log("[sandwich] Post-push best-effort estimate:", postPushEstimate);
@@ -1058,7 +1058,7 @@ contract TestRegressionGaps_SpotFallbackSandwichWindow is Test {
         _doSwap(false, -0.001 ether); // Record an observation at the boundary
 
         assertEq(hook.observationCoverageOf(key), 1799, "Retained history should be one second short");
-        assertFalse(hook.hasObservationCoverage(key, hook.TWAP_PERIOD()), "Full TWAP window should not be covered yet");
+        assertFalse(hook.hasObservationCoverage(key, uint32(1800)), "Full TWAP window should not be covered yet");
         uint256 estimateBeforeBoundary = OracleQuote.quote(hook, manager, key, 1 ether, true);
         assertGt(estimateBeforeBoundary, 0, "Should work at boundary-1");
 
@@ -1066,8 +1066,8 @@ contract TestRegressionGaps_SpotFallbackSandwichWindow is Test {
         vm.warp(101_800);
         _doSwap(true, -0.001 ether);
 
-        assertEq(hook.observationCoverageOf(key), hook.TWAP_PERIOD(), "Retained history should cover TWAP_PERIOD");
-        assertTrue(hook.hasObservationCoverage(key, hook.TWAP_PERIOD()), "Full TWAP window should be covered");
+        assertEq(hook.observationCoverageOf(key), uint32(1800), "Retained history should cover TWAP_PERIOD");
+        assertTrue(hook.hasObservationCoverage(key, uint32(1800)), "Full TWAP window should be covered");
         uint256 estimateAtBoundary = OracleQuote.quote(hook, manager, key, 1 ether, true);
         assertGt(estimateAtBoundary, 0, "Should work at exact boundary");
 

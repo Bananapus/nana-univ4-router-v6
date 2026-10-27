@@ -43,6 +43,7 @@ import {IPermit2} from "@uniswap/permit2/src/interfaces/IPermit2.sol";
 import {IHooks} from "@uniswap/v4-core/src/interfaces/IHooks.sol";
 import {IPoolManager} from "@uniswap/v4-core/src/interfaces/IPoolManager.sol";
 import {IUnlockCallback} from "@uniswap/v4-core/src/interfaces/callback/IUnlockCallback.sol";
+import {CustomRevert} from "@uniswap/v4-core/src/libraries/CustomRevert.sol";
 import {FullMath} from "@uniswap/v4-core/src/libraries/FullMath.sol";
 import {Hooks} from "@uniswap/v4-core/src/libraries/Hooks.sol";
 import {LPFeeLibrary} from "@uniswap/v4-core/src/libraries/LPFeeLibrary.sol";
@@ -245,6 +246,61 @@ contract SplitSellSwapper is IUnlockCallback {
     }
 }
 
+/// @notice Exact-input swaps in a router's order with a chosen price limit: swap first, then settle what was used and
+/// take the output, so the PoolManager holds none of the input during the swap.
+contract RouterOrderSwapper is IUnlockCallback {
+    IPoolManager internal immutable PM;
+
+    constructor(IPoolManager pm) {
+        PM = pm;
+    }
+
+    receive() external payable {}
+
+    function swap(
+        PoolKey calldata key,
+        bool zeroForOne,
+        uint256 amountIn,
+        uint160 sqrtPriceLimitX96
+    )
+        external
+        payable
+        returns (uint256 used, uint256 out)
+    {
+        (used, out) = abi.decode(
+            PM.unlock(abi.encode(key, zeroForOne, amountIn, sqrtPriceLimitX96, msg.sender)), (uint256, uint256)
+        );
+        if (address(this).balance != 0) payable(msg.sender).transfer(address(this).balance);
+    }
+
+    function unlockCallback(bytes calldata data) external returns (bytes memory) {
+        (PoolKey memory key, bool zeroForOne, uint256 amountIn, uint160 sqrtPriceLimitX96, address payer) =
+            abi.decode(data, (PoolKey, bool, uint256, uint160, address));
+        BalanceDelta d = PM.swap({
+            key: key,
+            params: SwapParams({
+                zeroForOne: zeroForOne,
+                // forge-lint: disable-next-line(unsafe-typecast)
+                amountSpecified: -int256(amountIn),
+                sqrtPriceLimitX96: sqrtPriceLimitX96
+            }),
+            hookData: ""
+        });
+        uint256 used = uint256(uint128(-(zeroForOne ? d.amount0() : d.amount1())));
+        uint256 out = uint256(uint128(zeroForOne ? d.amount1() : d.amount0()));
+        Currency input = zeroForOne ? key.currency0 : key.currency1;
+        if (input.isAddressZero()) {
+            PM.settle{value: used}();
+        } else {
+            PM.sync(input);
+            require(IERC20(Currency.unwrap(input)).transferFrom(payer, address(PM), used));
+            PM.settle();
+        }
+        if (out != 0) PM.take({currency: zeroForOne ? key.currency1 : key.currency0, to: payer, amount: out});
+        return abi.encode(used, out);
+    }
+}
+
 /// @notice A cash-out data hook that names a buyback registry and accepts only cash-outs whose metadata tells that
 /// registry to skip its pool sale.
 contract SkipCheckingDataHook is IJBRulesetDataHook {
@@ -310,6 +366,7 @@ contract SplitBuyTest is Test {
     PoolModifyLiquidityTest internal liquidityRouter;
     BuybackShapedHook internal dataHook;
     SplitSellSwapper internal sellSwapper;
+    RouterOrderSwapper internal routerSwapper;
 
     /// @dev The cash-out tax rate and cash-out data hook `_launch` gives a project.
     uint16 internal cashOutTaxRate;
@@ -357,6 +414,7 @@ contract SplitBuyTest is Test {
         liquidityRouter = new PoolModifyLiquidityTest(manager);
         dataHook = new BuybackShapedHook(manager, controller);
         sellSwapper = new SplitSellSwapper(manager);
+        routerSwapper = new RouterOrderSwapper(manager);
 
         uint160 flags = uint160(
             Hooks.AFTER_INITIALIZE_FLAG | Hooks.BEFORE_SWAP_FLAG | Hooks.AFTER_SWAP_FLAG
@@ -584,36 +642,26 @@ contract SplitBuyTest is Test {
         assertGe(priceX192 * 99, uint256(5_000_000) << 192, "never past it");
     }
 
-    /// @notice A dynamic-fee pool's key carries the `DYNAMIC_FEE_FLAG` sentinel, not a fee; the issuance limit uses the
-    /// LP fee in slot0. A split buy on it matches a static pool with that fee, both fresh (0) and once set (1%).
-    function test_split_dynamicFeePool_matchesStaticPool() public {
-        _assertDynamicMatchesStatic({lpFee: 0});
-        _assertDynamicMatchesStatic({lpFee: 10_000});
-    }
-
-    function _assertDynamicMatchesStatic(uint24 lpFee) internal {
-        (uint256 staticId, address staticToken) = _launch(JBConstants.NATIVE_TOKEN, 18, WEIGHT, 0, false);
-        (, address dynamicToken) = _launch(JBConstants.NATIVE_TOKEN, 18, WEIGHT, 0, false);
-        uint256 rate = _mintAll(staticId, JBConstants.NATIVE_TOKEN, 1e18);
-        (PoolKey memory staticKey,) = _pool(address(0), staticToken, rate, 130, 1e20, 10, lpFee);
-        (PoolKey memory dynamicKey,) =
-            _pool(address(0), dynamicToken, rate, 130, 1e20, 10, LPFeeLibrary.DYNAMIC_FEE_FLAG);
-        if (lpFee != 0) {
-            vm.prank(address(hook));
-            manager.updateDynamicLPFee(dynamicKey, lpFee);
-        }
-
-        uint256 staticSupply = _supply(staticToken);
-        uint256 dynamicSupply = _supply(dynamicToken);
-        uint256 staticOut = _buy(staticKey, true, 1 ether, _extreme(true), "");
-        uint256 dynamicOut = _buy(dynamicKey, true, 1 ether, _extreme(true), "");
-
-        assertGt(_supply(staticToken) - staticSupply, 0, "split, not pool-only");
-        assertEq(dynamicOut, staticOut, "same output");
-        assertEq(_supply(dynamicToken) - dynamicSupply, _supply(staticToken) - staticSupply, "same mint leg");
-        (uint160 staticPrice,,,) = manager.getSlot0(staticKey.toId());
-        (uint160 dynamicPrice,,,) = manager.getSlot0(dynamicKey.toId());
-        assertEq(dynamicPrice, staticPrice, "same issuance limit");
+    /// @notice This hook never sets an LP fee, so a dynamic-fee pool would charge none; initializing one reverts.
+    function test_dynamicFeePool_rejected() public {
+        (, address projectToken) = _launch(JBConstants.NATIVE_TOKEN, 18, WEIGHT, 0, false);
+        PoolKey memory key = PoolKey({
+            currency0: Currency.wrap(address(0)),
+            currency1: Currency.wrap(projectToken),
+            fee: LPFeeLibrary.DYNAMIC_FEE_FLAG,
+            tickSpacing: 200,
+            hooks: IHooks(address(hook))
+        });
+        vm.expectRevert(
+            abi.encodeWithSelector(
+                CustomRevert.WrappedError.selector,
+                address(hook),
+                IHooks.afterInitialize.selector,
+                abi.encodeWithSelector(JBUniswapV4Hook.JBUniswapV4Hook_DynamicFeeNotSupported.selector),
+                abi.encodeWithSelector(Hooks.HookCallFailed.selector)
+            )
+        );
+        manager.initialize(key, uint160(1) << 96);
     }
 
     /// @notice A caller limit at the fee-free issuance price keeps a plain V4 swap: partial fill, no mint.
@@ -760,18 +808,76 @@ contract SplitBuyTest is Test {
         assertGe(out + mintAll / 1_000_000 + 3, mintAll, "never below minting everything");
     }
 
-    /// @notice When V4's rounding eats a pool fill (here the 1% fee takes the whole one-unit input of a 0-decimal
-    /// token), the buy reverts instead of delivering less than minting.
-    function test_poolFillEatenByRounding_reverts() public {
+    function testFuzz_sixDecimalSmallBuys_neverRevert(
+        uint128 liquidity,
+        uint256 poolPercent,
+        uint256 amountIn,
+        uint24 fee
+    )
+        public
+    {
+        liquidity = uint128(bound(liquidity, 1e10, 1e22));
+        poolPercent = bound(poolPercent, 101, 400);
+        amountIn = bound(amountIn, 1e3, 1e7);
+        fee = uint24(bound(fee, 0, 10_000));
+
+        MockERC20WithDecimals usd = new MockERC20WithDecimals("USD", "USD", 6);
+        (uint256 projectId, address projectToken) = _launch(address(usd), 6, 1e18, 0, false);
+        uint256 rate = _mintAll(projectId, address(usd), 1e18);
+        (PoolKey memory key, bool zeroForOne) = _pool(address(usd), projectToken, rate, poolPercent, liquidity, 20, fee);
+        uint256 mintAll = _mintAll(projectId, address(usd), amountIn);
+        (, uint256 out) = swapper.swap(key, zeroForOne, amountIn, _extreme(zeroForOne), "");
+        assertGe(out + mintAll / 1_000_000 + 3, mintAll, "never below minting everything");
+    }
+
+    function testFuzz_dustTicksSmallBuys_neverRevert(
+        uint256 poolPercent,
+        uint256 amountIn,
+        uint24 fee,
+        uint256 dust,
+        uint8 positions
+    )
+        public
+    {
+        poolPercent = bound(poolPercent, 101, 150);
+        amountIn = bound(amountIn, 1e3, 1e7);
+        fee = uint24(bound(fee, 0, 10_000));
+        dust = bound(dust, 1, 1e9);
+        positions = uint8(bound(positions, 1, 40));
+
+        MockERC20WithDecimals usd = new MockERC20WithDecimals("USD", "USD", 6);
+        (uint256 projectId, address projectToken) = _launch(address(usd), 6, 1e18, 0, false);
+        uint256 rate = _mintAll(projectId, address(usd), 1e18);
+        (PoolKey memory key, bool zeroForOne) = _pool(address(usd), projectToken, rate, poolPercent, 0, 20, fee);
+        _fund(key.currency0);
+        _fund(key.currency1);
+        (, int24 tick,,) = manager.getSlot0(key.toId());
+        tick = tick / 200 * 200;
+        for (int24 k = -int24(uint24(positions)); k < int24(uint24(positions)); k++) {
+            liquidityRouter.modifyLiquidity(
+                key,
+                ModifyLiquidityParams({
+                    tickLower: tick + k * 200, tickUpper: tick + (k + 1) * 200, liquidityDelta: int256(dust), salt: 0
+                }),
+                ""
+            );
+        }
+        uint256 mintAll = _mintAll(projectId, address(usd), amountIn);
+        (, uint256 out) = swapper.swap(key, zeroForOne, amountIn, _extreme(zeroForOne), "");
+        assertGe(out + mintAll / 1_000_000 + 3, mintAll, "never below minting everything");
+    }
+
+    /// @notice When V4's rounding would eat a pool fill (here the 1% fee takes the whole one-unit input of a 0-decimal
+    /// token), the buy mints instead.
+    function test_poolFillEatenByRounding_mints() public {
         MockERC20WithDecimals unit = new MockERC20WithDecimals("U", "U", 0);
         (uint256 projectId, address projectToken) = _launch(address(unit), 0, 1e18, 0, false);
         uint256 rate = _mintAll(projectId, address(unit), 1e18);
         (PoolKey memory key, bool zeroForOne) = _pool(address(unit), projectToken, rate, 130, 1e20, 10, 10_000);
-        uint256 balance = unit.balanceOf(address(this));
+        uint256 mintAll = _mintAll(projectId, address(unit), 1);
 
-        vm.expectRevert();
-        swapper.swap(key, zeroForOne, 1, _extreme(zeroForOne), "");
-        assertEq(unit.balanceOf(address(this)), balance, "the buyer keeps the input");
+        (, uint256 out) = swapper.swap(key, zeroForOne, 1, _extreme(zeroForOne), "");
+        assertEq(out, mintAll, "mints the whole input");
     }
 
     //*********************************************************************//
@@ -982,5 +1088,167 @@ contract SplitBuyTest is Test {
         uint256 out = _sell(key, amount, "");
         assertGe(out, poolOnly, "never below the pool alone");
         if (amount <= inventory) assertGe(out, reclaimAll, "never below cashing out everything");
+    }
+
+    //*********************************************************************//
+    // ------------------- routed vs plain pool swaps -------------------- //
+    //*********************************************************************//
+
+    /// @notice Fuzz: a buy across input decimals, pool shapes, dust positions, fees, sizes, price limits and both
+    /// settle orders succeeds wherever the plain pool swap does, never gets less, and stays within the price limit.
+    function testFuzz_buy_neverWorseThanPlainSwap(
+        uint8 inputKind,
+        uint256 weight,
+        uint16 reservedPercent,
+        uint256 poolPercent,
+        uint128 liquidity,
+        int24 halfWidth,
+        uint24 fee,
+        uint8 dustPositions,
+        uint256 amountIn,
+        uint24 limitTicks,
+        bool routerOrder
+    )
+        public
+    {
+        inputKind = uint8(bound(inputKind, 0, 2));
+        weight = bound(weight, 1e15, 1e24);
+        reservedPercent = uint16(bound(reservedPercent, 0, 9000));
+        poolPercent = bound(poolPercent, 1, 1000);
+        liquidity = uint128(bound(liquidity, 0, 1e24));
+        halfWidth = int24(bound(halfWidth, 1, 30));
+        fee = uint24(bound(fee, 0, 100_000));
+        dustPositions = uint8(bound(dustPositions, 0, 10));
+
+        // Native ETH, a 6-decimal stablecoin or an 18-decimal token.
+        uint8 decimals = inputKind == 1 ? 6 : 18;
+        address input =
+            inputKind == 0 ? JBConstants.NATIVE_TOKEN : address(new MockERC20WithDecimals("IN", "IN", decimals));
+        amountIn = bound(amountIn, 1, 1e6 * 10 ** decimals);
+
+        (uint256 projectId, address projectToken) = _launch(input, decimals, weight, reservedPercent, false);
+        uint256 rate = _mintAll(projectId, input, 10 ** decimals) * 1e18 / 10 ** decimals;
+        vm.assume(rate != 0);
+        address poolInput = inputKind == 0 ? address(0) : input;
+        (PoolKey memory key, bool zeroForOne) =
+            _pool(poolInput, projectToken, rate, poolPercent, liquidity, halfWidth, fee);
+        _fund(key.currency0);
+        _fund(key.currency1);
+        if (poolInput != address(0)) IERC20(poolInput).approve(address(routerSwapper), type(uint256).max);
+        _dust(key, dustPositions);
+
+        _assertNeverWorseThanPlain(key, zeroForOne, amountIn, _limit(key, zeroForOne, limitTicks), routerOrder);
+    }
+
+    /// @notice Fuzz: a sell across tax rates, pool shapes, sizes, price limits and both settle orders succeeds wherever
+    /// the plain pool swap does, never gets less, and stays within the price limit.
+    function testFuzz_sell_neverWorseThanPlainSwap(
+        uint16 taxRate,
+        uint256 poolPercent,
+        uint128 liquidity,
+        int24 halfWidth,
+        uint256 amount,
+        uint24 limitTicks,
+        bool routerOrder
+    )
+        public
+    {
+        taxRate = uint16(bound(taxRate, 0, 10_000));
+        poolPercent = bound(poolPercent, 1, 1000);
+        liquidity = uint128(bound(liquidity, 1e10, 1e23));
+        halfWidth = int24(bound(halfWidth, 1, 30));
+
+        (, address projectToken, PoolKey memory key) = _sellSetup(taxRate, poolPercent, liquidity, halfWidth);
+        amount = bound(amount, 1, IERC20(projectToken).balanceOf(address(this)));
+        IERC20(projectToken).approve(address(swapper), type(uint256).max);
+        IERC20(projectToken).approve(address(routerSwapper), type(uint256).max);
+
+        _assertNeverWorseThanPlain(key, false, amount, _limit(key, false, limitTicks), routerOrder);
+    }
+
+    /// @dev Swaps once with the terminal's previews failing, so the hook leaves the whole swap to the pool, then once
+    /// for real from the same state, and checks the real swap against the plain one.
+    function _assertNeverWorseThanPlain(
+        PoolKey memory key,
+        bool zeroForOne,
+        uint256 amountIn,
+        uint160 limit,
+        bool routerOrder
+    )
+        internal
+    {
+        uint256 snap = vm.snapshotState();
+        vm.mockCallRevert(address(terminal), abi.encodeWithSelector(terminal.previewPayFor.selector), "");
+        vm.mockCallRevert(address(terminal), abi.encodeWithSelector(terminal.previewCashOutFrom.selector), "");
+        (bool plainOk, uint256 plainUsed, uint256 plainOut) = _trySwap(key, zeroForOne, amountIn, limit, routerOrder);
+        vm.clearMockedCalls();
+        vm.revertToState(snap);
+
+        (bool ok, uint256 used, uint256 out) = _trySwap(key, zeroForOne, amountIn, limit, routerOrder);
+        if (!plainOk) return;
+        assertTrue(ok, "succeeds wherever the plain swap does");
+        // The hook's rounding margin: a millionth plus 3 units.
+        assertGe(out + plainOut / 1_000_000 + 3, plainOut, "never below the plain swap");
+
+        // At an average price no worse than the plain swap's, the routed swap adds no slippage of its own. Otherwise
+        // it may trail the limit by the LP fee, as a plain swap can, and no further.
+        if ((out + out / 1_000_000 + 3) * plainUsed >= plainOut * used) return;
+        uint256 netUsed = used * (1e6 - key.fee) / 1e6;
+        uint256 floor = zeroForOne
+            ? FullMath.mulDiv({
+                a: FullMath.mulDiv({a: netUsed, b: limit, denominator: 1 << 96}), b: limit, denominator: 1 << 96
+            })
+            : FullMath.mulDiv({
+                a: FullMath.mulDiv({a: netUsed, b: 1 << 96, denominator: limit}), b: 1 << 96, denominator: limit
+            });
+        assertGe(out + floor / 1_000_000 + 3, floor, "within the price limit");
+    }
+
+    function _trySwap(
+        PoolKey memory key,
+        bool zeroForOne,
+        uint256 amountIn,
+        uint160 limit,
+        bool routerOrder
+    )
+        internal
+        returns (bool ok, uint256 used, uint256 out)
+    {
+        uint256 value = (zeroForOne ? key.currency0 : key.currency1).isAddressZero() ? amountIn : 0;
+        if (routerOrder) {
+            try routerSwapper.swap{value: value}(key, zeroForOne, amountIn, limit) returns (uint256 u, uint256 o) {
+                return (true, u, o);
+            } catch {}
+        } else {
+            try swapper.swap{value: value}(key, zeroForOne, amountIn, limit, "") returns (uint256 u, uint256 o) {
+                return (true, u, o);
+            } catch {}
+        }
+    }
+
+    /// @dev The price limit `ticks` past the current tick in the swap's direction, or no limit when `ticks` is 0.
+    function _limit(PoolKey memory key, bool zeroForOne, uint24 ticks) internal view returns (uint160) {
+        ticks = uint24(bound(ticks, 0, 50_000));
+        if (ticks == 0) return _extreme(zeroForOne);
+        (, int24 tick,,) = manager.getSlot0(key.toId());
+        int256 target = zeroForOne ? int256(tick) - int256(uint256(ticks)) : int256(tick) + int256(uint256(ticks));
+        if (target <= TickMath.MIN_TICK || target >= TickMath.MAX_TICK) return _extreme(zeroForOne);
+        // forge-lint: disable-next-line(unsafe-typecast)
+        return TickMath.getSqrtPriceAtTick(int24(target));
+    }
+
+    /// @dev Adds dust liquidity over `positions` single-spacing ranges on each side of the current tick.
+    function _dust(PoolKey memory key, uint8 positions) internal {
+        (, int24 tick,,) = manager.getSlot0(key.toId());
+        tick = tick / 200 * 200;
+        for (int24 k = -int24(uint24(positions)); k < int24(uint24(positions)); k++) {
+            liquidityRouter.modifyLiquidity{value: key.currency0.isAddressZero() ? 1e18 : 0}(
+                key,
+                ModifyLiquidityParams({
+                    tickLower: tick + k * 200, tickUpper: tick + (k + 1) * 200, liquidityDelta: 1e6, salt: 0
+                }),
+                ""
+            );
+        }
     }
 }

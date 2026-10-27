@@ -649,7 +649,7 @@ contract OracleDeepTest is Test {
         (, int24 currentTick,,) = pm.getSlot0(id);
         uint128 currentLiquidity = pm.getLiquidity(id);
 
-        int24 meanTick = hook.observeTWAP(id, hook.TWAP_PERIOD(), currentTick, index, currentLiquidity, cardinality);
+        int24 meanTick = hook.observeTWAP(id, uint32(1800), currentTick, index, currentLiquidity, cardinality);
         assertGe(meanTick, -1000, "Mean tick should remain bounded after fast-block warmup");
         assertLe(meanTick, 1000, "Mean tick should remain bounded after fast-block warmup");
     }
@@ -657,7 +657,7 @@ contract OracleDeepTest is Test {
     /// @notice At one-observation-per-second cadence the capped buffer still retains a 30-minute TWAP window.
     function test_TWAPRetention_CapCoversThirtyMinutesAtOneSecondCadence() public {
         uint256 ts = 10_000;
-        uint32 twapPeriod = hook.TWAP_PERIOD();
+        uint32 twapPeriod = uint32(1800);
         uint256 swapCount = twapPeriod + 250;
 
         for (uint256 i = 0; i < swapCount; i++) {
