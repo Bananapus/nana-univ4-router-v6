@@ -665,7 +665,7 @@ contract InvariantTest is Test {
         // Grow oracle cardinality first by doing initial swaps at short intervals.
         // We need enough cardinality to store observations spanning TWAP_PERIOD (1800s).
         // Then spread out swaps to build sufficient time history.
-        uint32 twapPeriod = hook.TWAP_PERIOD();
+        uint32 twapPeriod = uint32(1800);
 
         // Phase 1: Grow cardinality with 10 rapid swaps (1s apart, just to bump cardinality)
         for (uint256 i = 0; i < 10; i++) {

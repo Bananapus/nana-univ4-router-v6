@@ -4,6 +4,7 @@ pragma solidity 0.8.28;
 import {Test} from "forge-std/Test.sol";
 
 import {IJBController} from "@bananapus/core-v6/src/interfaces/IJBController.sol";
+import {IJBCashOutHook} from "@bananapus/core-v6/src/interfaces/IJBCashOutHook.sol";
 import {IJBPayHook} from "@bananapus/core-v6/src/interfaces/IJBPayHook.sol";
 import {IJBRulesetApprovalHook} from "@bananapus/core-v6/src/interfaces/IJBRulesetApprovalHook.sol";
 import {IJBRulesetDataHook} from "@bananapus/core-v6/src/interfaces/IJBRulesetDataHook.sol";
@@ -23,7 +24,9 @@ import {JBSplits} from "@bananapus/core-v6/src/JBSplits.sol";
 import {JBTerminalStore} from "@bananapus/core-v6/src/JBTerminalStore.sol";
 import {JBTokens} from "@bananapus/core-v6/src/JBTokens.sol";
 import {JBConstants} from "@bananapus/core-v6/src/libraries/JBConstants.sol";
+import {JBMetadataResolver} from "@bananapus/core-v6/src/libraries/JBMetadataResolver.sol";
 import {JBAccountingContext} from "@bananapus/core-v6/src/structs/JBAccountingContext.sol";
+import {JBAfterCashOutRecordedContext} from "@bananapus/core-v6/src/structs/JBAfterCashOutRecordedContext.sol";
 import {JBAfterPayRecordedContext} from "@bananapus/core-v6/src/structs/JBAfterPayRecordedContext.sol";
 import {JBBeforeCashOutRecordedContext} from "@bananapus/core-v6/src/structs/JBBeforeCashOutRecordedContext.sol";
 import {JBBeforePayRecordedContext} from "@bananapus/core-v6/src/structs/JBBeforePayRecordedContext.sol";
@@ -42,8 +45,10 @@ import {IPermit2} from "@uniswap/permit2/src/interfaces/IPermit2.sol";
 import {IHooks} from "@uniswap/v4-core/src/interfaces/IHooks.sol";
 import {IPoolManager} from "@uniswap/v4-core/src/interfaces/IPoolManager.sol";
 import {IUnlockCallback} from "@uniswap/v4-core/src/interfaces/callback/IUnlockCallback.sol";
+import {CustomRevert} from "@uniswap/v4-core/src/libraries/CustomRevert.sol";
 import {FullMath} from "@uniswap/v4-core/src/libraries/FullMath.sol";
 import {Hooks} from "@uniswap/v4-core/src/libraries/Hooks.sol";
+import {LPFeeLibrary} from "@uniswap/v4-core/src/libraries/LPFeeLibrary.sol";
 import {StateLibrary} from "@uniswap/v4-core/src/libraries/StateLibrary.sol";
 import {TickMath} from "@uniswap/v4-core/src/libraries/TickMath.sol";
 import {PoolModifyLiquidityTest} from "@uniswap/v4-core/src/test/PoolModifyLiquidityTest.sol";
@@ -195,8 +200,217 @@ contract BuybackShapedHook is IJBRulesetDataHook, IJBPayHook {
     }
 }
 
-/// @notice Buys of a project token fill from the pool while it beats the payer's issuance rate and mint the rest,
-/// against real Juicebox core contracts and a real PoolManager.
+/// @notice Exact-input swaps in a router's order: swap first, then settle what was used and take the output, so the
+/// PoolManager holds none of the input during the swap.
+contract SplitSellSwapper is IUnlockCallback {
+    IPoolManager internal immutable PM;
+
+    constructor(IPoolManager pm) {
+        PM = pm;
+    }
+
+    receive() external payable {}
+
+    function swap(
+        PoolKey calldata key,
+        bool zeroForOne,
+        uint256 amountIn,
+        bytes calldata hookData
+    )
+        external
+        returns (uint256 used, uint256 out)
+    {
+        (used, out) =
+            abi.decode(PM.unlock(abi.encode(key, zeroForOne, amountIn, hookData, msg.sender)), (uint256, uint256));
+    }
+
+    function unlockCallback(bytes calldata data) external returns (bytes memory) {
+        (PoolKey memory key, bool zeroForOne, uint256 amountIn, bytes memory hookData, address payer) =
+            abi.decode(data, (PoolKey, bool, uint256, bytes, address));
+        BalanceDelta d = PM.swap({
+            key: key,
+            params: SwapParams({
+                zeroForOne: zeroForOne,
+                // forge-lint: disable-next-line(unsafe-typecast)
+                amountSpecified: -int256(amountIn),
+                sqrtPriceLimitX96: zeroForOne ? TickMath.MIN_SQRT_PRICE + 1 : TickMath.MAX_SQRT_PRICE - 1
+            }),
+            hookData: hookData
+        });
+        uint256 used = uint256(uint128(-(zeroForOne ? d.amount0() : d.amount1())));
+        uint256 out = uint256(uint128(zeroForOne ? d.amount1() : d.amount0()));
+        Currency input = zeroForOne ? key.currency0 : key.currency1;
+        PM.sync(input);
+        require(IERC20(Currency.unwrap(input)).transferFrom(payer, address(PM), used));
+        PM.settle();
+        PM.take({currency: zeroForOne ? key.currency1 : key.currency0, to: payer, amount: out});
+        return abi.encode(used, out);
+    }
+}
+
+/// @notice Exact-input swaps in a router's order with a chosen price limit: swap first, then settle what was used and
+/// take the output, so the PoolManager holds none of the input during the swap.
+contract RouterOrderSwapper is IUnlockCallback {
+    IPoolManager internal immutable PM;
+
+    constructor(IPoolManager pm) {
+        PM = pm;
+    }
+
+    receive() external payable {}
+
+    function swap(
+        PoolKey calldata key,
+        bool zeroForOne,
+        uint256 amountIn,
+        uint160 sqrtPriceLimitX96
+    )
+        external
+        payable
+        returns (uint256 used, uint256 out)
+    {
+        (used, out) = abi.decode(
+            PM.unlock(abi.encode(key, zeroForOne, amountIn, sqrtPriceLimitX96, msg.sender)), (uint256, uint256)
+        );
+        if (address(this).balance != 0) payable(msg.sender).transfer(address(this).balance);
+    }
+
+    function unlockCallback(bytes calldata data) external returns (bytes memory) {
+        (PoolKey memory key, bool zeroForOne, uint256 amountIn, uint160 sqrtPriceLimitX96, address payer) =
+            abi.decode(data, (PoolKey, bool, uint256, uint160, address));
+        BalanceDelta d = PM.swap({
+            key: key,
+            params: SwapParams({
+                zeroForOne: zeroForOne,
+                // forge-lint: disable-next-line(unsafe-typecast)
+                amountSpecified: -int256(amountIn),
+                sqrtPriceLimitX96: sqrtPriceLimitX96
+            }),
+            hookData: ""
+        });
+        uint256 used = uint256(uint128(-(zeroForOne ? d.amount0() : d.amount1())));
+        uint256 out = uint256(uint128(zeroForOne ? d.amount1() : d.amount0()));
+        Currency input = zeroForOne ? key.currency0 : key.currency1;
+        if (input.isAddressZero()) {
+            PM.settle{value: used}();
+        } else {
+            PM.sync(input);
+            require(IERC20(Currency.unwrap(input)).transferFrom(payer, address(PM), used));
+            PM.settle();
+        }
+        if (out != 0) PM.take({currency: zeroForOne ? key.currency1 : key.currency0, to: payer, amount: out});
+        return abi.encode(used, out);
+    }
+}
+
+/// @notice A cash-out data hook that names a buyback registry and accepts only cash-outs whose metadata tells that
+/// registry to skip its pool sale.
+contract SkipCheckingDataHook is IJBRulesetDataHook {
+    address public constant BUYBACK_HOOK = address(0x7E61);
+
+    function beforePayRecordedWith(JBBeforePayRecordedContext calldata context)
+        external
+        pure
+        returns (uint256 weight, JBPayHookSpecification[] memory hookSpecifications)
+    {
+        return (context.weight, hookSpecifications);
+    }
+
+    function beforeCashOutRecordedWith(JBBeforeCashOutRecordedContext calldata context)
+        external
+        pure
+        returns (uint256, uint256, uint256, uint256, JBCashOutHookSpecification[] memory hookSpecifications)
+    {
+        (bool found, bytes memory data) = JBMetadataResolver.getDataFor({
+            id: JBMetadataResolver.getId({purpose: "cashOut", target: BUYBACK_HOOK}), metadata: context.metadata
+        });
+        require(found, "no skip entry");
+        (uint256 minimum, bool skip) = abi.decode(data, (uint256, bool));
+        require(minimum == 0 && skip, "not a skip");
+        return
+            (
+                context.cashOutTaxRate,
+                context.cashOutCount,
+                context.totalSupply,
+                context.surplus.value,
+                hookSpecifications
+            );
+    }
+
+    function hasMintPermissionFor(uint256, JBRuleset memory, address) external pure returns (bool) {
+        return false;
+    }
+
+    function supportsInterface(bytes4 interfaceId) external pure returns (bool) {
+        return interfaceId == type(IJBRulesetDataHook).interfaceId || interfaceId == type(IERC165).interfaceId;
+    }
+}
+
+/// @notice A cash-out hook that accepts its share and nothing else.
+contract PlainCashOutHook is IJBCashOutHook {
+    function afterCashOutRecordedWith(JBAfterCashOutRecordedContext calldata) external payable {}
+
+    function supportsInterface(bytes4 interfaceId) external pure returns (bool) {
+        return interfaceId == type(IJBCashOutHook).interfaceId || interfaceId == type(IERC165).interfaceId;
+    }
+}
+
+/// @notice A cash-out data hook that takes a share of each cash-out, like a revnet's fee hook, and names the project
+/// it pays that fee to as `FEE_REVNET_ID`.
+contract FeeRevnetDataHook is IJBRulesetDataHook, IJBCashOutHook {
+    // forge-lint: disable-next-line(mixed-case-variable)
+    uint256 public FEE_REVNET_ID;
+    IJBCashOutHook internal immutable OTHER_HOOK = new PlainCashOutHook();
+
+    receive() external payable {}
+
+    function setFeeRevnetId(uint256 feeRevnetId) external {
+        FEE_REVNET_ID = feeRevnetId;
+    }
+
+    function beforePayRecordedWith(JBBeforePayRecordedContext calldata context)
+        external
+        pure
+        returns (uint256 weight, JBPayHookSpecification[] memory hookSpecifications)
+    {
+        return (context.weight, hookSpecifications);
+    }
+
+    function beforeCashOutRecordedWith(JBBeforeCashOutRecordedContext calldata context)
+        external
+        view
+        returns (uint256, uint256, uint256, uint256, JBCashOutHookSpecification[] memory hookSpecifications)
+    {
+        // Another hook without `FEE_REVNET_ID` comes first.
+        hookSpecifications = new JBCashOutHookSpecification[](2);
+        hookSpecifications[0] = JBCashOutHookSpecification({hook: OTHER_HOOK, noop: false, amount: 1, metadata: ""});
+        hookSpecifications[1] =
+            JBCashOutHookSpecification({hook: IJBCashOutHook(address(this)), noop: false, amount: 1, metadata: ""});
+        return
+            (
+                context.cashOutTaxRate,
+                context.cashOutCount,
+                context.totalSupply,
+                context.surplus.value,
+                hookSpecifications
+            );
+    }
+
+    function afterCashOutRecordedWith(JBAfterCashOutRecordedContext calldata) external payable {}
+
+    function hasMintPermissionFor(uint256, JBRuleset memory, address) external pure returns (bool) {
+        return false;
+    }
+
+    function supportsInterface(bytes4 interfaceId) external pure returns (bool) {
+        return interfaceId == type(IJBRulesetDataHook).interfaceId || interfaceId == type(IJBCashOutHook).interfaceId
+            || interfaceId == type(IERC165).interfaceId;
+    }
+}
+
+/// @notice Buys of a project token fill from the pool while it beats the payer's issuance rate and mint the rest, and
+/// sells fill from the pool while it beats the marginal reclaim rate and cash out the rest, against real Juicebox core
+/// contracts and a real PoolManager.
 contract SplitBuyTest is Test {
     using PoolIdLibrary for PoolKey;
     using StateLibrary for IPoolManager;
@@ -215,6 +429,15 @@ contract SplitBuyTest is Test {
     SplitBuySwapper internal swapper;
     PoolModifyLiquidityTest internal liquidityRouter;
     BuybackShapedHook internal dataHook;
+    SplitSellSwapper internal sellSwapper;
+    RouterOrderSwapper internal routerSwapper;
+
+    /// @dev The cash-out tax rate and cash-out data hook `_launch` gives a project.
+    uint16 internal cashOutTaxRate;
+    address internal cashOutDataHook;
+
+    /// @dev Whether `_sellSetup` launches the sold project as project 1, the fee project.
+    bool internal sellFeeProject;
 
     receive() external payable {}
 
@@ -254,6 +477,8 @@ contract SplitBuyTest is Test {
         swapper = new SplitBuySwapper(manager);
         liquidityRouter = new PoolModifyLiquidityTest(manager);
         dataHook = new BuybackShapedHook(manager, controller);
+        sellSwapper = new SplitSellSwapper(manager);
+        routerSwapper = new RouterOrderSwapper(manager);
 
         uint160 flags = uint160(
             Hooks.AFTER_INITIALIZE_FLAG | Hooks.BEFORE_SWAP_FLAG | Hooks.AFTER_SWAP_FLAG
@@ -290,7 +515,7 @@ contract SplitBuyTest is Test {
         rulesetConfigs[0].approvalHook = IJBRulesetApprovalHook(address(0));
         rulesetConfigs[0].metadata = JBRulesetMetadata({
             reservedPercent: reservedPercent,
-            cashOutTaxRate: 0,
+            cashOutTaxRate: cashOutTaxRate,
             // forge-lint: disable-next-line(unsafe-typecast)
             baseCurrency: uint32(uint160(acceptedToken)),
             pausePay: false,
@@ -306,8 +531,8 @@ contract SplitBuyTest is Test {
             holdFees: false,
             scopeCashOutsToLocalBalances: true,
             useDataHookForPay: withDataHook,
-            useDataHookForCashOut: false,
-            dataHook: withDataHook ? address(dataHook) : address(0),
+            useDataHookForCashOut: cashOutDataHook != address(0),
+            dataHook: withDataHook ? address(dataHook) : cashOutDataHook,
             metadata: 0
         });
         rulesetConfigs[0].splitGroups = new JBSplitGroup[](0);
@@ -481,6 +706,28 @@ contract SplitBuyTest is Test {
         assertGe(priceX192 * 99, uint256(5_000_000) << 192, "never past it");
     }
 
+    /// @notice This hook never sets an LP fee, so a dynamic-fee pool would charge none; initializing one reverts.
+    function test_dynamicFeePool_rejected() public {
+        (, address projectToken) = _launch(JBConstants.NATIVE_TOKEN, 18, WEIGHT, 0, false);
+        PoolKey memory key = PoolKey({
+            currency0: Currency.wrap(address(0)),
+            currency1: Currency.wrap(projectToken),
+            fee: LPFeeLibrary.DYNAMIC_FEE_FLAG,
+            tickSpacing: 200,
+            hooks: IHooks(address(hook))
+        });
+        vm.expectRevert(
+            abi.encodeWithSelector(
+                CustomRevert.WrappedError.selector,
+                address(hook),
+                IHooks.afterInitialize.selector,
+                abi.encodeWithSelector(JBUniswapV4Hook.JBUniswapV4Hook_DynamicFeeNotSupported.selector),
+                abi.encodeWithSelector(Hooks.HookCallFailed.selector)
+            )
+        );
+        manager.initialize(key, uint160(1) << 96);
+    }
+
     /// @notice A caller limit at the fee-free issuance price keeps a plain V4 swap: partial fill, no mint.
     function test_callerLimitAtIssuance_isPlainSwap() public {
         (, address projectToken, PoolKey memory key) = _nativeSetup(0, 130, 1e20);
@@ -625,17 +872,475 @@ contract SplitBuyTest is Test {
         assertGe(out + mintAll / 1_000_000 + 3, mintAll, "never below minting everything");
     }
 
-    /// @notice When V4's rounding eats a pool fill (here the 1% fee takes the whole one-unit input of a 0-decimal
-    /// token), the buy reverts instead of delivering less than minting.
-    function test_poolFillEatenByRounding_reverts() public {
+    function testFuzz_sixDecimalSmallBuys_neverRevert(
+        uint128 liquidity,
+        uint256 poolPercent,
+        uint256 amountIn,
+        uint24 fee
+    )
+        public
+    {
+        liquidity = uint128(bound(liquidity, 1e10, 1e22));
+        poolPercent = bound(poolPercent, 101, 400);
+        amountIn = bound(amountIn, 1e3, 1e7);
+        fee = uint24(bound(fee, 0, 10_000));
+
+        MockERC20WithDecimals usd = new MockERC20WithDecimals("USD", "USD", 6);
+        (uint256 projectId, address projectToken) = _launch(address(usd), 6, 1e18, 0, false);
+        uint256 rate = _mintAll(projectId, address(usd), 1e18);
+        (PoolKey memory key, bool zeroForOne) = _pool(address(usd), projectToken, rate, poolPercent, liquidity, 20, fee);
+        uint256 mintAll = _mintAll(projectId, address(usd), amountIn);
+        (, uint256 out) = swapper.swap(key, zeroForOne, amountIn, _extreme(zeroForOne), "");
+        assertGe(out + mintAll / 1_000_000 + 3, mintAll, "never below minting everything");
+    }
+
+    function testFuzz_dustTicksSmallBuys_neverRevert(
+        uint256 poolPercent,
+        uint256 amountIn,
+        uint24 fee,
+        uint256 dust,
+        uint8 positions
+    )
+        public
+    {
+        poolPercent = bound(poolPercent, 101, 150);
+        amountIn = bound(amountIn, 1e3, 1e7);
+        fee = uint24(bound(fee, 0, 10_000));
+        dust = bound(dust, 1, 1e9);
+        positions = uint8(bound(positions, 1, 40));
+
+        MockERC20WithDecimals usd = new MockERC20WithDecimals("USD", "USD", 6);
+        (uint256 projectId, address projectToken) = _launch(address(usd), 6, 1e18, 0, false);
+        uint256 rate = _mintAll(projectId, address(usd), 1e18);
+        (PoolKey memory key, bool zeroForOne) = _pool(address(usd), projectToken, rate, poolPercent, 0, 20, fee);
+        _fund(key.currency0);
+        _fund(key.currency1);
+        (, int24 tick,,) = manager.getSlot0(key.toId());
+        tick = tick / 200 * 200;
+        for (int24 k = -int24(uint24(positions)); k < int24(uint24(positions)); k++) {
+            liquidityRouter.modifyLiquidity(
+                key,
+                ModifyLiquidityParams({
+                    tickLower: tick + k * 200, tickUpper: tick + (k + 1) * 200, liquidityDelta: int256(dust), salt: 0
+                }),
+                ""
+            );
+        }
+        uint256 mintAll = _mintAll(projectId, address(usd), amountIn);
+        (, uint256 out) = swapper.swap(key, zeroForOne, amountIn, _extreme(zeroForOne), "");
+        assertGe(out + mintAll / 1_000_000 + 3, mintAll, "never below minting everything");
+    }
+
+    /// @notice When V4's rounding would eat a pool fill (here the 1% fee takes the whole one-unit input of a 0-decimal
+    /// token), the buy mints instead.
+    function test_poolFillEatenByRounding_mints() public {
         MockERC20WithDecimals unit = new MockERC20WithDecimals("U", "U", 0);
         (uint256 projectId, address projectToken) = _launch(address(unit), 0, 1e18, 0, false);
         uint256 rate = _mintAll(projectId, address(unit), 1e18);
         (PoolKey memory key, bool zeroForOne) = _pool(address(unit), projectToken, rate, 130, 1e20, 10, 10_000);
-        uint256 balance = unit.balanceOf(address(this));
+        uint256 mintAll = _mintAll(projectId, address(unit), 1);
+
+        (, uint256 out) = swapper.swap(key, zeroForOne, 1, _extreme(zeroForOne), "");
+        assertEq(out, mintAll, "mints the whole input");
+    }
+
+    //*********************************************************************//
+    // ------------------------------ sells ------------------------------ //
+    //*********************************************************************//
+
+    /// @dev A native-ETH project with `taxRate`, 1,000 ETH of surplus and 100M tokens (half held here by the seller,
+    /// half by the LP), so cashing out pays up to 1e-5 ETH per token. Its pool pays `poolPercent`% of that per token at
+    /// the start, with `liquidity` over `halfWidth` tick spacings on each side. Fee 1%, tick spacing 200.
+    function _sellSetup(
+        uint16 taxRate,
+        uint256 poolPercent,
+        uint128 liquidity,
+        int24 halfWidth
+    )
+        internal
+        returns (uint256 projectId, address projectToken, PoolKey memory key)
+    {
+        // Project 1 collects the terminal's fees; the sold project is another one unless `sellFeeProject`.
+        if (!sellFeeProject) _launch(JBConstants.NATIVE_TOKEN, 18, WEIGHT, 0, false);
+        cashOutTaxRate = taxRate;
+        (projectId, projectToken) = _launch(JBConstants.NATIVE_TOKEN, 18, WEIGHT, 0, false);
+        terminal.pay{value: 1000 ether}(projectId, JBConstants.NATIVE_TOKEN, 1000 ether, address(this), 0, "", "");
+        vm.prank(address(controller));
+        tokens.mintFor({holder: address(this), projectId: projectId, count: 5e25});
+        IERC20(projectToken).approve(address(liquidityRouter), type(uint256).max);
+        IERC20(projectToken).approve(address(sellSwapper), type(uint256).max);
+
+        key = PoolKey({
+            currency0: Currency.wrap(address(0)),
+            currency1: Currency.wrap(projectToken),
+            fee: 10_000,
+            tickSpacing: 200,
+            hooks: IHooks(address(hook))
+        });
+        // 1e5 tokens per ETH at 100%.
+        uint160 sqrtPriceX96 = uint160(Math.sqrt((uint256(1e7) / poolPercent) << 192));
+        manager.initialize(key, sqrtPriceX96);
+        int24 tick = TickMath.getTickAtSqrtPrice(sqrtPriceX96) / 200 * 200;
+        liquidityRouter.modifyLiquidity{value: 1e29}(
+            key,
+            ModifyLiquidityParams({
+                tickLower: tick - halfWidth * 200,
+                tickUpper: tick + halfWidth * 200,
+                liquidityDelta: int256(uint256(liquidity)),
+                salt: 0
+            }),
+            ""
+        );
+    }
+
+    function _sell(PoolKey memory key, uint256 amount, bytes memory hookData) internal returns (uint256 out) {
+        (, out) = sellSwapper.swap(key, false, amount, hookData);
+    }
+
+    /// @dev What the same sell gets from the pool alone: the terminal's preview fails, so the hook leaves it to V4.
+    function _poolOnly(PoolKey memory key, uint256 amount) internal returns (uint256 out) {
+        uint256 snap = vm.snapshotState();
+        vm.mockCallRevert(address(terminal), abi.encodeWithSelector(terminal.previewCashOutFrom.selector), "");
+        out = _sell(key, amount, "");
+        vm.clearMockedCalls();
+        vm.revertToState(snap);
+    }
+
+    /// @dev What cashing out the same tokens at the terminal pays.
+    function _reclaimAll(uint256 projectId, uint256 amount) internal returns (uint256 out) {
+        uint256 snap = vm.snapshotState();
+        out = terminal.cashOutTokensOf({
+            holder: address(this),
+            projectId: projectId,
+            cashOutCount: amount,
+            tokenToReclaim: JBConstants.NATIVE_TOKEN,
+            minTokensReclaimed: 0,
+            beneficiary: payable(address(this)),
+            metadata: ""
+        });
+        vm.revertToState(snap);
+    }
+
+    /// @notice A pool that pays more than the marginal reclaim rate fills until it meets it, and the rest cashes out:
+    /// the seller gets more than the pool alone and more than cashing out everything.
+    function test_sell_split() public {
+        (uint256 projectId, address projectToken, PoolKey memory key) = _sellSetup(5000, 60, 1e22, 30);
+        uint256 amount = 1e24;
+        uint256 poolOnly = _poolOnly(key, amount);
+        uint256 reclaimAll = _reclaimAll(projectId, amount);
+        (uint160 priceBefore,,,) = manager.getSlot0(key.toId());
+
+        uint256 supply = _supply(projectToken);
+        uint256 out = _sell(key, amount, "");
+        (uint160 priceAfter,,,) = manager.getSlot0(key.toId());
+        assertGt(supply - _supply(projectToken), 0, "cash-out leg");
+        assertGt(priceAfter, priceBefore, "pool leg");
+        assertGt(out, poolOnly, "beats the pool alone");
+        assertGt(out, reclaimAll, "beats cashing out everything");
+        assertGt(
+            IERC20(address(tokens.tokenOf(1))).balanceOf(address(hook)),
+            0,
+            "the fee's project 1 tokens stay in the hook"
+        );
+    }
+
+    /// @notice When the cash-out leg would pay less than selling the same tokens in the pool (a steep 90% tax, whose
+    /// average rate is well under its marginal rate, against a deep pool), the whole sell stays in the pool.
+    function test_sell_cashOutWorseThanPool_staysInPool() public {
+        (uint256 projectId, address projectToken, PoolKey memory key) = _sellSetup(9000, 11, 1e23, 30);
+        uint256 amount = 1e24;
+        uint256 poolOnly = _poolOnly(key, amount);
+        uint256 supply = _supply(projectToken);
+        uint256 out = _sell(key, amount, "");
+        assertEq(_supply(projectToken), supply, "nothing cashed out");
+        assertEq(out, poolOnly, "the pool alone");
+        assertGt(out, _reclaimAll(projectId, amount), "which beats cashing out everything");
+    }
+
+    /// @notice The cash-out leg takes at most what the PoolManager holds of the token (the router settles the input
+    /// after the swap), and the outer swap sells the rest in the pool instead of reverting. A tagged minimum covers
+    /// both parts.
+    function test_sell_inventoryCap_restSellsInPool() public {
+        (, address projectToken, PoolKey memory key) = _sellSetup(0, 50, 1e20, 10);
+        uint256 amount = 1e23;
+        uint256 inventory = IERC20(projectToken).balanceOf(address(manager));
+        assertLt(inventory, amount, "the PoolManager holds less than the sell");
+        uint256 poolOnly = _poolOnly(key, amount);
+
+        uint256 snap = vm.snapshotState();
+        uint256 supply = _supply(projectToken);
+        uint256 out = _sell(key, amount, "");
+        assertEq(supply - _supply(projectToken), inventory, "cashes out what the PoolManager holds");
+        assertGt(out, poolOnly, "beats the pool alone");
+        vm.revertToState(snap);
 
         vm.expectRevert();
-        swapper.swap(key, zeroForOne, 1, _extreme(zeroForOne), "");
-        assertEq(unit.balanceOf(address(this)), balance, "the buyer keeps the input");
+        _sell(key, amount, abi.encodePacked(JBUniswapV4HookData.TAG, abi.encode(out + 1)));
+        assertEq(
+            _sell(key, amount, abi.encodePacked(JBUniswapV4HookData.TAG, abi.encode(out))),
+            out,
+            "a minimum equal to the total passes"
+        );
+    }
+
+    /// @notice The cash-out leg tells the buyback registry a data hook names to skip its pool sale, which could not
+    /// unlock the PoolManager inside this swap.
+    function test_sell_cashOutSkipsBuybackSale() public {
+        cashOutDataHook = address(new SkipCheckingDataHook());
+        (uint256 projectId, address projectToken, PoolKey memory key) = _sellSetup(0, 50, 1e22, 10);
+
+        vm.expectRevert("no skip entry");
+        _reclaimAll(projectId, 1e22);
+
+        uint256 supply = _supply(projectToken);
+        _sell(key, 1e22, "");
+        assertEq(supply - _supply(projectToken), 1e22, "all cashed out");
+    }
+
+    /// @notice Sells of the fee project's token stay in the pool: its cash-out fee would mint its token back to the
+    /// hook mid-sell.
+    function test_sell_feeProject_staysInPool() public {
+        sellFeeProject = true;
+        (uint256 projectId, address projectToken, PoolKey memory key) = _sellSetup(5000, 60, 1e22, 30);
+        assertEq(projectId, 1, "the fee project");
+        uint256 poolOnly = _poolOnly(key, 1e24);
+        uint256 supply = _supply(projectToken);
+        assertEq(_sell(key, 1e24, ""), poolOnly, "the pool alone");
+        assertEq(_supply(projectToken), supply, "nothing cashed out");
+    }
+
+    /// @notice Sells of the token a cash-out hook pays its fee in (its `FEE_REVNET_ID`) stay in the pool, for the
+    /// same reason; sells of other projects' tokens still cash out.
+    function test_sell_feeRevnetHook_staysInPool() public {
+        FeeRevnetDataHook feeHook = new FeeRevnetDataHook();
+        cashOutDataHook = address(feeHook);
+        (uint256 projectId, address projectToken, PoolKey memory key) = _sellSetup(5000, 60, 1e22, 30);
+        uint256 supply = _supply(projectToken);
+
+        uint256 snap = vm.snapshotState();
+        _sell(key, 1e24, "");
+        assertLt(_supply(projectToken), supply, "another project's fee: cashes out");
+        vm.revertToState(snap);
+
+        feeHook.setFeeRevnetId(projectId);
+        uint256 poolOnly = _poolOnly(key, 1e24);
+        assertEq(_sell(key, 1e24, ""), poolOnly, "the pool alone");
+        assertEq(_supply(projectToken), supply, "nothing cashed out");
+    }
+
+    /// @notice Cases where the reclaim curve's rounding makes the marginal-rate split worse than cashing out everything
+    /// (by about 108 ppm), or than a floor derived from it (which used to revert): the exact comparison picks the best,
+    /// and cashing out everything counts when the PoolManager holds the whole input.
+    function test_sell_reclaimRounding_picksBest() public {
+        _assertSellBest(5000, 50, 214_749_614_204_962_798_835_619, 760_000e18);
+        _assertSellBest(5000, 51, 1e21, 1e24);
+    }
+
+    function _assertSellBest(uint16 taxRate, uint256 poolPercent, uint128 liquidity, uint256 amount) internal {
+        uint256 snap = vm.snapshotState();
+        (uint256 projectId, address projectToken, PoolKey memory key) = _sellSetup(taxRate, poolPercent, liquidity, 30);
+        uint256 inventory = IERC20(projectToken).balanceOf(address(manager));
+        uint256 poolOnly = _poolOnly(key, amount);
+        uint256 reclaimAll = _reclaimAll(projectId, amount);
+        uint256 out = _sell(key, amount, "");
+        assertGe(out, poolOnly, "never below the pool alone");
+        if (amount <= inventory) assertGe(out, reclaimAll, "never below cashing out everything");
+        vm.revertToState(snap);
+    }
+
+    /// @notice Fuzz: across tax rates, pool prices, liquidity and sizes, a sell never gets less than the pool alone,
+    /// and never less than cashing out everything when the PoolManager holds the whole input.
+    function testFuzz_sell_neverBelowPoolOrReclaim(
+        uint16 taxRate,
+        uint256 poolPercent,
+        uint128 liquidity,
+        uint256 amount
+    )
+        public
+    {
+        taxRate = uint16(bound(taxRate, 0, 10_000));
+        poolPercent = bound(poolPercent, 1, 1000);
+        liquidity = uint128(bound(liquidity, 1e15, 1e23));
+        amount = bound(amount, 1e9, 1e25);
+
+        (uint256 projectId, address projectToken, PoolKey memory key) = _sellSetup(taxRate, poolPercent, liquidity, 30);
+        uint256 inventory = IERC20(projectToken).balanceOf(address(manager));
+        uint256 poolOnly = _poolOnly(key, amount);
+        uint256 reclaimAll = _reclaimAll(projectId, amount);
+
+        uint256 out = _sell(key, amount, "");
+        assertGe(out, poolOnly, "never below the pool alone");
+        if (amount <= inventory) assertGe(out, reclaimAll, "never below cashing out everything");
+    }
+
+    //*********************************************************************//
+    // ------------------- routed vs plain pool swaps -------------------- //
+    //*********************************************************************//
+
+    /// @notice Fuzz: a buy across input decimals, pool shapes, dust positions, fees, sizes, price limits and both
+    /// settle orders succeeds wherever the plain pool swap does, never gets less, and stays within the price limit.
+    function testFuzz_buy_neverWorseThanPlainSwap(
+        uint8 inputKind,
+        uint256 weight,
+        uint16 reservedPercent,
+        uint256 poolPercent,
+        uint128 liquidity,
+        int24 halfWidth,
+        uint24 fee,
+        uint8 dustPositions,
+        uint256 amountIn,
+        uint24 limitTicks,
+        bool routerOrder
+    )
+        public
+    {
+        inputKind = uint8(bound(inputKind, 0, 2));
+        weight = bound(weight, 1e15, 1e24);
+        reservedPercent = uint16(bound(reservedPercent, 0, 9000));
+        poolPercent = bound(poolPercent, 1, 1000);
+        liquidity = uint128(bound(liquidity, 0, 1e24));
+        halfWidth = int24(bound(halfWidth, 1, 30));
+        fee = uint24(bound(fee, 0, 100_000));
+        dustPositions = uint8(bound(dustPositions, 0, 10));
+
+        // Native ETH, a 6-decimal stablecoin or an 18-decimal token.
+        uint8 decimals = inputKind == 1 ? 6 : 18;
+        address input =
+            inputKind == 0 ? JBConstants.NATIVE_TOKEN : address(new MockERC20WithDecimals("IN", "IN", decimals));
+        amountIn = bound(amountIn, 1, 1e6 * 10 ** decimals);
+
+        (uint256 projectId, address projectToken) = _launch(input, decimals, weight, reservedPercent, false);
+        uint256 rate = _mintAll(projectId, input, 10 ** decimals) * 1e18 / 10 ** decimals;
+        vm.assume(rate != 0);
+        address poolInput = inputKind == 0 ? address(0) : input;
+        (PoolKey memory key, bool zeroForOne) =
+            _pool(poolInput, projectToken, rate, poolPercent, liquidity, halfWidth, fee);
+        _fund(key.currency0);
+        _fund(key.currency1);
+        if (poolInput != address(0)) IERC20(poolInput).approve(address(routerSwapper), type(uint256).max);
+        _dust(key, dustPositions);
+
+        _assertNeverWorseThanPlain(
+            key, zeroForOne, projectToken, amountIn, _limit(key, zeroForOne, limitTicks), routerOrder
+        );
+    }
+
+    /// @notice Fuzz: a sell across tax rates, pool shapes, sizes, price limits and both settle orders succeeds wherever
+    /// the plain pool swap does, never gets less, and stays within the price limit.
+    function testFuzz_sell_neverWorseThanPlainSwap(
+        uint16 taxRate,
+        uint256 poolPercent,
+        uint128 liquidity,
+        int24 halfWidth,
+        uint256 amount,
+        uint24 limitTicks,
+        bool routerOrder
+    )
+        public
+    {
+        taxRate = uint16(bound(taxRate, 0, 10_000));
+        poolPercent = bound(poolPercent, 1, 1000);
+        liquidity = uint128(bound(liquidity, 1e10, 1e23));
+        halfWidth = int24(bound(halfWidth, 1, 30));
+
+        (, address projectToken, PoolKey memory key) = _sellSetup(taxRate, poolPercent, liquidity, halfWidth);
+        amount = bound(amount, 1, IERC20(projectToken).balanceOf(address(this)));
+        IERC20(projectToken).approve(address(swapper), type(uint256).max);
+        IERC20(projectToken).approve(address(routerSwapper), type(uint256).max);
+
+        _assertNeverWorseThanPlain(key, false, projectToken, amount, _limit(key, false, limitTicks), routerOrder);
+    }
+
+    /// @dev Swaps once with the terminal's previews failing, so the hook leaves the whole swap to the pool, then once
+    /// for real from the same state, and checks the real swap against the plain one and its terminal leg against the
+    /// price limit.
+    function _assertNeverWorseThanPlain(
+        PoolKey memory key,
+        bool zeroForOne,
+        address projectToken,
+        uint256 amountIn,
+        uint160 limit,
+        bool routerOrder
+    )
+        internal
+    {
+        uint256 snap = vm.snapshotState();
+        vm.mockCallRevert(address(terminal), abi.encodeWithSelector(terminal.previewPayFor.selector), "");
+        vm.mockCallRevert(address(terminal), abi.encodeWithSelector(terminal.previewCashOutFrom.selector), "");
+        (bool plainOk,, uint256 plainOut) = _trySwap(key, zeroForOne, amountIn, limit, routerOrder);
+        vm.clearMockedCalls();
+        vm.revertToState(snap);
+
+        // The terminal leg moves the other currency in or out of the terminal, and mints or burns the project token.
+        Currency other = Currency.unwrap(key.currency0) == projectToken ? key.currency1 : key.currency0;
+        uint256 terminalBalance = other.balanceOf(address(terminal));
+        uint256 supply = _supply(projectToken);
+        (bool ok,, uint256 out) = _trySwap(key, zeroForOne, amountIn, limit, routerOrder);
+        if (!plainOk) return;
+        assertTrue(ok, "succeeds wherever the plain swap does");
+        // The hook's rounding margin: a millionth plus 3 units.
+        assertGe(out + plainOut / 1_000_000 + 3, plainOut, "never below the plain swap");
+
+        // The terminal leg's average price is within the limit; the pool keeps its own legs within it.
+        bool buy = Currency.unwrap(zeroForOne ? key.currency1 : key.currency0) == projectToken;
+        (uint256 legIn, uint256 legOut) = buy
+            ? (other.balanceOf(address(terminal)) - terminalBalance, _supply(projectToken) - supply)
+            : (supply - _supply(projectToken), terminalBalance - other.balanceOf(address(terminal)));
+        uint256 floor = zeroForOne
+            ? FullMath.mulDiv({
+                a: FullMath.mulDiv({a: legIn, b: limit, denominator: 1 << 96}), b: limit, denominator: 1 << 96
+            })
+            : FullMath.mulDiv({
+                a: FullMath.mulDiv({a: legIn, b: 1 << 96, denominator: limit}), b: 1 << 96, denominator: limit
+            });
+        assertGe(legOut + floor / 1_000_000 + 3, floor, "terminal leg within the price limit");
+    }
+
+    function _trySwap(
+        PoolKey memory key,
+        bool zeroForOne,
+        uint256 amountIn,
+        uint160 limit,
+        bool routerOrder
+    )
+        internal
+        returns (bool ok, uint256 used, uint256 out)
+    {
+        uint256 value = (zeroForOne ? key.currency0 : key.currency1).isAddressZero() ? amountIn : 0;
+        if (routerOrder) {
+            try routerSwapper.swap{value: value}(key, zeroForOne, amountIn, limit) returns (uint256 u, uint256 o) {
+                return (true, u, o);
+            } catch {}
+        } else {
+            try swapper.swap{value: value}(key, zeroForOne, amountIn, limit, "") returns (uint256 u, uint256 o) {
+                return (true, u, o);
+            } catch {}
+        }
+    }
+
+    /// @dev The price limit `ticks` past the current tick in the swap's direction, or no limit when `ticks` is 0.
+    function _limit(PoolKey memory key, bool zeroForOne, uint24 ticks) internal view returns (uint160) {
+        ticks = uint24(bound(ticks, 0, 50_000));
+        if (ticks == 0) return _extreme(zeroForOne);
+        (, int24 tick,,) = manager.getSlot0(key.toId());
+        int256 target = zeroForOne ? int256(tick) - int256(uint256(ticks)) : int256(tick) + int256(uint256(ticks));
+        if (target <= TickMath.MIN_TICK || target >= TickMath.MAX_TICK) return _extreme(zeroForOne);
+        // forge-lint: disable-next-line(unsafe-typecast)
+        return TickMath.getSqrtPriceAtTick(int24(target));
+    }
+
+    /// @dev Adds dust liquidity over `positions` single-spacing ranges on each side of the current tick.
+    function _dust(PoolKey memory key, uint8 positions) internal {
+        (, int24 tick,,) = manager.getSlot0(key.toId());
+        tick = tick / 200 * 200;
+        for (int24 k = -int24(uint24(positions)); k < int24(uint24(positions)); k++) {
+            liquidityRouter.modifyLiquidity{value: key.currency0.isAddressZero() ? 1e18 : 0}(
+                key,
+                ModifyLiquidityParams({
+                    tickLower: tick + k * 200, tickUpper: tick + (k + 1) * 200, liquidityDelta: 1e6, salt: 0
+                }),
+                ""
+            );
+        }
     }
 }

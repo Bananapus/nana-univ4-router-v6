@@ -31,6 +31,7 @@ import {JBAccountingContext} from "@bananapus/core-v6/src/structs/JBAccountingCo
 import {JBCashOutHookSpecification} from "@bananapus/core-v6/src/structs/JBCashOutHookSpecification.sol";
 import {JBPayHookSpecification} from "@bananapus/core-v6/src/structs/JBPayHookSpecification.sol";
 import {HookMiner} from "@uniswap/v4-periphery/src/utils/HookMiner.sol";
+import {OracleQuote} from "./utils/OracleQuote.sol";
 
 // ============================================================
 // Mock contracts (each test file needs its own copies)
@@ -566,7 +567,7 @@ contract TestRegressionGaps_TWAPManipulationCost is Test {
 
         // Phase 2: Record the baseline TWAP estimate (before manipulation)
         // forge-lint: disable-next-line(mixed-case-variable)
-        uint256 baselineTWAP = hook.estimateUniswapOutput(id, key, 1 ether, true);
+        uint256 baselineTWAP = OracleQuote.quote(hook, manager, key, 1 ether, true);
         assertGt(baselineTWAP, 0, "Baseline TWAP estimate should be positive");
         console.log("Baseline TWAP estimate for 1 ETH:", baselineTWAP);
 
@@ -578,7 +579,7 @@ contract TestRegressionGaps_TWAPManipulationCost is Test {
 
         // Phase 4: Measure the post-manipulation TWAP estimate
         // forge-lint: disable-next-line(mixed-case-variable)
-        uint256 postManipTWAP = hook.estimateUniswapOutput(id, key, 1 ether, true);
+        uint256 postManipTWAP = OracleQuote.quote(hook, manager, key, 1 ether, true);
         assertGt(postManipTWAP, 0, "Post-manipulation TWAP estimate should be positive");
         console.log("Post-manipulation TWAP estimate for 1 ETH:", postManipTWAP);
 
@@ -656,7 +657,7 @@ contract TestRegressionGaps_TWAPManipulationCost is Test {
         }
 
         // forge-lint: disable-next-line(mixed-case-variable)
-        uint256 baselineTWAP = hook.estimateUniswapOutput(id, key, 1 ether, true);
+        uint256 baselineTWAP = OracleQuote.quote(hook, manager, key, 1 ether, true);
         assertGt(baselineTWAP, 0, "Baseline should be positive");
         console.log("[5-block] Baseline TWAP:", baselineTWAP);
 
@@ -668,7 +669,7 @@ contract TestRegressionGaps_TWAPManipulationCost is Test {
         }
 
         // forge-lint: disable-next-line(mixed-case-variable)
-        uint256 postManipTWAP = hook.estimateUniswapOutput(id, key, 1 ether, true);
+        uint256 postManipTWAP = OracleQuote.quote(hook, manager, key, 1 ether, true);
         console.log("[5-block] Post-manipulation TWAP:", postManipTWAP);
 
         uint256 deviation;
@@ -707,7 +708,7 @@ contract TestRegressionGaps_TWAPManipulationCost is Test {
         }
 
         // forge-lint: disable-next-line(mixed-case-variable)
-        uint256 baselineTWAP = hook.estimateUniswapOutput(id, key, 1 ether, true);
+        uint256 baselineTWAP = OracleQuote.quote(hook, manager, key, 1 ether, true);
 
         // Phase 2: Manipulate for 5 blocks
         for (uint256 i = 0; i < 5; i++) {
@@ -717,7 +718,7 @@ contract TestRegressionGaps_TWAPManipulationCost is Test {
         }
 
         // forge-lint: disable-next-line(mixed-case-variable)
-        uint256 postManipTWAP = hook.estimateUniswapOutput(id, key, 1 ether, true);
+        uint256 postManipTWAP = OracleQuote.quote(hook, manager, key, 1 ether, true);
 
         // Phase 3: Resume balanced trading. Swap back to restore price, then trade normally.
         // First push price back
@@ -737,7 +738,7 @@ contract TestRegressionGaps_TWAPManipulationCost is Test {
         }
 
         // forge-lint: disable-next-line(mixed-case-variable)
-        uint256 recoveredTWAP = hook.estimateUniswapOutput(id, key, 1 ether, true);
+        uint256 recoveredTWAP = OracleQuote.quote(hook, manager, key, 1 ether, true);
         console.log("[recovery] Baseline TWAP:", baselineTWAP);
         console.log("[recovery] Post-manipulation TWAP:", postManipTWAP);
         console.log("[recovery] Recovered TWAP:", recoveredTWAP);
@@ -921,7 +922,7 @@ contract TestRegressionGaps_SpotFallbackSandwichWindow is Test {
     // ---------------------------------------------------------------
 
     /// @notice Right after pool initialization, the oracle has cardinality=1, which means
-    ///         estimateUniswapOutput uses spot price. Once a second observation exists,
+    ///         the oracle quote uses spot price. Once a second observation exists,
     ///         estimates use the retained best-effort window even before TWAP_PERIOD is covered.
     function test_SpotFallback_ActiveDuringWarmup() public {
         // Immediately after setUp, cardinality is 1 (init + same-block addLiq is no-op write)
@@ -929,7 +930,7 @@ contract TestRegressionGaps_SpotFallbackSandwichWindow is Test {
         assertEq(card, 1, "Cardinality should be 1 right after init (warmup period)");
 
         // The estimate should still work (using spot fallback).
-        uint256 estimate = hook.estimateUniswapOutput(id, key, 1 ether, true);
+        uint256 estimate = OracleQuote.quote(hook, manager, key, 1 ether, true);
         assertGt(estimate, 0, "Estimate should use spot price fallback before retained history exists");
         console.log("[warmup] Spot-based estimate for 1 ETH:", estimate);
 
@@ -942,9 +943,9 @@ contract TestRegressionGaps_SpotFallbackSandwichWindow is Test {
 
         // The retained window is only 12 seconds, so the full TWAP window is not covered.
         assertEq(hook.observationCoverageOf(key), 12, "Retained oracle history should be 12 seconds");
-        assertFalse(hook.hasObservationCoverage(key, hook.TWAP_PERIOD()), "Full TWAP window should not be covered yet");
+        assertFalse(hook.hasObservationCoverage(key, uint32(1800)), "Full TWAP window should not be covered yet");
 
-        uint256 estimateBestEffort = hook.estimateUniswapOutput(id, key, 1 ether, true);
+        uint256 estimateBestEffort = OracleQuote.quote(hook, manager, key, 1 ether, true);
         assertGt(estimateBestEffort, 0, "Should use best-effort retained history before full TWAP coverage");
         console.log("[warmup+12s] Best-effort estimate:", estimateBestEffort);
     }
@@ -957,7 +958,7 @@ contract TestRegressionGaps_SpotFallbackSandwichWindow is Test {
     ///         retained history and does not immediately reflect the post-swap spot price.
     function test_BestEffortWindow_IgnoresCurrentBlockPricePushAfterSecondObservation() public {
         // Record the baseline cold-start estimate.
-        uint256 baselineEstimate = hook.estimateUniswapOutput(id, key, 1 ether, true);
+        uint256 baselineEstimate = OracleQuote.quote(hook, manager, key, 1 ether, true);
         console.log("[sandwich] Baseline estimate:", baselineEstimate);
 
         // Advance one block and do a large swap to push the spot price. The hook writes
@@ -966,9 +967,9 @@ contract TestRegressionGaps_SpotFallbackSandwichWindow is Test {
         _doSwap(true, -50 ether);
 
         assertEq(hook.observationCoverageOf(key), 12, "Retained oracle history should be 12 seconds");
-        assertFalse(hook.hasObservationCoverage(key, hook.TWAP_PERIOD()), "Full TWAP window should not be covered yet");
+        assertFalse(hook.hasObservationCoverage(key, uint32(1800)), "Full TWAP window should not be covered yet");
 
-        uint256 postPushEstimate = hook.estimateUniswapOutput(id, key, 1 ether, true);
+        uint256 postPushEstimate = OracleQuote.quote(hook, manager, key, 1 ether, true);
         console.log("[sandwich] Post-push best-effort estimate:", postPushEstimate);
 
         uint256 deviation;
@@ -988,7 +989,7 @@ contract TestRegressionGaps_SpotFallbackSandwichWindow is Test {
     // ---------------------------------------------------------------
 
     /// @notice Contrast with the above: after the TWAP warmup completes, the same
-    ///         large swap has a much smaller effect on the estimateUniswapOutput result
+    ///         large swap has a much smaller effect on the oracle quote
     ///         because it uses TWAP instead of spot.
     function test_SpotFallback_TWAPDampensAfterWarmup() public {
         uint256 ts = 100_000;
@@ -1006,7 +1007,7 @@ contract TestRegressionGaps_SpotFallbackSandwichWindow is Test {
 
         // Verify TWAP is now active
         // forge-lint: disable-next-line(mixed-case-variable)
-        uint256 baselineTWAP = hook.estimateUniswapOutput(id, key, 1 ether, true);
+        uint256 baselineTWAP = OracleQuote.quote(hook, manager, key, 1 ether, true);
         assertGt(baselineTWAP, 0, "TWAP baseline should be positive");
         console.log("[post-warmup] TWAP baseline:", baselineTWAP);
 
@@ -1016,7 +1017,7 @@ contract TestRegressionGaps_SpotFallbackSandwichWindow is Test {
         _doSwap(true, -50 ether);
 
         // forge-lint: disable-next-line(mixed-case-variable)
-        uint256 postPushTWAP = hook.estimateUniswapOutput(id, key, 1 ether, true);
+        uint256 postPushTWAP = OracleQuote.quote(hook, manager, key, 1 ether, true);
         console.log("[post-warmup] TWAP after 50 ETH push:", postPushTWAP);
 
         uint256 twapDeviation;
@@ -1057,17 +1058,17 @@ contract TestRegressionGaps_SpotFallbackSandwichWindow is Test {
         _doSwap(false, -0.001 ether); // Record an observation at the boundary
 
         assertEq(hook.observationCoverageOf(key), 1799, "Retained history should be one second short");
-        assertFalse(hook.hasObservationCoverage(key, hook.TWAP_PERIOD()), "Full TWAP window should not be covered yet");
-        uint256 estimateBeforeBoundary = hook.estimateUniswapOutput(id, key, 1 ether, true);
+        assertFalse(hook.hasObservationCoverage(key, uint32(1800)), "Full TWAP window should not be covered yet");
+        uint256 estimateBeforeBoundary = OracleQuote.quote(hook, manager, key, 1 ether, true);
         assertGt(estimateBeforeBoundary, 0, "Should work at boundary-1");
 
         // At 101_800 (exact boundary), full TWAP_PERIOD coverage is available.
         vm.warp(101_800);
         _doSwap(true, -0.001 ether);
 
-        assertEq(hook.observationCoverageOf(key), hook.TWAP_PERIOD(), "Retained history should cover TWAP_PERIOD");
-        assertTrue(hook.hasObservationCoverage(key, hook.TWAP_PERIOD()), "Full TWAP window should be covered");
-        uint256 estimateAtBoundary = hook.estimateUniswapOutput(id, key, 1 ether, true);
+        assertEq(hook.observationCoverageOf(key), uint32(1800), "Retained history should cover TWAP_PERIOD");
+        assertTrue(hook.hasObservationCoverage(key, uint32(1800)), "Full TWAP window should be covered");
+        uint256 estimateAtBoundary = OracleQuote.quote(hook, manager, key, 1 ether, true);
         assertGt(estimateAtBoundary, 0, "Should work at exact boundary");
 
         // Both estimates should be positive and approximately equal (small swaps don't move price much).

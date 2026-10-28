@@ -6,6 +6,7 @@ import {SwapParams} from "@uniswap/v4-core/src/types/PoolOperation.sol";
 import {IJBTerminal} from "@bananapus/core-v6/src/interfaces/IJBTerminal.sol";
 
 import {JuiceboxHookTest} from "../JBUniswapV4Hook.t.sol";
+import {OracleQuote} from "../utils/OracleQuote.sol";
 
 contract RegressionDeltaEncoding is JuiceboxHookTest {
     function test_jbRouteOutputAboveInt128FallsBackToV4() public {
@@ -57,7 +58,7 @@ contract RegressionDeltaEncoding is JuiceboxHookTest {
         uint256 sellSideQuote = hook.calculateExpectedOutputFromSelling(
             123, amountIn, address(token1), IJBTerminal(address(mockJBMultiTerminal))
         );
-        uint256 v4Quote = hook.estimateUniswapOutput(id, key, amountIn, true);
+        uint256 v4Quote = OracleQuote.quote(hook, manager, key, amountIn, true);
 
         assertGt(oversizedBuyQuote, hook.MAX_V4_DELTA(), "buy-side quote must be ineligible");
         assertGt(sellSideQuote, v4Quote, "sell-side quote should still beat V4");

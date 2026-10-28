@@ -28,6 +28,7 @@ import {IJBRulesetApprovalHook} from "@bananapus/core-v6/src/interfaces/IJBRules
 import {IJBTerminalStore} from "@bananapus/core-v6/src/interfaces/IJBTerminalStore.sol";
 import {JBCashOutHookSpecification} from "@bananapus/core-v6/src/structs/JBCashOutHookSpecification.sol";
 import {HookMiner} from "@uniswap/v4-periphery/src/utils/HookMiner.sol";
+import {OracleQuote} from "./utils/OracleQuote.sol";
 
 // ============================================================
 // Mock contracts (copied from JBUniswapV4Hook.t.sol since
@@ -648,7 +649,7 @@ contract OracleDeepTest is Test {
         (, int24 currentTick,,) = pm.getSlot0(id);
         uint128 currentLiquidity = pm.getLiquidity(id);
 
-        int24 meanTick = hook.observeTWAP(id, hook.TWAP_PERIOD(), currentTick, index, currentLiquidity, cardinality);
+        int24 meanTick = hook.observeTWAP(id, uint32(1800), currentTick, index, currentLiquidity, cardinality);
         assertGe(meanTick, -1000, "Mean tick should remain bounded after fast-block warmup");
         assertLe(meanTick, 1000, "Mean tick should remain bounded after fast-block warmup");
     }
@@ -656,7 +657,7 @@ contract OracleDeepTest is Test {
     /// @notice At one-observation-per-second cadence the capped buffer still retains a 30-minute TWAP window.
     function test_TWAPRetention_CapCoversThirtyMinutesAtOneSecondCadence() public {
         uint256 ts = 10_000;
-        uint32 twapPeriod = hook.TWAP_PERIOD();
+        uint32 twapPeriod = uint32(1800);
         uint256 swapCount = twapPeriod + 250;
 
         for (uint256 i = 0; i < swapCount; i++) {
@@ -681,7 +682,7 @@ contract OracleDeepTest is Test {
         uint32 oldestSecondsAgo = hook.observationCoverageOf(key);
         assertGe(oldestSecondsAgo, twapPeriod, "Coverage should report full TWAP history");
 
-        uint256 estimate = hook.estimateUniswapOutput(id, key, 1 ether, true);
+        uint256 estimate = OracleQuote.quote(hook, manager, key, 1 ether, true);
         assertGt(estimate, 0, "Estimation should use best-effort retained history");
     }
 
@@ -730,7 +731,7 @@ contract OracleDeepTest is Test {
         assertGe(newCard, currentCard, "Cardinality should not shrink after wraparound");
 
         // Verify we can still read the TWAP estimate without reverting
-        uint256 estimate = hook.estimateUniswapOutput(id, key, 1 ether, true);
+        uint256 estimate = OracleQuote.quote(hook, manager, key, 1 ether, true);
         assertGt(estimate, 0, "TWAP estimate should be positive after wraparound");
     }
 
@@ -738,17 +739,17 @@ contract OracleDeepTest is Test {
     // 7. TWAPSqrtPrice_InsufficientObservations_ReturnsZero
     // ---------------------------------------------------------------
 
-    /// @notice With fewer than 2 observations, _getTWAPSqrtPrice should return 0,
-    ///         which causes estimateUniswapOutput to fall back to spot price.
+    /// @notice With fewer than 2 observations, the oracle has no TWAP window,
+    ///         so the oracle quote falls back to spot price.
     function test_TWAPSqrtPrice_InsufficientObservations_ReturnsZero() public view {
         // Right after initialization we have exactly 1 observation.
-        // The hook's _getTWAPSqrtPrice checks if cardinality < 2 and returns 0.
+        // With cardinality < 2 there is no TWAP window.
         (, uint16 cardinality,) = hook.states(id);
         assertEq(cardinality, 1, "Should have exactly 1 observation");
 
-        // estimateUniswapOutput falls back to spot price when _getTWAPSqrtPrice returns 0.
+        // The oracle quote falls back to spot price without a TWAP window.
         // Just verify the output is positive (spot price based) and does not revert.
-        uint256 estimate = hook.estimateUniswapOutput(id, key, 1 ether, true);
+        uint256 estimate = OracleQuote.quote(hook, manager, key, 1 ether, true);
         assertGt(estimate, 0, "Should use spot price fallback when cardinality < 2");
     }
 
@@ -756,7 +757,7 @@ contract OracleDeepTest is Test {
     // 8. TWAPSqrtPrice_SufficientAge_ReturnsNonZero
     // ---------------------------------------------------------------
 
-    /// @notice With observations old enough (>= TWAP_PERIOD), _getTWAPSqrtPrice
+    /// @notice With observations old enough (>= TWAP_PERIOD), the oracle
     ///         should return a nonzero value, and the TWAP estimate should work.
     function test_TWAPSqrtPrice_SufficientAge_ReturnsNonZero() public {
         // Build up enough cardinality and age.
@@ -773,8 +774,8 @@ contract OracleDeepTest is Test {
         // Do one more swap so the latest observation is at the current timestamp.
         _doSwap(false, -0.001 ether);
 
-        // Now the estimateUniswapOutput should use the TWAP price (not spot).
-        uint256 estimate = hook.estimateUniswapOutput(id, key, 1 ether, true);
+        // Now the oracle quote uses the TWAP price (not spot).
+        uint256 estimate = OracleQuote.quote(hook, manager, key, 1 ether, true);
         assertGt(estimate, 0, "TWAP-based estimate should be nonzero with sufficient age");
     }
 
@@ -900,7 +901,7 @@ contract OracleDeepTest is Test {
     // ---------------------------------------------------------------
 
     /// @notice If the oldest observation is newer than TWAP_PERIOD (1800s),
-    ///         _getTWAPSqrtPrice should return 0 and estimation falls back to spot.
+    ///         the oracle has no usable window and the quote falls back to spot.
     function test_TWAPSqrtPrice_OldestObsTooRecent_ReturnsZero() public {
         // Write a second observation (so cardinality >= 2)
         vm.warp(10_100);
@@ -911,16 +912,16 @@ contract OracleDeepTest is Test {
 
         // Do NOT warp past TWAP_PERIOD. The oldest observation was written at 10000 (init)
         // and current time is 10100. oldestAllowedTime = 10100 - 1800 = 8300.
-        // oldest obs timestamp (10000) > 8300 => _getTWAPSqrtPrice returns 0 (uses spot).
+        // oldest obs timestamp (10000) > 8300 => no usable window (spot).
 
-        uint256 spotEstimate = hook.estimateUniswapOutput(id, key, 1 ether, true);
+        uint256 spotEstimate = OracleQuote.quote(hook, manager, key, 1 ether, true);
         assertGt(spotEstimate, 0, "Should produce positive spot-price estimate when TWAP unavailable");
 
         // Now warp far enough so TWAP is available (oldest obs at 10000, need current > 10000 + 1800)
         vm.warp(12_100);
         _doSwap(false, -0.001 ether);
 
-        uint256 twapEstimate = hook.estimateUniswapOutput(id, key, 1 ether, true);
+        uint256 twapEstimate = OracleQuote.quote(hook, manager, key, 1 ether, true);
         assertGt(twapEstimate, 0, "Should produce positive TWAP estimate when history is sufficient");
 
         // Both should be positive (the exact values may differ, confirming different code paths)

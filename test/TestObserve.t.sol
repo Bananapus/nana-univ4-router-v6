@@ -652,6 +652,53 @@ contract TestObserve is Test {
         );
     }
 
+    /// @notice A liquidity change charges the interval before it to the liquidity that was active during it.
+    function test_observe_liquidityChangeChargesPriorLiquidity() public {
+        uint160 start = _secondsPerLiquidityNow();
+
+        // 100 seconds at 100 ether, then add 50 ether in range.
+        vm.warp(10_100);
+        _modifyLiquidity(50 ether);
+        uint160 afterAdd = _secondsPerLiquidityNow();
+        assertEq(afterAdd - start, (uint160(100) << 128) / 100 ether, "charged at the liquidity before the add");
+
+        // 100 seconds at 150 ether, then remove it again.
+        vm.warp(10_200);
+        _modifyLiquidity(-50 ether);
+        assertEq(
+            _secondsPerLiquidityNow() - afterAdd,
+            (uint160(100) << 128) / 150 ether,
+            "charged at the liquidity before the removal"
+        );
+
+        // 100 seconds at 100 ether; a change out of range leaves active liquidity as it was.
+        uint160 afterRemove = _secondsPerLiquidityNow();
+        vm.warp(10_300);
+        modifyLiquidityRouter.modifyLiquidity(
+            key,
+            ModifyLiquidityParams({tickLower: 600, tickUpper: 1200, liquidityDelta: 50 ether, salt: bytes32(0)}),
+            ZERO_BYTES
+        );
+        assertEq(
+            _secondsPerLiquidityNow() - afterRemove,
+            (uint160(100) << 128) / 100 ether,
+            "an out-of-range change does not alter the charge"
+        );
+    }
+
+    function _modifyLiquidity(int256 liquidityDelta) internal {
+        modifyLiquidityRouter.modifyLiquidity(
+            key,
+            ModifyLiquidityParams({tickLower: -600, tickUpper: 600, liquidityDelta: liquidityDelta, salt: bytes32(0)}),
+            ZERO_BYTES
+        );
+    }
+
+    function _secondsPerLiquidityNow() internal view returns (uint160) {
+        (, uint160[] memory secondsPerLiquidity) = hook.observe(key, new uint32[](1));
+        return secondsPerLiquidity[0];
+    }
+
     // ---------------------------------------------------------------
     // 5. observe_emptySecondsAgos_returnsEmptyArrays
     // ---------------------------------------------------------------

@@ -13,6 +13,7 @@ import {IJBToken} from "@bananapus/core-v6/src/interfaces/IJBToken.sol";
 import {IJBTokens} from "@bananapus/core-v6/src/interfaces/IJBTokens.sol";
 import {JBConstants} from "@bananapus/core-v6/src/libraries/JBConstants.sol";
 import {JBFees} from "@bananapus/core-v6/src/libraries/JBFees.sol";
+import {JBMetadataResolver} from "@bananapus/core-v6/src/libraries/JBMetadataResolver.sol";
 import {JBRulesetMetadataResolver} from "@bananapus/core-v6/src/libraries/JBRulesetMetadataResolver.sol";
 
 import {JBAccountingContext} from "@bananapus/core-v6/src/structs/JBAccountingContext.sol";
@@ -27,6 +28,7 @@ import {CurrencySettler} from "@openzeppelin/uniswap-hooks/src/utils/CurrencySet
 import {IPoolManager} from "@uniswap/v4-core/src/interfaces/IPoolManager.sol";
 import {FullMath} from "@uniswap/v4-core/src/libraries/FullMath.sol";
 import {Hooks} from "@uniswap/v4-core/src/libraries/Hooks.sol";
+import {LPFeeLibrary} from "@uniswap/v4-core/src/libraries/LPFeeLibrary.sol";
 import {ProtocolFeeLibrary} from "@uniswap/v4-core/src/libraries/ProtocolFeeLibrary.sol";
 import {StateLibrary} from "@uniswap/v4-core/src/libraries/StateLibrary.sol";
 import {TickMath} from "@uniswap/v4-core/src/libraries/TickMath.sol";
@@ -48,11 +50,12 @@ import {Oracle} from "./libraries/Oracle.sol";
 
 /// @title JBUniswapV4Hook
 /// @notice A Uniswap V4 hook that routes swaps of Juicebox project tokens between the V4 pool and the Juicebox project.
-/// Buys fill from the pool while it beats the payer's issuance rate and mint the rest; sells go to whichever venue
-/// gives more, using a 30-minute TWAP oracle to resist price manipulation.
+/// Buys fill from the pool while it beats the payer's issuance rate and mint the rest; sells take the best of the pool,
+/// a cash-out, or a split of the two.
 /// @dev Buys take the pool's fills with a real swap limited at the issuance price, so the buyer gets at least what
-/// minting the whole input gives. Sells compare the V4 TWAP-based estimate against the terminal's cash-out preview.
-/// Provides IGeomeanOracle-compatible `observe()` for TWAP queries by external contracts.
+/// minting the whole input gives. Sells quote each route exactly (`quoteSwap` for pool legs, the terminal preview for
+/// cash-outs) and run the best. Records a TWAP oracle and provides IGeomeanOracle-compatible `observe()` for external
+/// contracts.
 /// @dev COMPOSITION WARNING — This hook can serve as JBBuybackHook's ORACLE_HOOK for the same V4 pool.
 /// When the buyback hook attempts a swap, it flows through this hook's `_beforeSwap` routing logic. Its swaps carry a
 /// price limit at the issuance price, so they stay plain V4 swaps here, and buyback-hook metadata is ignored because it
@@ -69,10 +72,8 @@ contract JBUniswapV4Hook is BaseHook, IGeomeanOracle {
     // --------------------------- custom errors ------------------------- //
     //*********************************************************************//
 
-    /// @notice Thrown when an exact-output swap is attempted.
-    /// @dev Only exact-input swaps are supported.
-    /// @param amountSpecified The positive exact-output amount that was requested.
-    error JBUniswapV4Hook_ExactOutputSwapsNotSupported(int256 amountSpecified);
+    /// @notice Thrown when a dynamic-fee pool is initialized with this hook.
+    error JBUniswapV4Hook_DynamicFeeNotSupported();
 
     /// @notice Thrown when a Juicebox input cannot fit inside Uniswap V4's signed delta accounting.
     /// @param amount The oversized input amount.
@@ -96,6 +97,12 @@ contract JBUniswapV4Hook is BaseHook, IGeomeanOracle {
     /// @notice Thrown when a reentrant swap is detected during Juicebox routing.
     /// @param caller The account that attempted the reentrant route.
     error JBUniswapV4Hook_ReentrantRouting(address caller);
+
+    /// @notice Thrown by `quoteSwap` to return a pool quote without keeping its swaps.
+    /// @param legAmountIn The input the pool leg would use.
+    /// @param legAmountOut The output the pool leg would deliver.
+    /// @param restAmountOut The output the pool would deliver for the rest beyond what the PoolManager holds.
+    error JBUniswapV4Hook_SwapQuote(uint256 legAmountIn, uint256 legAmountOut, uint256 restAmountOut);
 
     /// @notice Thrown when secondsAgo is zero in observeTWAP().
     /// @param secondsAgo The invalid lookback window.
@@ -135,12 +142,6 @@ contract JBUniswapV4Hook is BaseHook, IGeomeanOracle {
     // Type(int128).max is positive and fits uint128.
     // forge-lint: disable-next-line(unsafe-typecast)
     uint256 public constant MAX_V4_DELTA = uint256(uint128(type(int128).max));
-
-    /// @notice TWAP period in seconds (30 minutes by default)
-    uint32 public constant TWAP_PERIOD = 1800;
-
-    /// @notice The denominator used when calculating TWAP slippage percent values.
-    uint256 public constant TWAP_SLIPPAGE_DENOMINATOR = 10_000;
 
     /// @notice The 4-byte prefix that marks `hookData` as carrying a Juicebox `amountOutMin`.
     /// @dev Mirrors `JBUniswapV4HookData.TAG` (the canonical source, importable by downstream contracts at compile
@@ -185,7 +186,11 @@ contract JBUniswapV4Hook is BaseHook, IGeomeanOracle {
     /// @notice Flag to prevent recursive routing through Juicebox during swap hooks.
     /// @dev Set to true before `_routeThroughJuicebox`, checked at `_beforeSwap` entry.
     ///      Uses a custom flag instead of OZ ReentrancyGuard to avoid conflicts with PoolManager's unlock callback.
-    bool private _routing;
+    bool private transient _routing;
+
+    /// @notice The output a partial split's legs delivered, which `_afterSwap` adds to the pool's output for a tagged
+    /// minimum.
+    uint256 private transient _splitAmountOut;
 
     //*********************************************************************//
     // ---------------------------- events ------------------------------- //
@@ -197,13 +202,6 @@ contract JBUniswapV4Hook is BaseHook, IGeomeanOracle {
     /// @param expectedTokens The expected output token amount for the chosen route.
     /// @param caller The address that initiated the swap.
     event RouteSelected(PoolId indexed poolId, bool useJuicebox, uint256 expectedTokens, address caller);
-
-    /// @notice Emitted when the best route is selected among v4 and Juicebox
-    /// @param poolId The ID of the pool the swap is routed through.
-    /// @param routeType 0 = v4, 1 = juicebox
-    /// @param expectedTokens The expected output token amount for the selected best route.
-    /// @param caller The address that initiated the swap.
-    event BestRouteSelected(PoolId indexed poolId, uint8 routeType, uint256 expectedTokens, address caller);
 
     //*********************************************************************//
     // -------------------------- constructor ---------------------------- //
@@ -236,6 +234,46 @@ contract JBUniswapV4Hook is BaseHook, IGeomeanOracle {
     receive() external payable {}
 
     //*********************************************************************//
+    // ---------------------- external transactions ---------------------- //
+    //*********************************************************************//
+
+    /// @notice Quotes a sell for `_routeSell` by running it in this pool and reverting: a pool leg limited at
+    /// `legSqrtPriceLimitX96` (none when zero), then whatever input the leg leaves beyond `heldAmount`, limited at the
+    /// caller's price.
+    /// @dev Always reverts with `JBUniswapV4Hook_SwapQuote`, so it changes nothing for any caller. Its swaps skip this
+    /// hook's callbacks.
+    /// @param key The pool key.
+    /// @param params The caller's swap parameters (exact input).
+    /// @param legSqrtPriceLimitX96 The pool leg's price limit, or zero for no pool leg.
+    /// @param heldAmount The input left out of the pool after the leg (what a cash-out leg would take).
+    function quoteSwap(
+        PoolKey calldata key,
+        SwapParams calldata params,
+        uint160 legSqrtPriceLimitX96,
+        uint256 heldAmount
+    )
+        external
+    {
+        // forge-lint: disable-next-line(unsafe-typecast)
+        uint256 amountIn = uint256(-params.amountSpecified);
+        (uint256 legAmountIn, uint256 legAmountOut) = legSqrtPriceLimitX96 == 0
+            ? (0, 0)
+            : _swapPool({
+                key: key, zeroForOne: params.zeroForOne, amountIn: amountIn, sqrtPriceLimitX96: legSqrtPriceLimitX96
+            });
+        uint256 restAmountOut;
+        if (amountIn - legAmountIn > heldAmount) {
+            (, restAmountOut) = _swapPool({
+                key: key,
+                zeroForOne: params.zeroForOne,
+                amountIn: amountIn - legAmountIn - heldAmount,
+                sqrtPriceLimitX96: params.sqrtPriceLimitX96
+            });
+        }
+        revert JBUniswapV4Hook_SwapQuote(legAmountIn, legAmountOut, restAmountOut);
+    }
+
+    //*********************************************************************//
     // ------------------------- public views ---------------------------- //
     //*********************************************************************//
 
@@ -262,6 +300,9 @@ contract JBUniswapV4Hook is BaseHook, IGeomeanOracle {
         view
         returns (uint256 expectedOutput)
     {
+        // A missing terminal returns no data, which would revert while decoding outside the `catch` below.
+        if (address(terminal).code.length == 0) return 0;
+
         // Normalize output token to Juicebox's native token representation
         outputToken = _normalizeToken(outputToken);
 
@@ -273,7 +314,7 @@ contract JBUniswapV4Hook is BaseHook, IGeomeanOracle {
                 cashOutCount: tokenAmountIn,
                 tokenToReclaim: outputToken,
                 beneficiary: payable(address(this)),
-                metadata: bytes("")
+                metadata: _cashOutMetadataOf(projectId)
             }) returns (
             JBRuleset memory,
             uint256 grossReclaim,
@@ -282,6 +323,17 @@ contract JBUniswapV4Hook is BaseHook, IGeomeanOracle {
         ) {
             if (grossReclaim == 0) {
                 return 0;
+            }
+
+            // A revnet pays its cash-out fee to the fee revnet with this hook as beneficiary. Selling the fee revnet's
+            // own token would mint it back into this hook's input balance, so that sale stays in the pool.
+            for (uint256 i; i < hookSpecifications.length; i++) {
+                if (hookSpecifications[i].noop || hookSpecifications[i].amount == 0) continue;
+                // The project's own hook list bounds the loop.
+                // forge-lint: disable-next-item(calls-loop)
+                (bool success, bytes memory feeRevnetId) =
+                    address(hookSpecifications[i].hook).staticcall(abi.encodeWithSignature("FEE_REVNET_ID()"));
+                if (success && feeRevnetId.length == 32 && abi.decode(feeRevnetId, (uint256)) == projectId) return 0;
             }
 
             // Core previews price cash-outs against aggregate project surplus, but execution must subtract the gross
@@ -408,47 +460,6 @@ contract JBUniswapV4Hook is BaseHook, IGeomeanOracle {
         }
     }
 
-    /// @notice Estimates how many output tokens a swap through the Uniswap V4 pool would produce, based on the
-    /// 30-minute TWAP price, the longest retained best-effort TWAP, or spot price if no oracle history is available.
-    /// @dev Uses time-weighted average price to prevent manipulation
-    /// @dev Price impact warning: This estimate does not account for price impact from liquidity depth. The TWAP
-    /// price is applied uniformly to the entire `amountIn` regardless of available liquidity at the current tick
-    /// range. In shallow pools, large trades will experience significant slippage that this function does not
-    /// reflect. As a result, `estimateUniswapOutput` may overquote the V4 route for large amounts relative to
-    /// pool liquidity. Live routing uses it only for sells; buys swap against the pool itself.
-    /// Callers processing large amounts relative to pool liquidity should verify the output independently.
-    // Pool selection by highest liquidity is a heuristic. A pool with less liquidity but better tick
-    // distribution could produce better output for a given swap size. Full simulation of all pools would be
-    // gas-prohibitive on-chain. Off-chain routers can provide optimal pool selection via metadata.
-    /// @param poolId The pool ID
-    /// @param key The pool key
-    /// @param amountIn The input amount
-    /// @param zeroForOne Whether swapping token0 for token1
-    /// @return estimatedOut The estimated output amount
-    function estimateUniswapOutput(
-        PoolId poolId,
-        PoolKey memory key,
-        uint256 amountIn,
-        bool zeroForOne
-    )
-        public
-        view
-        returns (uint256 estimatedOut)
-    {
-        // Get TWAP price instead of spot price to prevent manipulation
-        uint160 sqrtPriceX96twap = _getTWAPSqrtPrice(poolId);
-
-        // If TWAP is not available (not enough observations), fall back to spot price for the route comparison.
-        // A newly created pool that lacks sufficient TWAP history is priced at spot here, which is susceptible to
-        // spot-price manipulation; once the pool accumulates enough observations the TWAP is used instead.
-        if (sqrtPriceX96twap == 0) {
-            (sqrtPriceX96twap,,,) = poolManager.getSlot0(poolId);
-        }
-
-        return
-            _outputForSqrtPrice({key: key, amountIn: amountIn, zeroForOne: zeroForOne, sqrtPriceX96: sqrtPriceX96twap});
-    }
-
     /// @notice Declares which Uniswap V4 lifecycle callbacks this hook uses (afterInitialize, afterSwap,
     /// beforeSwap, etc.).
     /// @return permissions The hook permissions struct
@@ -566,7 +577,7 @@ contract JBUniswapV4Hook is BaseHook, IGeomeanOracle {
     function _afterAddLiquidity(
         address,
         PoolKey calldata key,
-        ModifyLiquidityParams calldata,
+        ModifyLiquidityParams calldata params,
         BalanceDelta,
         BalanceDelta,
         bytes calldata
@@ -575,7 +586,14 @@ contract JBUniswapV4Hook is BaseHook, IGeomeanOracle {
         override
         returns (bytes4, BalanceDelta)
     {
-        _recordObservation(key.toId());
+        // A terminal leg's hooks cannot move liquidity under a routed swap's quote.
+        if (_routing) revert JBUniswapV4Hook_ReentrantRouting(msg.sender);
+        _recordObservation({
+            poolId: key.toId(),
+            tickLower: params.tickLower,
+            tickUpper: params.tickUpper,
+            liquidityDelta: params.liquidityDelta
+        });
         return (BaseHook.afterAddLiquidity.selector, BalanceDelta.wrap(0));
     }
 
@@ -583,6 +601,9 @@ contract JBUniswapV4Hook is BaseHook, IGeomeanOracle {
     /// @param key The pool key
     /// @return selector The function selector
     function _afterInitialize(address, PoolKey calldata key, uint160, int24) internal override returns (bytes4) {
+        // This hook never sets an LP fee, so a dynamic-fee pool would charge none.
+        if (key.fee == LPFeeLibrary.DYNAMIC_FEE_FLAG) revert JBUniswapV4Hook_DynamicFeeNotSupported();
+
         PoolId poolId = key.toId();
 
         // Initialize oracle with first observation
@@ -602,7 +623,7 @@ contract JBUniswapV4Hook is BaseHook, IGeomeanOracle {
     function _afterRemoveLiquidity(
         address,
         PoolKey calldata key,
-        ModifyLiquidityParams calldata,
+        ModifyLiquidityParams calldata params,
         BalanceDelta,
         BalanceDelta,
         bytes calldata
@@ -611,7 +632,14 @@ contract JBUniswapV4Hook is BaseHook, IGeomeanOracle {
         override
         returns (bytes4, BalanceDelta)
     {
-        _recordObservation(key.toId());
+        // A terminal leg's hooks cannot move liquidity under a routed swap's quote.
+        if (_routing) revert JBUniswapV4Hook_ReentrantRouting(msg.sender);
+        _recordObservation({
+            poolId: key.toId(),
+            tickLower: params.tickLower,
+            tickUpper: params.tickUpper,
+            liquidityDelta: params.liquidityDelta
+        });
         return (BaseHook.afterRemoveLiquidity.selector, BalanceDelta.wrap(0));
     }
 
@@ -641,29 +669,34 @@ contract JBUniswapV4Hook is BaseHook, IGeomeanOracle {
         (bool hasExplicitMin, uint256 amountOutMin) = _amountOutMinFrom(hookData);
         PoolId poolId = key.toId();
 
-        // Only a real V4 settlement (an output owed to the swapper, or any non-zero delta) is validated; a JB-routed
-        // swap leaves the delta at zero. The minimum, when tagged, is enforced against the actual settled output.
+        // The output a partial split's legs delivered before the pool swapped the rest.
+        uint256 splitAmountOut = _splitAmountOut;
+        _splitAmountOut = 0;
+
+        // Only a pool settlement or a partial split is validated; a swap the hook's legs consumed whole was checked in
+        // `_beforeSwap` and leaves the delta at zero. The minimum, when tagged, is enforced against the settled output.
         if (hasExplicitMin) {
             int128 rawOutput =
                 params.zeroForOne ? BalanceDeltaLibrary.amount1(delta) : BalanceDeltaLibrary.amount0(delta);
-            if (rawOutput != 0 || BalanceDelta.unwrap(delta) != 0) {
+            if (splitAmountOut != 0 || BalanceDelta.unwrap(delta) != 0) {
                 // The output leg's delta is positive in V4's convention (a credit owed to the swapper); take the
                 // magnitude defensively so the comparison holds regardless of sign.
                 // forge-lint: disable-next-line(unsafe-typecast)
                 uint256 outputAmount = rawOutput < 0 ? uint256(int256(-rawOutput)) : uint256(int256(rawOutput));
+                outputAmount += splitAmountOut;
                 if (outputAmount < amountOutMin) {
                     revert JBUniswapV4Hook_InsufficientOutput({amount: outputAmount, minimum: amountOutMin});
                 }
             }
         }
 
-        _recordObservation(poolId);
+        _recordObservation({poolId: poolId, tickLower: 0, tickUpper: 0, liquidityDelta: 0});
         return (BaseHook.afterSwap.selector, 0);
     }
 
     /// @notice The main routing engine. Buys of a project token fill from the pool while it beats issuance and mint the
-    /// rest (`_routeBuy`); sells go to whichever of V4 and a Juicebox cash-out quotes more. If no JB token is involved,
-    /// the swap proceeds through V4 normally.
+    /// rest; sells fill from the pool while it beats the marginal reclaim rate and cash out the rest (`_routeSplit`).
+    /// If no JB token is involved, the swap proceeds through V4 normally.
     /// @dev When both currencies are project tokens, the swap is a buy when paying the output's project mints at least
     /// what cashing out the input reclaims, and a sell of the input otherwise.
     /// @param key The pool key identifying the V4 pool
@@ -685,7 +718,7 @@ contract JBUniswapV4Hook is BaseHook, IGeomeanOracle {
         // Close the previous time interval before any swap can move the price. Writing post-swap would attribute the
         // entire elapsed interval since the previous observation to the new tick.
         PoolId poolId = key.toId();
-        _recordObservation(poolId);
+        _recordObservation({poolId: poolId, tickLower: 0, tickUpper: 0, liquidityDelta: 0});
 
         // Prevent recursive routing: if we're already routing through Juicebox, block reentrant swaps.
         if (_routing) revert JBUniswapV4Hook_ReentrantRouting(msg.sender);
@@ -696,11 +729,10 @@ contract JBUniswapV4Hook is BaseHook, IGeomeanOracle {
         // cash-out preview on sells). The minimum is not re-interpreted as a hook-imposed floor here.
         (, uint256 amountOutMin) = _amountOutMinFrom(hookData);
 
-        // Only support exact-input swaps (amountSpecified < 0)
-        // Exact-output swaps (amountSpecified > 0) are not supported as they require
-        // different handling of specified/unspecified tokens and delta signs
+        // Exact-output swaps trade in the pool alone; Juicebox routing prices exact inputs only.
         if (params.amountSpecified > 0) {
-            revert JBUniswapV4Hook_ExactOutputSwapsNotSupported({amountSpecified: params.amountSpecified});
+            emit RouteSelected({poolId: poolId, useJuicebox: false, expectedTokens: 0, caller: msg.sender});
+            return (BaseHook.beforeSwap.selector, BeforeSwapDeltaLibrary.ZERO_DELTA, 0);
         }
 
         // Determine input and output currencies based on swap direction
@@ -720,31 +752,47 @@ contract JBUniswapV4Hook is BaseHook, IGeomeanOracle {
         uint256 projectId = _projectIdForRegisteredToken(tokenIn);
         uint256 buyProjectId = _projectIdForRegisteredToken(tokenOut);
 
-        // A swap between two project tokens buys the output when paying its project mints at least what cashing out
-        // the input reclaims, and is otherwise routed as a sell of the input.
-        if (projectId != 0 && buyProjectId != 0) {
-            IJBTerminal buyTerminal = _getPrimaryTerminal({projectId: buyProjectId, token: tokenIn});
-            uint256 issuedTokenCount = address(buyTerminal).code.length == 0
+        // Buying a project token: the payer's issuance for the whole input, zero when no mint path is usable.
+        IJBTerminal buyTerminal;
+        uint256 issuedTokenCount;
+        if (buyProjectId != 0) {
+            buyTerminal = _getPrimaryTerminal({projectId: buyProjectId, token: tokenIn});
+            issuedTokenCount = address(buyTerminal).code.length == 0
                 ? 0
-                : _issuanceOf({terminal: buyTerminal, projectId: buyProjectId, token: tokenIn, amount: amountIn});
-            uint256 reclaim = calculateExpectedOutputFromSelling({
-                projectId: projectId,
-                tokenAmountIn: amountIn,
-                outputToken: tokenOut,
-                terminal: _getPrimaryTerminal({projectId: projectId, token: tokenOut})
-            });
-            // A quote V4's signed deltas cannot carry leaves its side ineligible, as in 1.2.0.
-            if (issuedTokenCount > MAX_V4_DELTA || (reclaim <= MAX_V4_DELTA && issuedTokenCount < reclaim)) {
-                buyProjectId = 0;
+                : _issuanceOf({
+                    terminal: buyTerminal, projectId: buyProjectId, token: _normalizeToken(tokenIn), amount: amountIn
+                });
+
+            // A swap between two project tokens buys the output when paying its project mints at least what cashing
+            // out the input reclaims, and is otherwise routed as a sell of the input. A quote V4's signed deltas
+            // cannot carry leaves its side ineligible, as in 1.2.0.
+            if (projectId != 0) {
+                uint256 reclaim = calculateExpectedOutputFromSelling({
+                    projectId: projectId,
+                    tokenAmountIn: amountIn,
+                    outputToken: tokenOut,
+                    terminal: _getPrimaryTerminal({projectId: projectId, token: tokenOut})
+                });
+                if (issuedTokenCount > MAX_V4_DELTA || (reclaim <= MAX_V4_DELTA && issuedTokenCount < reclaim)) {
+                    buyProjectId = 0;
+                }
             }
         }
 
-        // Buying a project token: fill from the pool while it beats issuance and mint the rest.
+        // Fill from the pool while it beats issuance and mint the rest.
         if (buyProjectId != 0) {
             return (
                 BaseHook.beforeSwap.selector,
-                _routeBuy({
-                    key: key, params: params, projectId: buyProjectId, amountIn: amountIn, amountOutMin: amountOutMin
+                _routeSplit({
+                    key: key,
+                    params: params,
+                    projectId: buyProjectId,
+                    amountIn: amountIn,
+                    amountOutMin: amountOutMin,
+                    terminal: buyTerminal,
+                    isBuying: true,
+                    rateAmountOut: issuedTokenCount,
+                    floorAmountOut: issuedTokenCount
                 }),
                 0
             );
@@ -759,71 +807,43 @@ contract JBUniswapV4Hook is BaseHook, IGeomeanOracle {
             return (BaseHook.beforeSwap.selector, BeforeSwapDeltaLibrary.ZERO_DELTA, 0);
         }
 
-        // Selling a project token: compare cashing out through Juicebox against the V4 TWAP quote.
-        // NOTE: When cashOutTaxRate == 0, the bonding curve is linear — each token redeems for its
-        // exact proportional share of surplus. The hook will repeatedly prefer JB cashout over V4
-        // because per-token value doesn't decrease, and the V4 pool price doesn't move (tokens bypass
-        // the AMM). This is accepted behavior: token holders are redeeming their fair share of surplus.
-        // The V4 pool loses its sell-side price-discovery role while JB cashout offers better rates,
-        // but no value is extracted beyond what the token holders are entitled to.
-        // See RISKS.md for full analysis.
+        // Selling a project token: sell in the pool while it beats the marginal reclaim rate and cash out the rest.
         IJBTerminal terminal = _getPrimaryTerminal({projectId: projectId, token: tokenOut});
-        uint256 juiceboxExpectedOutput = calculateExpectedOutputFromSelling({
-            projectId: projectId, tokenAmountIn: amountIn, outputToken: tokenOut, terminal: terminal
-        });
-
-        // Calculate how many tokens we'd get from Uniswap v4
-        uint256 uniswapV4ExpectedTokens =
-            estimateUniswapOutput({poolId: poolId, key: key, amountIn: amountIn, zeroForOne: params.zeroForOne});
-
-        // Only route through Juicebox if a live terminal quotes an output that fits V4's signed-delta accounting and
-        // beats the V4 quote.
-        bool juiceboxBetterThanV4 = address(terminal).code.length > 0 && juiceboxExpectedOutput <= MAX_V4_DELTA
-            && juiceboxExpectedOutput > uniswapV4ExpectedTokens;
-
-        // The calls before this event are views, which cannot reenter.
-        // forge-lint: disable-next-item(reentrancy-events)
-        emit BestRouteSelected({
-            poolId: poolId,
-            routeType: juiceboxBetterThanV4 ? 1 : 0,
-            expectedTokens: juiceboxBetterThanV4 ? juiceboxExpectedOutput : uniswapV4ExpectedTokens,
-            caller: msg.sender
-        });
-
-        // If Juicebox gives better output, route through Juicebox
-        if (juiceboxBetterThanV4) {
-            // The calls before this event are views, which cannot reenter.
-            // forge-lint: disable-next-item(reentrancy-events)
-            emit RouteSelected({
-                poolId: poolId, useJuicebox: true, expectedTokens: juiceboxExpectedOutput, caller: msg.sender
+        uint256 cashOutAmountOut;
+        uint256 halfCashOutAmountOut;
+        // The fee project's own cash-outs pay their fee back into it, minting its token to this hook mid-sell, so they
+        // stay in the pool.
+        if (projectId != JBConstants.FEE_BENEFICIARY_PROJECT_ID) {
+            cashOutAmountOut = calculateExpectedOutputFromSelling({
+                projectId: projectId, tokenAmountIn: amountIn, outputToken: tokenOut, terminal: terminal
             });
-
-            // Cash-outs must deliver at least what the terminal's `previewCashOutFrom` reported (a
-            // ruleset-deterministic amount). Anything less is the terminal under-filling its own preview
-            // (fee-on-transfer behavior, a misconfigured data hook, etc.) — accepting it would let a malicious or
-            // buggy terminal win routing by over-quoting and then settling lower. The terminal enforces this floor
-            // inside `cashOutTokensOf`, so an underfilled cash-out reverts before the hook settles output. A larger
-            // tagged minimum still applies.
-            uint256 outputReceived = _routeThroughJuicebox({
-                projectId: projectId,
-                inputCurrency: inputCurrency,
-                outputCurrency: outputCurrency,
-                amountIn: amountIn,
-                isBuying: false,
-                terminal: terminal,
-                amountOutMin: juiceboxExpectedOutput > amountOutMin ? juiceboxExpectedOutput : amountOutMin
+            // A quote V4's signed deltas cannot carry is ineligible, as in 1.2.0.
+            if (cashOutAmountOut > MAX_V4_DELTA) cashOutAmountOut = 0;
+            halfCashOutAmountOut = calculateExpectedOutputFromSelling({
+                projectId: projectId, tokenAmountIn: amountIn / 2, outputToken: tokenOut, terminal: terminal
             });
-
-            return (BaseHook.beforeSwap.selector, _createSwapDelta({amountIn: amountIn, amountOut: outputReceived}), 0);
         }
-        // Proceed with normal v4 swap
-        // Note: Slippage protection for V4 swaps is enforced in _afterSwap hook
-        // The calls before this event are views, which cannot reenter.
-        // forge-lint: disable-next-item(reentrancy-events)
-        emit RouteSelected({
-            poolId: poolId, useJuicebox: false, expectedTokens: uniswapV4ExpectedTokens, caller: msg.sender
-        });
-        return (BaseHook.beforeSwap.selector, BeforeSwapDeltaLibrary.ZERO_DELTA, 0);
+
+        // A taxed reclaim is about quadratic in the count, so 3 J(n) - 4 J(n/2) is about n times its marginal rate at
+        // n; a reclaim that is not convex uses its average rate. The rate only places the pool leg's limit:
+        // `_routeSell` compares exact quotes.
+        return (
+            BaseHook.beforeSwap.selector,
+            _routeSplit({
+                key: key,
+                params: params,
+                projectId: projectId,
+                amountIn: amountIn,
+                amountOutMin: amountOutMin,
+                terminal: terminal,
+                isBuying: false,
+                rateAmountOut: halfCashOutAmountOut < cashOutAmountOut / 2
+                    ? 3 * cashOutAmountOut - 4 * halfCashOutAmountOut
+                    : cashOutAmountOut,
+                floorAmountOut: cashOutAmountOut
+            }),
+            0
+        );
     }
 
     /// @notice Reads an explicit `amountOutMin` from `hookData` when it carries the Juicebox tag.
@@ -915,6 +935,34 @@ contract JBUniswapV4Hook is BaseHook, IGeomeanOracle {
         }
     }
 
+    /// @notice Cash-out metadata that tells a project's buyback hook not to sell in a V4 pool, which cannot unlock
+    /// again inside this swap.
+    /// @dev The entry is keyed to the buyback registry a data hook names with `BUYBACK_HOOK()` (a revnet's), or else to
+    /// the data hook itself. Data hooks that read no such entry ignore it.
+    /// @param projectId The ID of the project whose tokens are cashed out.
+    /// @return metadata The cash-out metadata, empty when the ruleset has no data hook or cannot be read.
+    function _cashOutMetadataOf(uint256 projectId) internal view returns (bytes memory metadata) {
+        address target;
+        try IJBController(address(DIRECTORY.controllerOf(projectId))).currentRulesetOf(projectId) returns (
+            JBRuleset memory, JBRulesetMetadata memory rulesetMetadata
+        ) {
+            target = rulesetMetadata.dataHook;
+        } catch {}
+        if (target.code.length == 0) return metadata;
+
+        (bool success, bytes memory data) = target.staticcall(abi.encodeWithSignature("BUYBACK_HOOK()"));
+        // forge-lint: disable-next-line(unsafe-typecast)
+        if (success && data.length == 32) target = address(uint160(uint256(bytes32(data))));
+
+        // The reserved word, a one-entry table pointing at word 2, and the entry: no minimum, and skip the pool sale.
+        return abi.encodePacked(
+            bytes32(0),
+            // forge-lint: disable-next-line(unsafe-typecast)
+            bytes32(abi.encodePacked(JBMetadataResolver.getId({purpose: "cashOut", target: target}), uint8(2))),
+            abi.encode(uint256(0), true)
+        );
+    }
+
     /// @notice Converts this hook's internal project-token credits into the registered ERC-20 before a sell route.
     /// @dev Core burns holder credits before ERC-20 balances. Normalizing first keeps the sell-side input-balance
     /// invariant scoped to transferable tokens already visible to Uniswap V4.
@@ -972,6 +1020,7 @@ contract JBUniswapV4Hook is BaseHook, IGeomeanOracle {
     {
         // If the router is registered as feeless on this terminal's registry, no fee is charged at all.
         try IJBFeeTerminal(address(terminal)).FEELESS_ADDRESSES() returns (IJBFeelessAddresses feeless) {
+            if (address(feeless).code.length == 0) return grossReclaim;
             try feeless.isFeelessFor({addr: address(this), projectId: projectId, caller: address(this)}) returns (
                 bool isFeeless
             ) {
@@ -1007,46 +1056,6 @@ contract JBUniswapV4Hook is BaseHook, IGeomeanOracle {
         } catch {
             return IJBTerminal(address(0));
         }
-    }
-
-    /// @notice Computes the TWAP sqrt price over the configured lookback window, or the longest retained best-effort
-    /// window. Returns 0 if the pool lacks usable observation history.
-    /// @param poolId The pool ID
-    /// @return sqrtPriceX96 The TWAP sqrt price, or 0 if not enough observations
-    // forge-lint: disable-next-line(mixed-case-function)
-    function _getTWAPSqrtPrice(PoolId poolId) internal view returns (uint160) {
-        ObservationState memory state = states[poolId];
-
-        // Need at least 2 observations for TWAP
-        if (state.cardinality < 2) {
-            return 0;
-        }
-
-        // Get current pool state for observation
-        // getSlot0 returns: sqrtPriceX96, tick, protocolFee, lpFee (no liquidity)
-        (, int24 tick,,) = poolManager.getSlot0(poolId);
-        // Get current liquidity from the dedicated accessor
-        uint128 liquidity = poolManager.getLiquidity(poolId);
-
-        uint32 oldestSecondsAgo = _observationCoverageOf({poolId: poolId});
-        uint32 secondsAgo = oldestSecondsAgo < TWAP_PERIOD ? oldestSecondsAgo : TWAP_PERIOD;
-        if (secondsAgo == 0) return 0;
-
-        // Observe the TWAP
-        // _observeTWAP() is called without try-catch. If the oracle observation fails (e.g.,
-        // insufficient history), the entire transaction reverts. This is intentional — a failed TWAP observation
-        // means no reliable price reference exists, and proceeding without one would expose the swap to manipulation.
-        int24 arithmeticMeanTick = _observeTWAP({
-            poolId: poolId,
-            secondsAgo: secondsAgo,
-            tick: tick,
-            index: state.index,
-            liquidity: liquidity,
-            cardinality: state.cardinality
-        });
-
-        // Convert tick to sqrtPriceX96
-        return TickMath.getSqrtPriceAtTick(arithmeticMeanTick);
     }
 
     /// @notice The payer's project tokens from the terminal's mint path for `amount`, or 0 when no mint path is usable.
@@ -1154,61 +1163,6 @@ contract JBUniswapV4Hook is BaseHook, IGeomeanOracle {
         }
     }
 
-    /// @notice Converts an input amount into an expected V4 output using a given sqrt price, mirroring V4 swap math.
-    /// @dev Used by `estimateUniswapOutput` to value a swap at a chosen price. Applies the combined swap fee
-    /// (protocol fee + LP fee) to the input BEFORE the price-ratio conversion so the estimate's floor rounding matches
-    /// V4's execution rounding. The fee is read for `key.toId()` so the fee always matches the priced pool.
-    /// @param key The pool key
-    /// @param amountIn The input amount
-    /// @param zeroForOne Whether swapping token0 for token1
-    /// @param sqrtPriceX96 The price (spot or TWAP) to value the swap at
-    /// @return estimatedOut The estimated output amount
-    function _outputForSqrtPrice(
-        PoolKey memory key,
-        uint256 amountIn,
-        bool zeroForOne,
-        uint160 sqrtPriceX96
-    )
-        internal
-        view
-        returns (uint256 estimatedOut)
-    {
-        // Apply the combined swap fee (protocol fee + LP fee) to the input amount BEFORE the price-ratio
-        // conversion, mirroring Uniswap V4's swap math so this estimator's floor rounding matches V4's
-        // execution rounding (small inputs at typical fees would otherwise diverge by one unit).
-        uint256 amountInAfterFee = amountIn;
-        {
-            uint24 swapFee = _swapFeeOf({key: key, zeroForOne: zeroForOne});
-
-            if (swapFee > 0) {
-                amountInAfterFee = FullMath.mulDiv({
-                    a: amountIn,
-                    b: ProtocolFeeLibrary.PIPS_DENOMINATOR - swapFee,
-                    denominator: ProtocolFeeLibrary.PIPS_DENOMINATOR
-                });
-            }
-        }
-
-        // Calculate price ratio from sqrtPriceX96, handling overflow for large values.
-        // When sqrtPriceX96 <= type(uint128).max, we can square it directly (fits in uint256).
-        // Otherwise, use FullMath.mulDiv to avoid overflow, at the cost of reduced precision.
-        if (sqrtPriceX96 <= type(uint128).max) {
-            uint256 ratioX192 = uint256(sqrtPriceX96) * sqrtPriceX96;
-            if (zeroForOne) {
-                estimatedOut = FullMath.mulDiv({a: amountInAfterFee, b: ratioX192, denominator: 1 << 192});
-            } else {
-                estimatedOut = FullMath.mulDiv({a: amountInAfterFee, b: 1 << 192, denominator: ratioX192});
-            }
-        } else {
-            uint256 ratioX128 = FullMath.mulDiv({a: sqrtPriceX96, b: sqrtPriceX96, denominator: 1 << 64});
-            if (zeroForOne) {
-                estimatedOut = FullMath.mulDiv({a: amountInAfterFee, b: ratioX128, denominator: 1 << 128});
-            } else {
-                estimatedOut = FullMath.mulDiv({a: amountInAfterFee, b: 1 << 128, denominator: ratioX128});
-            }
-        }
-    }
-
     /// @notice Returns the project ID only when `token` is the project's registered ERC-20.
     /// @dev V4 pools can only custody transferable tokens. Internal Juicebox credits are not a routable pool asset,
     /// so a project with no registered ERC-20 should fall back to the normal V4 swap path.
@@ -1221,10 +1175,49 @@ contract JBUniswapV4Hook is BaseHook, IGeomeanOracle {
         return address(TOKENS.tokenOf(projectId)) == token ? projectId : 0;
     }
 
+    /// @notice Quotes a sell with `quoteSwap`.
+    /// @param key The pool key.
+    /// @param params The caller's swap parameters.
+    /// @param legSqrtPriceLimitX96 The pool leg's price limit, or zero for no pool leg.
+    /// @param heldAmount The input left out of the pool after the leg.
+    /// @return quoted Whether the quote ran; a pool already at its price bound, for one, cannot.
+    /// @return legAmountIn The input the pool leg uses.
+    /// @return legAmountOut The output of the pool leg.
+    /// @return restAmountOut The output of the pool for the rest.
+    function _quoteSwapOf(
+        PoolKey calldata key,
+        SwapParams calldata params,
+        uint160 legSqrtPriceLimitX96,
+        uint256 heldAmount
+    )
+        internal
+        returns (bool quoted, uint256 legAmountIn, uint256 legAmountOut, uint256 restAmountOut)
+    {
+        try this.quoteSwap({
+            key: key, params: params, legSqrtPriceLimitX96: legSqrtPriceLimitX96, heldAmount: heldAmount
+        }) {}
+        catch (bytes memory reason) {
+            // forge-lint: disable-next-line(unsafe-typecast)
+            if (reason.length == 100 && bytes4(reason) == JBUniswapV4Hook_SwapQuote.selector) {
+                assembly ("memory-safe") {
+                    legAmountIn := mload(add(reason, 36))
+                    legAmountOut := mload(add(reason, 68))
+                    restAmountOut := mload(add(reason, 100))
+                }
+                quoted = true;
+            }
+        }
+    }
+
     /// @notice Writes a new tick/liquidity observation to the oracle array. Automatically doubles the array capacity
     /// (up to MAX_TWAP_CARDINALITY) when the buffer is full so the TWAP window can grow over time.
+    /// @dev Liquidity callbacks run after the change, so the change is undone to charge the elapsed interval with the
+    /// liquidity that was active during it. Swaps pass an empty range.
     /// @param poolId The pool ID
-    function _recordObservation(PoolId poolId) internal {
+    /// @param tickLower The lower tick of the liquidity change.
+    /// @param tickUpper The upper tick of the liquidity change.
+    /// @param liquidityDelta The liquidity change that has just been applied.
+    function _recordObservation(PoolId poolId, int24 tickLower, int24 tickUpper, int256 liquidityDelta) internal {
         ObservationState memory state = states[poolId];
         if (state.cardinality == 0) return;
 
@@ -1233,6 +1226,11 @@ contract JBUniswapV4Hook is BaseHook, IGeomeanOracle {
         (, int24 tick,,) = poolManager.getSlot0(poolId);
         // Get current liquidity from the dedicated accessor
         uint128 liquidity = poolManager.getLiquidity(poolId);
+        if (tickLower <= tick && tick < tickUpper) {
+            // V4 applied this delta to the prior liquidity with checked math, so the difference fits uint128.
+            // forge-lint: disable-next-line(unsafe-typecast)
+            liquidity = uint128(uint256(int256(uint256(liquidity)) - liquidityDelta));
+        }
 
         // Auto-grow cardinality when at capacity to enable TWAP functionality
         // Grow when we're about to wrap around (index == cardinality - 1) and cardinality == cardinalityNext
@@ -1242,8 +1240,8 @@ contract JBUniswapV4Hook is BaseHook, IGeomeanOracle {
             uint16 targetCardinality =
                 state.cardinalityNext * 2 > MAX_TWAP_CARDINALITY ? MAX_TWAP_CARDINALITY : state.cardinalityNext * 2;
 
-            // Grow the oracle array
-            newCardinalityNext = observations[poolId].grow({current: state.cardinalityNext, next: targetCardinality});
+            // Each new slot is allocated when its first observation is written, so no swap pays to allocate them all.
+            newCardinalityNext = targetCardinality;
         }
 
         // Write new observation
@@ -1313,63 +1311,65 @@ contract JBUniswapV4Hook is BaseHook, IGeomeanOracle {
         }
     }
 
-    /// @notice Buys a Juicebox project token from the pool while the pool beats the payer's issuance rate, and mints
-    /// the rest of the input through the project's terminal.
+    /// @notice Swaps from the pool while the pool beats a Juicebox rate, and routes the rest of the input through the
+    /// project's terminal. For a buy the rate is the payer's issuance and the rest mints; a sell, whose rate is the
+    /// marginal reclaim rate, goes to `_routeSell` with the limit.
     /// @dev The pool leg is this hook's own exact-input swap on the same pool, which skips this hook's callbacks
-    /// (`Hooks.noSelfCall`). Its price limit is the issuance limit: the price where the pool's marginal output after
-    /// the LP and protocol fees equals the issuance rate, rounded so the pool's marginal price never drops below
-    /// issuance; the output floor on both legs covers V4's per-step rounding. The
-    /// input the pool leg leaves mints through `_routeThroughJuicebox`. The returned delta consumes the whole input
-    /// and delivers both legs, so the outer swap moves nothing, and this hook's pool-leg deltas and the mint leg's take
-    /// and settle net against it.
-    /// A caller whose own price limit is at or inside the fee-free issuance price gets a plain V4 swap with no mint
-    /// leg. That keeps partial fills a caller asked for, and keeps the buyback hook's swaps (limited at a fee-free
-    /// issuance rate at or above the payer's) plain, so a pay never mints through this hook from inside its own swap.
+    /// (`Hooks.noSelfCall`). Its price limit is the rate limit: the price where the pool's marginal output after the LP
+    /// and protocol fees equals the rate, rounded so the pool's marginal price never drops below it; the output floor
+    /// on both legs covers V4's per-step rounding. The input the pool leg leaves mints through `_routeThroughJuicebox`.
+    /// The returned delta consumes the whole input and delivers both legs, so the outer swap moves nothing, and this
+    /// hook's pool-leg deltas and the mint leg's take and settle net against it.
+    /// A caller whose own price limit is at or inside the fee-free price of the rate gets a plain V4 swap with no
+    /// terminal leg. That keeps partial fills a caller asked for, and keeps the buyback hook's swaps (limited at a
+    /// fee-free issuance rate at or above the payer's) plain, so a pay never mints through this hook from inside its
+    /// own swap.
     /// @param key The pool key.
     /// @param params The swap parameters.
-    /// @param projectId The ID of the project whose tokens are bought.
+    /// @param projectId The ID of the project whose terminal routes the rest.
     /// @param amountIn The exact input amount.
     /// @param amountOutMin The caller's tagged minimum output, or 0.
+    /// @param terminal The project's primary terminal for the swap's terminal-side token.
+    /// @param isBuying Whether the rest pays the terminal (true) or cashes out (false).
+    /// @param rateAmountOut The output for the whole input at the rate the pool leg is limited at. Zero means no
+    /// usable Juicebox path, so the swap stays a V4 swap.
+    /// @param floorAmountOut For a buy, the least output both legs together deliver, less rounding; for a sell, the
+    /// preview of cashing out the whole input.
     /// @return delta The swap delta to return to the PoolManager (zero for a plain V4 swap).
-    function _routeBuy(
+    function _routeSplit(
         PoolKey calldata key,
         SwapParams calldata params,
         uint256 projectId,
         uint256 amountIn,
-        uint256 amountOutMin
+        uint256 amountOutMin,
+        IJBTerminal terminal,
+        bool isBuying,
+        uint256 rateAmountOut,
+        uint256 floorAmountOut
     )
         internal
         returns (BeforeSwapDelta delta)
     {
         bool zeroForOne = params.zeroForOne;
         Currency inputCurrency = zeroForOne ? key.currency0 : key.currency1;
-        IJBTerminal terminal = _getPrimaryTerminal({projectId: projectId, token: Currency.unwrap(inputCurrency)});
-
-        // The payer's issuance for the whole input. Zero means no usable mint path, so the swap stays a V4 swap.
-        uint256 issuedTokenCount = address(terminal).code.length == 0
-            ? 0
-            : _issuanceOf({
-                terminal: terminal,
-                projectId: projectId,
-                token: _normalizeToken(Currency.unwrap(inputCurrency)),
-                amount: amountIn
-            });
 
         // The issuance count less rounding: callers such as the buyback hook derive their price limit from an issuance
         // count that can round a few units under this one, and the terminal floors the mint leg's count.
-        uint256 margin = issuedTokenCount / 1_000_000 + 3;
+        uint256 margin = rateAmountOut / 1_000_000 + 3;
 
         // The fee-free issuance price, rounded toward the caller's side so a limit derived from it counts as inside.
-        uint256 sqrtPriceX96 = issuedTokenCount <= margin || issuedTokenCount > MAX_V4_DELTA
+        uint256 sqrtPriceX96 = rateAmountOut <= margin || rateAmountOut > MAX_V4_DELTA || amountIn > MAX_V4_DELTA
             ? 0
             : zeroForOne
-                ? _sqrtPriceX96Of({amount1: issuedTokenCount - margin, amount0: amountIn, roundUp: false})
-                : _sqrtPriceX96Of({amount1: amountIn, amount0: issuedTokenCount - margin, roundUp: true});
+                ? _sqrtPriceX96Of({amount1: rateAmountOut - margin, amount0: amountIn, roundUp: false})
+                : _sqrtPriceX96Of({amount1: amountIn, amount0: rateAmountOut - margin, roundUp: true});
 
         // Split only when the issuance price is inside V4's range and the caller's limit lies beyond it.
         if (
             sqrtPriceX96 <= TickMath.MIN_SQRT_PRICE || sqrtPriceX96 >= TickMath.MAX_SQRT_PRICE
                 || (zeroForOne ? params.sqrtPriceLimitX96 >= sqrtPriceX96 : params.sqrtPriceLimitX96 <= sqrtPriceX96)
+                // The mint leg takes its input from the PoolManager before the swapper settles.
+                || (isBuying && amountIn > inputCurrency.balanceOf(address(poolManager)))
         ) {
             // A plain V4 swap; `_afterSwap` enforces any tagged minimum on its output.
             // The calls before this event are views, which cannot reenter.
@@ -1383,40 +1383,59 @@ contract JBUniswapV4Hook is BaseHook, IGeomeanOracle {
             uint256 feeKept = ProtocolFeeLibrary.PIPS_DENOMINATOR - _swapFeeOf({key: key, zeroForOne: zeroForOne});
             sqrtPriceX96 = zeroForOne
                 ? _sqrtPriceX96Of({
-                    amount1: issuedTokenCount * ProtocolFeeLibrary.PIPS_DENOMINATOR,
+                    amount1: rateAmountOut * ProtocolFeeLibrary.PIPS_DENOMINATOR,
                     amount0: amountIn * feeKept,
                     roundUp: true
                 })
                 : _sqrtPriceX96Of({
                     amount1: amountIn * feeKept,
-                    amount0: issuedTokenCount * ProtocolFeeLibrary.PIPS_DENOMINATOR,
+                    amount0: rateAmountOut * ProtocolFeeLibrary.PIPS_DENOMINATOR,
                     roundUp: false
                 });
         }
 
-        uint256 poolAmountIn;
-        uint256 amountOut;
-
         // The pool leg runs only while the current price beats the limit. Fees move the limit from the fee-free price
         // checked above toward the current price, so a limit that passes this check is inside V4's range.
         (uint160 currentSqrtPriceX96,,,) = poolManager.getSlot0(key.toId());
-        if (zeroForOne ? sqrtPriceX96 < currentSqrtPriceX96 : sqrtPriceX96 > currentSqrtPriceX96) {
-            BalanceDelta poolDelta = poolManager.swap({
-                key: key,
-                params: SwapParams({
-                    zeroForOne: zeroForOne,
-                    amountSpecified: params.amountSpecified,
-                    // forge-lint: disable-next-line(unsafe-typecast)
-                    sqrtPriceLimitX96: uint160(sqrtPriceX96)
-                }),
-                hookData: bytes("")
-            });
+        if (zeroForOne ? sqrtPriceX96 >= currentSqrtPriceX96 : sqrtPriceX96 <= currentSqrtPriceX96) sqrtPriceX96 = 0;
 
-            // Exact input: the input leg is a debt of this hook (negative), the output leg a credit (positive).
-            // forge-lint: disable-next-line(unsafe-typecast)
-            poolAmountIn = uint256(uint128(-(zeroForOne ? poolDelta.amount0() : poolDelta.amount1())));
-            // forge-lint: disable-next-line(unsafe-typecast)
-            amountOut = uint256(uint128(zeroForOne ? poolDelta.amount1() : poolDelta.amount0()));
+        if (!isBuying) {
+            return _routeSell({
+                key: key,
+                params: params,
+                projectId: projectId,
+                amountIn: amountIn,
+                amountOutMin: amountOutMin,
+                terminal: terminal,
+                // forge-lint: disable-next-line(unsafe-typecast)
+                legSqrtPriceLimitX96: uint160(sqrtPriceX96),
+                reclaimAmountOut: floorAmountOut
+            });
+        }
+
+        // V4 rounds each step's input up, so a thin pool leg can deliver less than minting its input would; mint
+        // instead.
+        if (sqrtPriceX96 != 0) {
+            (bool quoted, uint256 legAmountIn, uint256 legAmountOut,) = _quoteSwapOf({
+                key: key,
+                params: params,
+                // forge-lint: disable-next-line(unsafe-typecast)
+                legSqrtPriceLimitX96: uint160(sqrtPriceX96),
+                heldAmount: amountIn
+            });
+            if (!quoted || legAmountOut * amountIn < rateAmountOut * legAmountIn) sqrtPriceX96 = 0;
+        }
+
+        uint256 poolAmountIn;
+        uint256 amountOut;
+        if (sqrtPriceX96 != 0) {
+            (poolAmountIn, amountOut) = _swapPool({
+                key: key,
+                zeroForOne: zeroForOne,
+                amountIn: amountIn,
+                // forge-lint: disable-next-line(unsafe-typecast)
+                sqrtPriceLimitX96: uint160(sqrtPriceX96)
+            });
         }
 
         // The input the pool leg leaves mints through the terminal.
@@ -1434,7 +1453,7 @@ contract JBUniswapV4Hook is BaseHook, IGeomeanOracle {
 
         // Both legs together deliver at least minting the whole input, less the rounding margin, and the caller's
         // tagged minimum. This also catches V4's per-step rounding on thin liquidity, where fees can eat a pool fill.
-        if (amountOutMin < issuedTokenCount - margin) amountOutMin = issuedTokenCount - margin;
+        if (floorAmountOut > margin && amountOutMin < floorAmountOut - margin) amountOutMin = floorAmountOut - margin;
         if (amountOut < amountOutMin) {
             revert JBUniswapV4Hook_InsufficientOutput({amount: amountOut, minimum: amountOutMin});
         }
@@ -1446,6 +1465,125 @@ contract JBUniswapV4Hook is BaseHook, IGeomeanOracle {
         });
 
         return _createSwapDelta({amountIn: amountIn, amountOut: amountOut});
+    }
+
+    /// @notice Sells whichever way delivers most, each quoted exactly: everything in the pool, everything cashed out,
+    /// or a split.
+    /// @dev The split sells in the pool down to `legSqrtPriceLimitX96`, cashes out what the leg leaves up to what the
+    /// PoolManager holds of the token (callers settle their input after the swap), and leaves any rest to the outer
+    /// swap, where `_afterSwap` checks a tagged minimum against all of it. Cashing everything out needs the PoolManager
+    /// to hold the whole input. Cash-outs are quoted by the terminal's preview, which the terminal enforces as the
+    /// leg's minimum, and run first, on the state the preview read. Pool parts are quoted by `quoteSwap` and then run
+    /// the
+    /// same swaps; the cash-out between cannot swap this pool. Ties go to the pool alone, then to cashing everything
+    /// out.
+    /// @param key The pool key.
+    /// @param params The swap parameters.
+    /// @param projectId The ID of the project whose tokens are sold.
+    /// @param amountIn The exact input amount.
+    /// @param amountOutMin The caller's tagged minimum output, or 0.
+    /// @param terminal The project's primary terminal for the output token.
+    /// @param legSqrtPriceLimitX96 The split's pool-leg price limit, or zero when the price is already past it.
+    /// @param reclaimAmountOut The preview of cashing out the whole input.
+    /// @return delta The swap delta to return to the PoolManager (zero for a plain V4 swap).
+    function _routeSell(
+        PoolKey calldata key,
+        SwapParams calldata params,
+        uint256 projectId,
+        uint256 amountIn,
+        uint256 amountOutMin,
+        IJBTerminal terminal,
+        uint160 legSqrtPriceLimitX96,
+        uint256 reclaimAmountOut
+    )
+        internal
+        returns (BeforeSwapDelta delta)
+    {
+        bool zeroForOne = params.zeroForOne;
+        Currency inputCurrency = zeroForOne ? key.currency0 : key.currency1;
+        Currency outputCurrency = zeroForOne ? key.currency1 : key.currency0;
+        uint256 heldAmount = inputCurrency.balanceOf(address(poolManager));
+        if (amountIn > heldAmount || _pastLimitOf({params: params, count: amountIn, amountOut: reclaimAmountOut})) {
+            reclaimAmountOut = 0;
+        }
+
+        // Everything in the pool, as a plain V4 swap would sell it.
+        (,,, uint256 poolAmountOut) = _quoteSwapOf({key: key, params: params, legSqrtPriceLimitX96: 0, heldAmount: 0});
+
+        // The split.
+        (bool quoted, uint256 legAmountIn, uint256 legAmountOut, uint256 restAmountOut) =
+            _quoteSwapOf({key: key, params: params, legSqrtPriceLimitX96: legSqrtPriceLimitX96, heldAmount: heldAmount});
+        uint256 cashOutCount = amountIn - legAmountIn;
+        if (cashOutCount > heldAmount) cashOutCount = heldAmount;
+        // A cash-out of the whole input reuses its preview.
+        uint256 cashOutAmountOut = cashOutCount == 0
+            ? 0
+            : cashOutCount == amountIn
+                ? reclaimAmountOut
+                : calculateExpectedOutputFromSelling({
+                    projectId: projectId,
+                    tokenAmountIn: cashOutCount,
+                    outputToken: Currency.unwrap(outputCurrency),
+                    terminal: terminal
+                });
+        // A split whose cash-out quotes nothing, or whose output V4's deltas cannot carry, is not one.
+        uint256 splitAmountOut = quoted && (cashOutCount == 0 || cashOutAmountOut != 0)
+            ? legAmountOut + cashOutAmountOut + restAmountOut
+            : 0;
+        if (
+            splitAmountOut > MAX_V4_DELTA
+                || _pastLimitOf({params: params, count: cashOutCount, amountOut: cashOutAmountOut})
+        ) splitAmountOut = 0;
+
+        if (reclaimAmountOut >= splitAmountOut) {
+            (legAmountIn, cashOutCount, cashOutAmountOut, splitAmountOut) =
+            (0, amountIn, reclaimAmountOut, reclaimAmountOut);
+        }
+
+        if (splitAmountOut <= poolAmountOut) {
+            // The calls before this event revert or are views, so they cannot reenter.
+            // forge-lint: disable-next-item(reentrancy-events)
+            emit RouteSelected({
+                poolId: key.toId(), useJuicebox: false, expectedTokens: poolAmountOut, caller: msg.sender
+            });
+            return BeforeSwapDeltaLibrary.ZERO_DELTA;
+        }
+
+        // The cash-out runs first, on the state its preview read; it cannot swap this pool (`_routing`).
+        uint256 amountOut;
+        if (cashOutCount != 0) {
+            amountOut = _routeThroughJuicebox({
+                projectId: projectId,
+                inputCurrency: inputCurrency,
+                outputCurrency: outputCurrency,
+                amountIn: cashOutCount,
+                isBuying: false,
+                terminal: terminal,
+                amountOutMin: cashOutAmountOut
+            });
+        }
+        if (legAmountIn != 0) {
+            (legAmountIn, legAmountOut) = _swapPool({
+                key: key,
+                zeroForOne: zeroForOne,
+                amountIn: amountIn - cashOutCount,
+                sqrtPriceLimitX96: legSqrtPriceLimitX96
+            });
+            amountOut += legAmountOut;
+        }
+
+        if (legAmountIn + cashOutCount < amountIn) {
+            // The outer swap sells the rest in the pool, and `_afterSwap` checks a tagged minimum against all of it.
+            _splitAmountOut = amountOut;
+        } else if (amountOut < amountOutMin) {
+            revert JBUniswapV4Hook_InsufficientOutput({amount: amountOut, minimum: amountOutMin});
+        }
+
+        // The pool leg skips this hook's callbacks and the cash-out leg runs under `_routing`, so neither can reenter.
+        // forge-lint: disable-next-item(reentrancy-events)
+        emit RouteSelected({poolId: key.toId(), useJuicebox: true, expectedTokens: amountOut, caller: msg.sender});
+
+        return _createSwapDelta({amountIn: legAmountIn + cashOutCount, amountOut: amountOut});
     }
 
     /// @notice Executes a swap by paying into (buy) or cashing out of (sell) a Juicebox project terminal, bypassing the
@@ -1538,7 +1676,7 @@ contract JBUniswapV4Hook is BaseHook, IGeomeanOracle {
                     tokenToReclaim: normalizedTokenOut, // Native ETH → JB_NATIVE_TOKEN
                     minTokensReclaimed: amountOutMin, // Minimum tokens required (enforced by JB terminal)
                     beneficiary: payable(address(this)), // beneficiary (hook)
-                    metadata: bytes("") // Empty metadata
+                    metadata: _cashOutMetadataOf(projectId)
                 });
         }
 
@@ -1603,6 +1741,27 @@ contract JBUniswapV4Hook is BaseHook, IGeomeanOracle {
         });
     }
 
+    /// @notice Whether cashing out `count` tokens for `amountOut` averages a price past the caller's limit, where a
+    /// plain swap would have stopped.
+    /// @param params The swap parameters.
+    /// @param count The number of tokens cashed out.
+    /// @param amountOut The cash-out's output.
+    /// @return pastLimit Whether the average price is past `params.sqrtPriceLimitX96`.
+    function _pastLimitOf(
+        SwapParams calldata params,
+        uint256 count,
+        uint256 amountOut
+    )
+        internal
+        pure
+        returns (bool pastLimit)
+    {
+        if (count == 0 || amountOut == 0) return false;
+        return params.zeroForOne
+            ? _sqrtPriceX96Of({amount1: amountOut, amount0: count, roundUp: false}) < params.sqrtPriceLimitX96
+            : _sqrtPriceX96Of({amount1: count, amount0: amountOut, roundUp: true}) > params.sqrtPriceLimitX96;
+    }
+
     /// @notice The V4 sqrt price, as a Q64.96, of a price of `amount1` token1 per `amount0` token0.
     /// @dev Prices of 2^128 or more lie past every V4 pool's range and return `type(uint256).max`. Prices of 2^63 or
     /// more use a Q128 ratio so the intermediate fits 256 bits.
@@ -1630,15 +1789,47 @@ contract JBUniswapV4Hook is BaseHook, IGeomeanOracle {
             Math.sqrt({a: ratio, rounding: roundUp ? Math.Rounding.Ceil : Math.Rounding.Floor}) << (192 - shift) / 2;
     }
 
+    /// @notice Runs an exact-input swap of this pool from this hook, which skips this hook's callbacks.
+    /// @param key The pool key.
+    /// @param zeroForOne The swap direction.
+    /// @param amountIn The exact input amount.
+    /// @param sqrtPriceLimitX96 The swap's price limit.
+    /// @return amountInUsed The input the swap used.
+    /// @return amountOut The swap's output.
+    function _swapPool(
+        PoolKey calldata key,
+        bool zeroForOne,
+        uint256 amountIn,
+        uint160 sqrtPriceLimitX96
+    )
+        internal
+        returns (uint256 amountInUsed, uint256 amountOut)
+    {
+        BalanceDelta delta = poolManager.swap({
+            key: key,
+            params: SwapParams({
+                zeroForOne: zeroForOne,
+                // forge-lint: disable-next-line(unsafe-typecast)
+                amountSpecified: -int256(amountIn),
+                sqrtPriceLimitX96: sqrtPriceLimitX96
+            }),
+            hookData: bytes("")
+        });
+
+        // Exact input: the input leg is a debt of this hook (negative), the output leg a credit (positive).
+        // forge-lint: disable-next-line(unsafe-typecast)
+        amountInUsed = uint256(uint128(-(zeroForOne ? delta.amount0() : delta.amount1())));
+        // forge-lint: disable-next-line(unsafe-typecast)
+        amountOut = uint256(uint128(zeroForOne ? delta.amount1() : delta.amount0()));
+    }
+
     /// @notice The combined fee, in pips, that a swap in `zeroForOne`'s direction pays on `key`'s pool: the LP fee
     /// composed with the directional protocol fee, as Uniswap V4 charges it on the input.
-    /// @dev Static pools use `key.fee`; dynamic-fee pools use the LP fee stored in slot0.
     /// @param key The pool key.
     /// @param zeroForOne Whether the swap sells token0 for token1.
     /// @return swapFee The combined swap fee in pips.
     function _swapFeeOf(PoolKey memory key, bool zeroForOne) internal view returns (uint24 swapFee) {
         // Read protocol fee from slot0 (directional: lower 12 bits = zeroForOne, upper 12 bits = oneForZero)
-        // slot0 holds the LP fee V4 swaps with: `key.fee` for static pools, the hook-set fee for dynamic ones.
         (,, uint24 protocolFee, uint24 lpFee) = poolManager.getSlot0(PoolIdLibrary.toId(key));
 
         // Compose the directional protocol fee with the LP fee (a zero protocol fee leaves the LP fee).
