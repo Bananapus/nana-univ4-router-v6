@@ -329,6 +329,8 @@ contract JBUniswapV4Hook is BaseHook, IGeomeanOracle {
             // own token would mint it back into this hook's input balance, so that sale stays in the pool.
             for (uint256 i; i < hookSpecifications.length; i++) {
                 if (hookSpecifications[i].noop || hookSpecifications[i].amount == 0) continue;
+                // The project's own hook list bounds the loop.
+                // forge-lint: disable-next-item(calls-loop)
                 (bool success, bytes memory feeRevnetId) =
                     address(hookSpecifications[i].hook).staticcall(abi.encodeWithSignature("FEE_REVNET_ID()"));
                 if (success && feeRevnetId.length == 32 && abi.decode(feeRevnetId, (uint256)) == projectId) return 0;
