@@ -1130,6 +1130,23 @@ contract SplitBuyTest is Test {
         assertEq(tokens.totalBalanceOf(address(hook), 1), 0, "no fee tokens left in the hook");
     }
 
+    /// @notice Tokens sent to the hook outside a swap are burned with the fee, and do not trip the input-balance check
+    /// when the sold token is its own fee revnet (REV selling REV).
+    function test_sell_burnsStrayFeeTokens() public {
+        FeeRevnetDataHook feeHook = new FeeRevnetDataHook();
+        cashOutDataHook = address(feeHook);
+        (uint256 projectId, address projectToken, PoolKey memory key) = _sellSetup(5000, 60, 1e22, 30);
+        feeHook.setFeeRevnetId(projectId);
+        IERC20(projectToken).transfer(address(hook), 1);
+        vm.prank(address(controller));
+        tokens.mintFor({holder: address(hook), projectId: 1, count: 1e18});
+
+        uint256 poolOnly = _poolOnly(key, 1e24);
+        assertGt(_sell(key, 1e24, ""), poolOnly, "beats the pool alone");
+        assertEq(tokens.totalBalanceOf(address(hook), projectId), 0, "no sold tokens left in the hook");
+        assertEq(tokens.totalBalanceOf(address(hook), 1), 0, "no project 1 tokens left in the hook");
+    }
+
     /// @notice A sell for project 1's own token reclaims project 1 tokens. The hook leaves that balance change in the
     /// output instead of burning it as fee issuance.
     function test_sell_forFeeProjectToken_keepsTheReclaim() public {

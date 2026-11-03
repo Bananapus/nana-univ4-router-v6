@@ -952,14 +952,13 @@ contract JBUniswapV4Hook is BaseHook, IGeomeanOracle {
         } catch {}
     }
 
-    /// @notice Burns the tokens of a project this hook received since its balance was `balanceBefore`.
+    /// @notice Burns this hook's whole balance (credits and ERC-20) of a project's tokens.
     /// @param projectId The ID of the project whose tokens are burned.
-    /// @param balanceBefore The hook's credit and ERC-20 balance of the project's tokens before the cash-out.
-    function _burnMintedSince(uint256 projectId, uint256 balanceBefore) internal {
-        uint256 minted = TOKENS.totalBalanceOf({holder: address(this), projectId: projectId}) - balanceBefore;
-        if (minted == 0) return;
+    function _burnAllOf(uint256 projectId) internal {
+        uint256 balance = TOKENS.totalBalanceOf({holder: address(this), projectId: projectId});
+        if (balance == 0) return;
         IJBController controller = IJBController(address(DIRECTORY.controllerOf(projectId)));
-        controller.burnTokensOf({holder: address(this), projectId: projectId, tokenCount: minted, memo: ""});
+        controller.burnTokensOf({holder: address(this), projectId: projectId, tokenCount: balance, memo: ""});
     }
 
     /// @notice Converts this hook's internal project-token credits into the registered ERC-20 before a sell route.
@@ -1625,31 +1624,6 @@ contract JBUniswapV4Hook is BaseHook, IGeomeanOracle {
         uint256 inputBalanceBefore =
             !isBuying && !inputCurrency.isAddressZero() ? IERC20(tokenIn).balanceOf(address(this)) : 0;
 
-        // A cash-out mints its fees' tokens to this hook: core's to project 1, and a revnet's to its fee revnet (named
-        // by the data hook's `FEE_REVNET_ID()`). Record the hook's balances before the input arrives, so the burn
-        // below takes exactly what the cash-out minted, including when the sold token is one of them. A fee paid in
-        // the output token is left in the output, since the balance change there includes the reclaim.
-        uint256 feeProjectId;
-        uint256 feeRevnetId;
-        uint256 feeProjectBalanceBefore;
-        uint256 feeRevnetBalanceBefore;
-        if (!isBuying) {
-            uint256 outputProjectId = _projectIdForRegisteredToken(tokenOut);
-            if (outputProjectId != JBConstants.FEE_BENEFICIARY_PROJECT_ID) {
-                feeProjectId = JBConstants.FEE_BENEFICIARY_PROJECT_ID;
-                feeProjectBalanceBefore = TOKENS.totalBalanceOf({holder: address(this), projectId: feeProjectId});
-            }
-            (bool success, bytes memory data) =
-                _dataHookOf(projectId).staticcall(abi.encodeWithSignature("FEE_REVNET_ID()"));
-            if (success && data.length == 32) feeRevnetId = abi.decode(data, (uint256));
-            if (feeRevnetId == JBConstants.FEE_BENEFICIARY_PROJECT_ID || feeRevnetId == outputProjectId) {
-                feeRevnetId = 0;
-            }
-            if (feeRevnetId != 0) {
-                feeRevnetBalanceBefore = TOKENS.totalBalanceOf({holder: address(this), projectId: feeRevnetId});
-            }
-        }
-
         // Pull the input that PoolManager already escrowed for this swap; the router can then pay or cash out in JB.
         poolManager.take({currency: inputCurrency, to: address(this), amount: amountIn});
 
@@ -1703,9 +1677,22 @@ contract JBUniswapV4Hook is BaseHook, IGeomeanOracle {
                     metadata: _cashOutMetadataOf(projectId)
                 });
 
-            // Burn the fee tokens instead of stranding them here: the seller's output is already net of the fees.
-            if (feeProjectId != 0) _burnMintedSince({projectId: feeProjectId, balanceBefore: feeProjectBalanceBefore});
-            if (feeRevnetId != 0) _burnMintedSince({projectId: feeRevnetId, balanceBefore: feeRevnetBalanceBefore});
+            // The cash-out mints its fees' tokens to this hook: core's to project 1, and a revnet's to its fee revnet
+            // (named by the data hook's `FEE_REVNET_ID()`). The seller's output is already net of the fees, and the
+            // hook holds none of these tokens between swaps, so it burns its whole balance of each rather than strand
+            // them. A fee paid in the output token is left in the output, since that balance includes the reclaim.
+            uint256 outputProjectId = _projectIdForRegisteredToken(tokenOut);
+            if (outputProjectId != JBConstants.FEE_BENEFICIARY_PROJECT_ID) {
+                _burnAllOf(JBConstants.FEE_BENEFICIARY_PROJECT_ID);
+            }
+            (bool success, bytes memory data) =
+                _dataHookOf(projectId).staticcall(abi.encodeWithSignature("FEE_REVNET_ID()"));
+            if (success && data.length == 32) {
+                uint256 feeRevnetId = abi.decode(data, (uint256));
+                if (feeRevnetId != JBConstants.FEE_BENEFICIARY_PROJECT_ID && feeRevnetId != outputProjectId) {
+                    _burnAllOf(feeRevnetId);
+                }
+            }
         }
 
         // Measure what the hook actually received. This handles fee-on-transfer tokens and nonstandard terminals whose
@@ -1714,15 +1701,16 @@ contract JBUniswapV4Hook is BaseHook, IGeomeanOracle {
             outputCurrency.isAddressZero() ? address(this).balance : IERC20(tokenOut).balanceOf(address(this));
         outputReceived = balanceAfter - balanceBefore;
 
-        // ERC-20 sell routes should end with the hook holding the same amount of input token it held before the swap.
+        // ERC-20 sell routes should end with the hook holding no more input token than it held before the swap.
         // `poolManager.take()` temporarily moves the exact input project tokens here, and a valid JB cash-out burns or
-        // otherwise consumes all of them. Native ETH cannot be stranded as project-token input, so it is skipped.
+        // otherwise consumes all of them. Less is fine: selling a fee token burns the hook's whole balance of it.
+        // Native ETH cannot be stranded as project-token input, so it is skipped.
         if (!isBuying && !inputCurrency.isAddressZero()) {
             uint256 inputBalanceAfter = IERC20(tokenIn).balanceOf(address(this));
 
-            // A changed balance means the terminal returned or failed to consume some exact-input project tokens while
+            // A larger balance means the terminal returned or failed to consume some exact-input project tokens while
             // still delivering output. Revert before settlement so a partial-fill sell route cannot strand tokens here.
-            if (inputBalanceAfter != inputBalanceBefore) {
+            if (inputBalanceAfter > inputBalanceBefore) {
                 revert JBUniswapV4Hook_SellInputReturned({
                     token: tokenIn, balanceBefore: inputBalanceBefore, balanceAfter: inputBalanceAfter
                 });
