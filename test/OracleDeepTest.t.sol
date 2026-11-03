@@ -47,6 +47,10 @@ contract MockJBTokens_Oracle {
     function creditBalanceOf(address, uint256) external pure returns (uint256) {
         return 0;
     }
+
+    function totalBalanceOf(address, uint256) external pure returns (uint256) {
+        return 0;
+    }
 }
 
 contract MockJBDirectory_Oracle {

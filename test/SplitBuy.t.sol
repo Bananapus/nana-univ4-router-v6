@@ -355,8 +355,8 @@ contract PlainCashOutHook is IJBCashOutHook {
     }
 }
 
-/// @notice A cash-out data hook that takes a share of each cash-out, like a revnet's fee hook, and names the project
-/// it pays that fee to as `FEE_REVNET_ID`.
+/// @notice A cash-out data hook that takes a share of each cash-out and, like REVOwner, pays it to `FEE_REVNET_ID` with
+/// the holder as beneficiary.
 contract FeeRevnetDataHook is IJBRulesetDataHook, IJBCashOutHook {
     // forge-lint: disable-next-line(mixed-case-variable)
     uint256 public FEE_REVNET_ID;
@@ -385,7 +385,7 @@ contract FeeRevnetDataHook is IJBRulesetDataHook, IJBCashOutHook {
         hookSpecifications = new JBCashOutHookSpecification[](2);
         hookSpecifications[0] = JBCashOutHookSpecification({hook: OTHER_HOOK, noop: false, amount: 1, metadata: ""});
         hookSpecifications[1] =
-            JBCashOutHookSpecification({hook: IJBCashOutHook(address(this)), noop: false, amount: 1, metadata: ""});
+            JBCashOutHookSpecification({hook: IJBCashOutHook(address(this)), noop: false, amount: 1e15, metadata: ""});
         return
             (
                 context.cashOutTaxRate,
@@ -396,7 +396,19 @@ contract FeeRevnetDataHook is IJBRulesetDataHook, IJBCashOutHook {
             );
     }
 
-    function afterCashOutRecordedWith(JBAfterCashOutRecordedContext calldata) external payable {}
+    function afterCashOutRecordedWith(JBAfterCashOutRecordedContext calldata context) external payable {
+        if (FEE_REVNET_ID == 0) return;
+        IJBTerminal terminal = IJBTerminal(msg.sender);
+        terminal.pay{value: msg.value}({
+            projectId: FEE_REVNET_ID,
+            token: JBConstants.NATIVE_TOKEN,
+            amount: msg.value,
+            beneficiary: context.holder,
+            minReturnedTokens: 0,
+            memo: "",
+            metadata: ""
+        });
+    }
 
     function hasMintPermissionFor(uint256, JBRuleset memory, address) external pure returns (bool) {
         return false;
@@ -1037,11 +1049,7 @@ contract SplitBuyTest is Test {
         assertGt(priceAfter, priceBefore, "pool leg");
         assertGt(out, poolOnly, "beats the pool alone");
         assertGt(out, reclaimAll, "beats cashing out everything");
-        assertGt(
-            IERC20(address(tokens.tokenOf(1))).balanceOf(address(hook)),
-            0,
-            "the fee's project 1 tokens stay in the hook"
-        );
+        assertEq(tokens.totalBalanceOf(address(hook), 1), 0, "the fee's project 1 tokens are burned");
     }
 
     /// @notice When the cash-out leg would pay less than selling the same tokens in the pool (a steep 90% tax, whose
@@ -1097,35 +1105,89 @@ contract SplitBuyTest is Test {
         assertEq(supply - _supply(projectToken), 1e22, "all cashed out");
     }
 
-    /// @notice Sells of the fee project's token stay in the pool: its cash-out fee would mint its token back to the
-    /// hook mid-sell.
-    function test_sell_feeProject_staysInPool() public {
+    /// @notice A taxed cash-out leg's terminal fee mints project 1 tokens to the hook, which burns them, so a sell
+    /// of another project leaves none stranded.
+    function test_sell_burnsTheTerminalFeeTokens() public {
+        (, address projectToken, PoolKey memory key) = _sellSetup(5000, 60, 1e22, 30);
+        uint256 supply = _supply(projectToken);
+        uint256 feeSupply = tokens.totalSupplyOf(1);
+        _sell(key, 1e24, "");
+        assertLt(_supply(projectToken), supply, "cashes out");
+        assertEq(tokens.totalBalanceOf(address(hook), 1), 0, "no project 1 tokens left in the hook");
+        assertEq(tokens.totalSupplyOf(1), feeSupply, "the fee's tokens are burned");
+    }
+
+    /// @notice Sells of the fee project's own token cash out too: the fee mints its token to the hook mid-sell, and
+    /// the hook burns it before checking its input balance.
+    function test_sell_feeProject_cashesOutAndBurnsItsFee() public {
         sellFeeProject = true;
         (uint256 projectId, address projectToken, PoolKey memory key) = _sellSetup(5000, 60, 1e22, 30);
         assertEq(projectId, 1, "the fee project");
         uint256 poolOnly = _poolOnly(key, 1e24);
         uint256 supply = _supply(projectToken);
-        assertEq(_sell(key, 1e24, ""), poolOnly, "the pool alone");
-        assertEq(_supply(projectToken), supply, "nothing cashed out");
+        assertGt(_sell(key, 1e24, ""), poolOnly, "beats the pool alone");
+        assertLt(_supply(projectToken), supply, "cashes out");
+        assertEq(tokens.totalBalanceOf(address(hook), 1), 0, "no fee tokens left in the hook");
     }
 
-    /// @notice Sells of the token a cash-out hook pays its fee in (its `FEE_REVNET_ID`) stay in the pool, for the
-    /// same reason; sells of other projects' tokens still cash out.
-    function test_sell_feeRevnetHook_staysInPool() public {
+    /// @notice A sell for project 1's own token reclaims project 1 tokens. The hook leaves that balance change in the
+    /// output instead of burning it as fee issuance.
+    function test_sell_forFeeProjectToken_keepsTheReclaim() public {
+        (, address feeToken) = _launch(JBConstants.NATIVE_TOKEN, 18, WEIGHT, 0, false);
+        cashOutTaxRate = 5000;
+        (uint256 projectId, address projectToken) = _launch(feeToken, 18, WEIGHT, 0, false);
+        vm.prank(address(controller));
+        tokens.mintFor({holder: address(this), projectId: 1, count: 1e24});
+        IERC20(feeToken).approve(address(terminal), 1e24);
+        terminal.pay(projectId, feeToken, 1e24, address(this), 0, "", "");
+        IERC20(projectToken).approve(address(sellSwapper), type(uint256).max);
+        (PoolKey memory key, bool feeTokenIsZero) = _pool(feeToken, projectToken, WEIGHT, 400, 1e22, 30, 10_000);
+        // Keep the reclaim rate meaningful: burn the LP funding this contract did not put in the pool.
+        controller.burnTokensOf({
+            holder: address(this),
+            projectId: projectId,
+            tokenCount: IERC20(projectToken).balanceOf(address(this)) - 1e24,
+            memo: ""
+        });
+
+        uint256 snap = vm.snapshotState();
+        vm.mockCallRevert(address(terminal), abi.encodeWithSelector(terminal.previewCashOutFrom.selector), "");
+        (, uint256 poolOnly) = sellSwapper.swap(key, !feeTokenIsZero, 1e24, "");
+        vm.clearMockedCalls();
+        vm.revertToState(snap);
+
+        uint256 supply = _supply(projectToken);
+        (, uint256 out) = sellSwapper.swap(key, !feeTokenIsZero, 1e24, "");
+        assertGt(out, poolOnly, "beats the pool alone");
+        assertLt(_supply(projectToken), supply, "cashes out");
+        assertEq(tokens.totalBalanceOf(address(hook), 1), 0, "no project 1 tokens left in the hook");
+    }
+
+    /// @notice A revnet's fee hook pays its `FEE_REVNET_ID` with the hook as beneficiary. The hook burns those tokens,
+    /// both when the fee revnet is another project and when it is the sold project itself (REV selling REV).
+    function test_sell_feeRevnetHook_burnsItsFee() public {
         FeeRevnetDataHook feeHook = new FeeRevnetDataHook();
         cashOutDataHook = address(feeHook);
         (uint256 projectId, address projectToken, PoolKey memory key) = _sellSetup(5000, 60, 1e22, 30);
+        cashOutDataHook = address(0);
+        (uint256 feeRevnetId,) = _launch(JBConstants.NATIVE_TOKEN, 18, WEIGHT, 0, false);
         uint256 supply = _supply(projectToken);
 
         uint256 snap = vm.snapshotState();
+        feeHook.setFeeRevnetId(feeRevnetId);
+        uint256 feeRevnetSupply = tokens.totalSupplyOf(feeRevnetId);
         _sell(key, 1e24, "");
-        assertLt(_supply(projectToken), supply, "another project's fee: cashes out");
+        assertLt(_supply(projectToken), supply, "another fee revnet: cashes out");
+        assertEq(tokens.totalBalanceOf(address(hook), feeRevnetId), 0, "no fee revnet tokens left in the hook");
+        assertEq(tokens.totalSupplyOf(feeRevnetId), feeRevnetSupply, "the fee's tokens are burned");
         vm.revertToState(snap);
 
         feeHook.setFeeRevnetId(projectId);
         uint256 poolOnly = _poolOnly(key, 1e24);
-        assertEq(_sell(key, 1e24, ""), poolOnly, "the pool alone");
-        assertEq(_supply(projectToken), supply, "nothing cashed out");
+        assertGt(_sell(key, 1e24, ""), poolOnly, "its own fee revnet: beats the pool alone");
+        assertLt(_supply(projectToken), supply, "its own fee revnet: cashes out");
+        assertEq(tokens.totalBalanceOf(address(hook), projectId), 0, "no sold tokens left in the hook");
+        assertEq(tokens.totalBalanceOf(address(hook), 1), 0, "no project 1 tokens left in the hook");
     }
 
     /// @notice Cases where the reclaim curve's rounding makes the marginal-rate split worse than cashing out everything

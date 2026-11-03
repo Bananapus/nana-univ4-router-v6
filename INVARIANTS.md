@@ -22,7 +22,7 @@ Scope: the Uniswap V4 hook surface that serves Juicebox-aware routing and oracle
 |---|---|---|
 | no | no | Pass-through to V4 (`ZERO_DELTA`); `_afterSwap` enforces a tagged `amountOutMin` when present, else no hook-level minimum. |
 | no | yes | Buy: the hook swaps the pool itself, limited at the issuance price after fees, and mints the leftover input through the terminal (`_routeSplit`). A caller limit at or inside the fee-free issuance price keeps a plain V4 swap. |
-| yes | no | Sell: the best of the pool alone, cashing out everything, and a split (pool leg to the marginal reclaim rate, the rest cashed out), each quoted exactly (`_routeSell`). Project 1's token stays in the pool. |
+| yes | no | Sell: the best of the pool alone, cashing out everything, and a split (pool leg to the marginal reclaim rate, the rest cashed out), each quoted exactly (`_routeSell`). The fee tokens a cash-out leg mints to the hook (project 1's, and the fee revnet's on a revnet) are burned in the same swap. |
 | yes | yes | Routed as a sell of the input token. |
 
 JB-token detection requires the project to have a **registered ERC-20** (`JBTokens.tokenOf(projectId) == token`); credit-only projects never engage JB routing. (`JBUniswapV4Hook.sol:1090-1100`)

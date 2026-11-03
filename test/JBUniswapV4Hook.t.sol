@@ -50,6 +50,10 @@ contract MockJBTokens {
         tokenOf[projectId] = token;
     }
 
+    function totalBalanceOf(address holder, uint256 projectId) external view returns (uint256) {
+        return creditBalanceOf[holder][projectId];
+    }
+
     function setCreditBalance(address holder, uint256 projectId, uint256 count) external {
         creditBalanceOf[holder][projectId] = count;
     }

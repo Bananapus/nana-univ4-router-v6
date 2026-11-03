@@ -325,17 +325,6 @@ contract JBUniswapV4Hook is BaseHook, IGeomeanOracle {
                 return 0;
             }
 
-            // A revnet pays its cash-out fee to the fee revnet with this hook as beneficiary. Selling the fee revnet's
-            // own token would mint it back into this hook's input balance, so that sale stays in the pool.
-            for (uint256 i; i < hookSpecifications.length; i++) {
-                if (hookSpecifications[i].noop || hookSpecifications[i].amount == 0) continue;
-                // The project's own hook list bounds the loop.
-                // forge-lint: disable-next-item(calls-loop)
-                (bool success, bytes memory feeRevnetId) =
-                    address(hookSpecifications[i].hook).staticcall(abi.encodeWithSignature("FEE_REVNET_ID()"));
-                if (success && feeRevnetId.length == 32 && abi.decode(feeRevnetId, (uint256)) == projectId) return 0;
-            }
-
             // Core previews price cash-outs against aggregate project surplus, but execution must subtract the gross
             // reclaim plus any cash-out hook amounts from the selected terminal's local balance. If that local
             // settlement check cannot pass, leave this sell leg ineligible so the swap can use V4 instead.
@@ -809,20 +798,14 @@ contract JBUniswapV4Hook is BaseHook, IGeomeanOracle {
 
         // Selling a project token: sell in the pool while it beats the marginal reclaim rate and cash out the rest.
         IJBTerminal terminal = _getPrimaryTerminal({projectId: projectId, token: tokenOut});
-        uint256 cashOutAmountOut;
-        uint256 halfCashOutAmountOut;
-        // The fee project's own cash-outs pay their fee back into it, minting its token to this hook mid-sell, so they
-        // stay in the pool.
-        if (projectId != JBConstants.FEE_BENEFICIARY_PROJECT_ID) {
-            cashOutAmountOut = calculateExpectedOutputFromSelling({
-                projectId: projectId, tokenAmountIn: amountIn, outputToken: tokenOut, terminal: terminal
-            });
-            // A quote V4's signed deltas cannot carry is ineligible, as in 1.2.0.
-            if (cashOutAmountOut > MAX_V4_DELTA) cashOutAmountOut = 0;
-            halfCashOutAmountOut = calculateExpectedOutputFromSelling({
-                projectId: projectId, tokenAmountIn: amountIn / 2, outputToken: tokenOut, terminal: terminal
-            });
-        }
+        uint256 cashOutAmountOut = calculateExpectedOutputFromSelling({
+            projectId: projectId, tokenAmountIn: amountIn, outputToken: tokenOut, terminal: terminal
+        });
+        // A quote V4's signed deltas cannot carry is ineligible, as in 1.2.0.
+        if (cashOutAmountOut > MAX_V4_DELTA) cashOutAmountOut = 0;
+        uint256 halfCashOutAmountOut = calculateExpectedOutputFromSelling({
+            projectId: projectId, tokenAmountIn: amountIn / 2, outputToken: tokenOut, terminal: terminal
+        });
 
         // A taxed reclaim is about quadratic in the count, so 3 J(n) - 4 J(n/2) is about n times its marginal rate at
         // n; a reclaim that is not convex uses its average rate. The rate only places the pool leg's limit:
@@ -967,6 +950,16 @@ contract JBUniswapV4Hook is BaseHook, IGeomeanOracle {
         ) {
             dataHook = rulesetMetadata.dataHook;
         } catch {}
+    }
+
+    /// @notice Burns the tokens of a project this hook received since its balance was `balanceBefore`.
+    /// @param projectId The ID of the project whose tokens are burned.
+    /// @param balanceBefore The hook's credit and ERC-20 balance of the project's tokens before the cash-out.
+    function _burnMintedSince(uint256 projectId, uint256 balanceBefore) internal {
+        uint256 minted = TOKENS.totalBalanceOf({holder: address(this), projectId: projectId}) - balanceBefore;
+        if (minted == 0) return;
+        IJBController controller = IJBController(address(DIRECTORY.controllerOf(projectId)));
+        controller.burnTokensOf({holder: address(this), projectId: projectId, tokenCount: minted, memo: ""});
     }
 
     /// @notice Converts this hook's internal project-token credits into the registered ERC-20 before a sell route.
@@ -1632,6 +1625,31 @@ contract JBUniswapV4Hook is BaseHook, IGeomeanOracle {
         uint256 inputBalanceBefore =
             !isBuying && !inputCurrency.isAddressZero() ? IERC20(tokenIn).balanceOf(address(this)) : 0;
 
+        // A cash-out mints its fees' tokens to this hook: core's to project 1, and a revnet's to its fee revnet (named
+        // by the data hook's `FEE_REVNET_ID()`). Record the hook's balances before the input arrives, so the burn
+        // below takes exactly what the cash-out minted, including when the sold token is one of them. A fee paid in
+        // the output token is left in the output, since the balance change there includes the reclaim.
+        uint256 feeProjectId;
+        uint256 feeRevnetId;
+        uint256 feeProjectBalanceBefore;
+        uint256 feeRevnetBalanceBefore;
+        if (!isBuying) {
+            uint256 outputProjectId = _projectIdForRegisteredToken(tokenOut);
+            if (outputProjectId != JBConstants.FEE_BENEFICIARY_PROJECT_ID) {
+                feeProjectId = JBConstants.FEE_BENEFICIARY_PROJECT_ID;
+                feeProjectBalanceBefore = TOKENS.totalBalanceOf({holder: address(this), projectId: feeProjectId});
+            }
+            (bool success, bytes memory data) =
+                _dataHookOf(projectId).staticcall(abi.encodeWithSignature("FEE_REVNET_ID()"));
+            if (success && data.length == 32) feeRevnetId = abi.decode(data, (uint256));
+            if (feeRevnetId == JBConstants.FEE_BENEFICIARY_PROJECT_ID || feeRevnetId == outputProjectId) {
+                feeRevnetId = 0;
+            }
+            if (feeRevnetId != 0) {
+                feeRevnetBalanceBefore = TOKENS.totalBalanceOf({holder: address(this), projectId: feeRevnetId});
+            }
+        }
+
         // Pull the input that PoolManager already escrowed for this swap; the router can then pay or cash out in JB.
         poolManager.take({currency: inputCurrency, to: address(this), amount: amountIn});
 
@@ -1684,6 +1702,10 @@ contract JBUniswapV4Hook is BaseHook, IGeomeanOracle {
                     beneficiary: payable(address(this)), // beneficiary (hook)
                     metadata: _cashOutMetadataOf(projectId)
                 });
+
+            // Burn the fee tokens instead of stranding them here: the seller's output is already net of the fees.
+            if (feeProjectId != 0) _burnMintedSince({projectId: feeProjectId, balanceBefore: feeProjectBalanceBefore});
+            if (feeRevnetId != 0) _burnMintedSince({projectId: feeRevnetId, balanceBefore: feeRevnetBalanceBefore});
         }
 
         // Measure what the hook actually received. This handles fee-on-transfer tokens and nonstandard terminals whose
