@@ -942,12 +942,7 @@ contract JBUniswapV4Hook is BaseHook, IGeomeanOracle {
     /// @param projectId The ID of the project whose tokens are cashed out.
     /// @return metadata The cash-out metadata, empty when the ruleset has no data hook or cannot be read.
     function _cashOutMetadataOf(uint256 projectId) internal view returns (bytes memory metadata) {
-        address target;
-        try IJBController(address(DIRECTORY.controllerOf(projectId))).currentRulesetOf(projectId) returns (
-            JBRuleset memory, JBRulesetMetadata memory rulesetMetadata
-        ) {
-            target = rulesetMetadata.dataHook;
-        } catch {}
+        address target = _dataHookOf(projectId);
         if (target.code.length == 0) return metadata;
 
         (bool success, bytes memory data) = target.staticcall(abi.encodeWithSignature("BUYBACK_HOOK()"));
@@ -961,6 +956,17 @@ contract JBUniswapV4Hook is BaseHook, IGeomeanOracle {
             bytes32(abi.encodePacked(JBMetadataResolver.getId({purpose: "cashOut", target: target}), uint8(2))),
             abi.encode(uint256(0), true)
         );
+    }
+
+    /// @notice The data hook of a project's current ruleset.
+    /// @param projectId The ID of the project.
+    /// @return dataHook The data hook, or the zero address when the ruleset has none or cannot be read.
+    function _dataHookOf(uint256 projectId) internal view returns (address dataHook) {
+        try IJBController(address(DIRECTORY.controllerOf(projectId))).currentRulesetOf(projectId) returns (
+            JBRuleset memory, JBRulesetMetadata memory rulesetMetadata
+        ) {
+            dataHook = rulesetMetadata.dataHook;
+        } catch {}
     }
 
     /// @notice Converts this hook's internal project-token credits into the registered ERC-20 before a sell route.
