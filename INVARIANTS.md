@@ -1,13 +1,13 @@
 # Invariants of `@bananapus/univ4-router-v6`
 
-Last updated: 2026-06-24.
+Last updated: 2026-10-21.
 
 Scope: the Uniswap V4 hook surface that serves Juicebox-aware routing and oracle observation history for project-token pools. This document is scoped to one repo — the canonical top-level invariants live in [`../INVARIANTS.md`](../INVARIANTS.md). See also: [`ARCHITECTURE.md`](./ARCHITECTURE.md), [`ADMINISTRATION.md`](./ADMINISTRATION.md), [`RISKS.md`](./RISKS.md), [`USER_JOURNEYS.md`](./USER_JOURNEYS.md), [`SKILLS.md`](./SKILLS.md), [`STYLE_GUIDE.md`](./STYLE_GUIDE.md), [`AUDIT_INSTRUCTIONS.md`](./AUDIT_INSTRUCTIONS.md), [`CHANGELOG.md`](./CHANGELOG.md).
 
 | Contract | Lines | Role |
 |----------|-------|------|
 | `IGeomeanOracle` | 33 | Canonical downstream interface for pool-local TWAP reads implemented by `JBUniswapV4Hook`. |
-| `JBUniswapV4Hook` | 1506 | V4 `BaseHook` that intercepts swaps involving a Juicebox project token, compares V4 quote vs JB terminal pay/cashout quote, routes whichever wins, and records oracle observations. |
+| `JBUniswapV4Hook` | 1652 | V4 `BaseHook` that intercepts swaps involving a Juicebox project token, fills buys from the pool while it beats issuance and mints the rest, fills sells from the pool while it beats the marginal reclaim rate and cashes out the rest, and records oracle observations. |
 | `libraries/Oracle` | 415 | Circular-buffer observation library (Uniswap V3-derived) backing `observe()` / TWAP lookups. |
 
 `JBUniswapV4Hook` is adminless after deployment: there is no owner, governance, pause, upgrade, or one-shot deployer setter. Constructor wiring (`poolManager`, `tokens`, `directory`, `prices`) is the entire control model. Pools opt in permanently by initializing with this hook address.
@@ -21,18 +21,21 @@ Scope: the Uniswap V4 hook surface that serves Juicebox-aware routing and oracle
 | `tokenIn` is JB token? | `tokenOut` is JB token? | Decision |
 |---|---|---|
 | no | no | Pass-through to V4 (`ZERO_DELTA`); `_afterSwap` enforces a tagged `amountOutMin` when present, else no hook-level minimum. |
-| no | yes | Buy-side route comparison: `previewPayFor` quote vs `estimateUniswapOutput`. |
-| yes | no | Sell-side route comparison: `calculateExpectedOutputFromSelling` (uses `previewCashOutFrom`) vs `estimateUniswapOutput`. |
-| yes | yes | Both sides evaluated; higher quote wins; ties favor buy side. |
+| no | yes | Buy: the hook swaps the pool itself, limited at the issuance price after fees, and mints the leftover input through the terminal (`_routeSplit`). A caller limit at or inside the fee-free issuance price keeps a plain V4 swap. |
+| yes | no | Sell: the best of the pool alone, cashing out everything, and a split (pool leg to the marginal reclaim rate, the rest cashed out), each quoted exactly (`_routeSell`). The fee tokens a cash-out leg mints to the hook (project 1's, and the fee revnet's on a revnet) are burned in the same swap. |
+| yes | yes | Routed as a sell of the input token. |
 
 JB-token detection requires the project to have a **registered ERC-20** (`JBTokens.tokenOf(projectId) == token`); credit-only projects never engage JB routing. (`JBUniswapV4Hook.sol:1090-1100`)
 
 ## A.1 Routing and best-execution
 
-- Every swap that touches a Juicebox project's registered ERC-20 is route-compared: the hook computes a V4-pool quote (`estimateUniswapOutput`) AND a Juicebox-side quote (`previewPayFor` on buys, `previewCashOutFrom` on sells) and routes through whichever yields more output. (`JBUniswapV4Hook.sol:734-803`)
+- A direct buy of a project's registered ERC-20 never returns fewer tokens than minting the whole input at the payer's issuance rate, less a rounding margin of `issuance / 1e6 + 3` units. The pool fills only while its marginal output after LP and protocol fees beats issuance, the leftover mints, and both legs together are checked against that floor (and a tagged `amountOutMin`), so V4 rounding on thin liquidity or an underdelivering mint reverts the swap. (`_routeSplit`)
+- The buy-side issuance rate is the terminal's `previewPayFor` beneficiary count, or, when that is zero while a pay hook specification forwards funds, the ruleset weight (`calculateExpectedTokensWithCurrency`): a buyback-style hook paid from inside a pool swap cannot unlock the PoolManager and mints at the weight. A reverting preview leaves the buy a plain V4 swap.
+- A direct sell never returns less than selling the whole input in the pool, and never less than cashing out everything when the PoolManager holds the whole input: it executes the best of the two and a split, each quoted exactly beforehand (`quoteSwap` runs the same pool swaps on the same state; the terminal enforces each cash-out's preview as its minimum). (`_routeSell`)
+- A sell's cash-out leg takes at most the PoolManager's current balance of the token; the outer swap sells the rest in the pool, and `_afterSwap` checks a tagged minimum against the legs' output (a transient slot) plus the pool's.
 - The swapper's minimum output is a **tag-gated** discriminator on `hookData` (`_amountOutMinFrom`). A minimum is read only when `hookData` begins with `JB_HOOK_DATA_TAG` and is at least 36 bytes (`tag ++ abi.encode(amountOutMin)`); that explicit minimum — including an explicit zero, a deliberate take-any-price opt-out — is enforced on the settlement balance delta on both routing paths, and the swapper **never receives fewer output tokens than it**. Any other payload — empty, or a generic integration's own metadata — carries no minimum (its first word is never mis-decoded as one), and the hook imposes no floor of its own; such a swap proceeds under the caller's own protection. (`JBUniswapV4Hook.sol:597-636, 664-673`)
-- For Juicebox-routed sells, the internal `routeMinimum` is raised to the previewed reclaim (`juiceboxExpectedOutput`) so the terminal cannot under-fill its own preview and still win the route. (`JBUniswapV4Hook.sol:819-825`)
-- For Juicebox-routed buys, `routeMinimum` is raised to `uniswapV4ExpectedTokens + 1`, enforcing the strict "better than V4" floor on actual settlement. (`JBUniswapV4Hook.sol:826-831`)
+- A sell's cash-out leg carries its own net preview as the terminal minimum, so the terminal cannot under-fill its preview and still win the leg. Its cash-outs and previews carry metadata telling the buyback hook to skip its pool sale (`_cashOutMetadataOf`).
+- A buy whose price limit is at or inside the fee-free issuance price (the buyback hook's swaps) is a plain V4 swap, so a terminal pay never mints through this hook from inside its own swap.
 - Final settlement is measured by **balance delta on the hook's side**, not the terminal's return value. Fee-on-transfer output tokens and over-reporting terminals cannot silently degrade realized output below `amountOutMin`. (`JBUniswapV4Hook.sol:1265-1298`)
 - If the Juicebox preview surface reverts, is unavailable, or a sell preview cannot be locally settled by the selected terminal, the JB quote degrades to `0` and the swap continues on V4 (conservative degrade rule). (`JBUniswapV4Hook.sol:281-286, 751-754`)
 - Buyback-hook metadata-only preview hints are **deliberately ignored** by live routing; only terminal-direct `previewPayFor` / `previewCashOutFrom` amounts count. Prevents same-pool indirect routing via composed hooks.
@@ -40,13 +43,15 @@ JB-token detection requires the project to have a **registered ERC-20** (`JBToke
 
 ## A.2 Reentrancy and recursion safety
 
-- The hook is designed to compose with `JBBuybackHook` on the **same V4 pool**. The transient `_routing` flag is set before `_routeThroughJuicebox` and re-entered swaps revert `JBUniswapV4Hook_ReentrantRouting`. Composed `buyback hook -> V4 pool -> this hook -> JB terminal -> buyback hook` cycles cannot recurse. (`JBUniswapV4Hook.sol:178, 682-683, 1203, 1304`)
+- The hook is designed to compose with `JBBuybackHook` on the **same V4 pool**. The transient `_routing` flag is set before `_routeThroughJuicebox` and re-entered swaps and liquidity changes on this hook's pools revert `JBUniswapV4Hook_ReentrantRouting`. Composed `buyback hook -> V4 pool -> this hook -> JB terminal -> buyback hook` cycles cannot recurse. (`JBUniswapV4Hook.sol:178, 682-683, 1203, 1304`)
 - The flag survives across the `poolManager.unlock` boundary because it lives in regular storage with read-then-write semantics inside the same transaction. Custom flag (not OZ `ReentrancyGuard`) avoids colliding with PoolManager's own unlock lock.
 
 ## A.3 Settlement integrity
 
-- Exact-output swaps (`params.amountSpecified > 0`) are **not supported** and revert `JBUniswapV4Hook_ExactOutputSwapsNotSupported`. Only exact-input semantics are honored. (`JBUniswapV4Hook.sol:699-701`)
-- On sell-side ERC-20 routes, the hook asserts the pre/post input-token balance is unchanged after the JB cash-out. A partial-fill terminal that returns or leaves project tokens behind reverts `JBUniswapV4Hook_SellInputReturned` before PoolManager settlement. (`JBUniswapV4Hook.sol:1209-1212, 1271-1284`)
+- Exact-output swaps (`params.amountSpecified > 0`) are plain V4 swaps: the hook returns a zero delta and routes nothing. Juicebox routing prices exact inputs only.
+- A cash-out leg is used only when its net average price is not past the caller's `sqrtPriceLimitX96` (`_pastLimitOf`).
+- Dynamic-fee pools cannot be initialized with this hook (`JBUniswapV4Hook_DynamicFeeNotSupported`).
+- On sell-side ERC-20 routes, the hook asserts the input-token balance has not risen after the JB cash-out (it can fall: selling a fee token burns the hook's whole balance of it). A partial-fill terminal that returns or leaves project tokens behind reverts `JBUniswapV4Hook_SellInputReturned` before PoolManager settlement. (`_routeThroughJuicebox`)
 - A non-zero sell that yields zero output reverts `JBUniswapV4Hook_JuiceboxSellDidNotDeliver` rather than settling a degenerate zero-output swap. (`JBUniswapV4Hook.sol:1286-1292`)
 - Temporary ERC-20 allowances granted to the terminal are checked for **exact consumption** post-call. Any leftover allowance reverts `JBUniswapV4Hook_TemporaryAllowanceNotConsumed`, preventing a terminal from holding live spend authority on the hook's residual balance across transactions. (`JBUniswapV4Hook.sol:1163-1174, 1226-1248`)
 - Balance-delta accounting means **pre-existing hook balances are never swept into settlement** — only the delta produced by *this* terminal call moves to PoolManager. Stranded-token attacks via dust pre-funding the hook are blocked.
@@ -54,18 +59,14 @@ JB-token detection requires the project to have a **registered ERC-20** (`JBToke
 
 ## A.4 Oracle protections
 
-- `_beforeSwap` route comparison uses **TWAP-derived** V4 quotes (`_getTWAPSqrtPrice` over `TWAP_PERIOD = 30 minutes`) when sufficient observation history exists, not raw spot price. (`JBUniswapV4Hook.sol:140, 985-1031`)
-- When observation history is insufficient (`cardinality < 2` or oldest observation < 30min old), the V4 route-*comparison* quote (`estimateUniswapOutput`) falls back to current spot. This is documented and bounded; a tagged `amountOutMin`, when supplied, provides the absolute execution floor. The hook derives no settlement floor of its own from the TWAP. (`JBUniswapV4Hook.sol:990-1014, 410-432`)
-- Once TWAP is expected to be available, observation-read failures cause the swap to revert rather than silently degrade to spot pricing. Fail-closed on mature oracles. (`JBUniswapV4Hook.sol:1017-1019`)
-- `MAX_TWAP_CARDINALITY = 1801` preserves a full 30-minute window at the oracle's maximum one-observation-per-second write cadence, including both endpoints. If a pool still has partial coverage during warmup, consumers can detect that with `hasObservationCoverage(...)` / `observationCoverageOf(...)`, and the hook quotes against the longest retained best-effort window. (`JBUniswapV4Hook.sol:124-136, 1218-1248`)
-- Swap-fee normalization happens **before** the price-ratio conversion inside `estimateUniswapOutput`, mirroring V4 swap math so the estimator's rounding matches actual execution rounding (avoids off-by-one drift at typical fee tiers for small inputs). (`JBUniswapV4Hook.sol:418-445`)
+- Routing reads no TWAP: buys and sells swap the pool itself and compare against the real pool (`quoteSwap`). The oracle serves external readers through `observe`; the hook derives no settlement floor from it, and a tagged `amountOutMin`, when supplied, is the absolute execution floor.
+- `MAX_TWAP_CARDINALITY = 1801` preserves a full 30-minute window at the oracle's maximum one-observation-per-second write cadence, including both endpoints. If a pool still has partial coverage during warmup, consumers can detect that with `hasObservationCoverage(...)` / `observationCoverageOf(...)`; routing does not read the oracle. (`JBUniswapV4Hook.sol:124-136, 1218-1248`)
 - The TWAP arithmetic-mean tick is rounded toward negative infinity for negative tick deltas (Uniswap V3 convention), avoiding silent truncation bias on bearish moves. (`JBUniswapV4Hook.sol:1080-1087`)
 
 ## A.5 Currency and token handling
 
 - Native ETH is normalized via `_normalizeToken`: Uniswap's `address(0)` maps to Juicebox's `JB_NATIVE_TOKEN` (`0xEEee...EEeE`) before terminal lookup and preview calls. Both sides of the swap are normalized consistently. (`JBUniswapV4Hook.sol:1033-1039`)
-- Token decimals are read with `try IERC20Metadata.decimals()`; failures default to `18`. Tokens advertising more than `77` decimals are treated as unsupported (would overflow `10**decimals`) and the route degrades to `0`. (`JBUniswapV4Hook.sol:330-333, 966-979`)
-- Currency-ID collisions on `uint32(uint160(token))` are bounded to view-only preview helpers and never affect live execution path selection (collision rate ~0.001% at ~10k active tokens; see `RISKS.md §9 Accepted risks and notes`).
+- The weight-based rate reads the payment's currency and decimals from the primary terminal's accounting context for the token, as the terminal store does. No terminal or context, or more than `77` decimals (would overflow `10**decimals`), returns `0`.
 
 ---
 
@@ -78,7 +79,7 @@ There are no operator powers on this hook. After deployment:
 - **No owner.** No `Ownable`, no `_DEPLOYER`, no governance role.
 - **No pause.** Swaps cannot be paused, blocked, or fee-switched on hooked pools.
 - **No upgrade.** Hook bytecode is fixed; recovery from a bug requires a new hook deployment + pool migration.
-- **No retunable parameters.** `TWAP_PERIOD = 1800`, `MAX_TWAP_CARDINALITY = 1801`, `TWAP_SLIPPAGE_DENOMINATOR = 10000`, `JB_HOOK_DATA_TAG`, `MAX_V4_DELTA = type(int128).max`, `JB_NATIVE_TOKEN`, `UNISWAP_NATIVE_ETH` are all `public constant`. (`JBUniswapV4Hook.sol:124-146`)
+- **No retunable parameters.** `MAX_TWAP_CARDINALITY = 1801`, `JB_HOOK_DATA_TAG`, `MAX_V4_DELTA = type(int128).max`, `JB_NATIVE_TOKEN`, `UNISWAP_NATIVE_ETH` are all `public constant`. (`JBUniswapV4Hook.sol:124-146`)
 - **No registry / mapping.** Pool-to-routing settings, allowlists, blocklists — none exist. The hook applies uniformly to every pool that initializes against it.
 - **No setChainSpecificConstants.** Unlike `JBBuybackHook` / `JBRouterTerminal`, this hook has no one-shot deployer-only setter. All chain wiring is in the constructor.
 
@@ -103,13 +104,13 @@ V4 `BaseHook`. Holds no persistent project funds — only transient swap-in-flig
 
 **PoolManager-only callbacks (the only state-mutating external surface):**
 
-- **`_beforeSwap(_, key, params, hookData) → (selector, BeforeSwapDelta, uint24)`** — PoolManager only. Reads an explicit `amountOutMin` only when `hookData` begins with `JB_HOOK_DATA_TAG ++ abi.encode(amountOutMin)` (`0` when absent), rejects exact-output, identifies JB project tokens via `_projectIdForRegisteredToken`, queries both terminals' previews, compares against `estimateUniswapOutput`, routes the winning side.
-  - **Invariants:** Recursive routing reverts (`_routing` flag); exact-output rejected; quotes above `MAX_V4_DELTA` ineligible; JB-routed buys must beat V4 strictly (`> uniswapV4ExpectedTokens`); JB-routed sells must deliver `>= juiceboxExpectedOutput`. (`JBUniswapV4Hook.sol:672-851`)
+- **`_beforeSwap(_, key, params, hookData) → (selector, BeforeSwapDelta, uint24)`** — PoolManager only. Reads an explicit `amountOutMin` only when `hookData` begins with `JB_HOOK_DATA_TAG ++ abi.encode(amountOutMin)` (`0` when absent), leaves exact-output swaps to the pool, identifies JB project tokens via `_projectIdForRegisteredToken`, queries the terminals' previews, and routes the buy or sell through `_routeSplit`.
+  - **Invariants:** Recursive routing reverts (transient `_routing` flag); exact-output swaps are plain; quotes above `MAX_V4_DELTA` ineligible; buys deliver at least issuance on the whole input less the rounding margin; sells deliver the best of the pool alone, the all-reclaim preview (when the PoolManager holds the input) and a split.
 
-- **`_afterSwap(_, key, params, delta, hookData) → (selector, int128)`** — PoolManager only. For V4-routed swaps (where `_beforeSwap` returned `ZERO_DELTA`), validates the actual output delta against a tagged `amountOutMin` (`_amountOutMinFrom`) when present. Records a fresh oracle observation.
+- **`_afterSwap(_, key, params, delta, hookData) → (selector, int128)`** — PoolManager only. For swaps the pool settles in whole or in part, validates the pool's output plus a partial split's legs (`_splitAmountOut`, reset here) against a tagged `amountOutMin` (`_amountOutMinFrom`) when present. Records a fresh oracle observation.
   - **Invariants:** a tagged minimum (when present) is enforced on real V4 swaps; untagged/empty `hookData` carries no minimum and is allowed (no revert, no hook floor); observation written exactly once. (`JBUniswapV4Hook.sol:585-640`)
 
-- **`_afterInitialize(_, key, _, _) → selector`** — PoolManager only. Initializes the per-pool `Oracle.Observation` array via `Oracle.initialize`, sets `ObservationState{index:0, cardinality:1, cardinalityNext:1}`.
+- **`_afterInitialize(_, key, _, _) → selector`** — PoolManager only. Rejects dynamic-fee pools, initializes the per-pool `Oracle.Observation` array via `Oracle.initialize`, sets `ObservationState{index:0, cardinality:1, cardinalityNext:1}`.
   - **Invariants:** one-shot per pool; first observation timestamp is `block.timestamp`. (`JBUniswapV4Hook.sol:581-590`)
 
 - **`_afterAddLiquidity(_, key, _, _, _, _) → (selector, BalanceDelta)`** — PoolManager only. Records an observation; returns zero balance delta. (`JBUniswapV4Hook.sol:562-576`)
@@ -120,9 +121,7 @@ V4 `BaseHook`. Holds no persistent project funds — only transient swap-in-flig
 
 - **`calculateExpectedOutputFromSelling(projectId, tokenAmountIn, outputToken, terminal) view → uint256`** — Quotes a JB cash-out using `terminal.previewCashOutFrom`. Requires the selected terminal to locally settle the gross reclaim plus cash-out hook amounts before the sell quote is eligible. Computes exact zero-tax net via `_exactZeroTaxNet`; for positive tax, subtracts `JBFees.standardFeeAmountFrom(gross)`. Returns `0` on any catch (conservative degrade). (`JBUniswapV4Hook.sol:239-287`)
 
-- **`calculateExpectedTokensWithCurrency(projectId, paymentToken, paymentAmount) view → uint256`** — Reference helper using **static ruleset weight** (not preview). Intentionally more permissive than live routing. Live `_beforeSwap` does not use this for buy decisions. Returns `0` on controller revert, price-feed revert, or `decimals > 77`. (`JBUniswapV4Hook.sol:298-378`)
-
-- **`estimateUniswapOutput(poolId, key, amountIn, zeroForOne) view → uint256`** — TWAP-quote estimator. Falls back to spot when `_getTWAPSqrtPrice == 0`. Applies combined protocol+LP swap fee BEFORE the price-ratio conversion to mirror V4 swap math. Linear (no liquidity-depth simulation). (`JBUniswapV4Hook.sol:397-467`)
+- **`calculateExpectedTokensWithCurrency(projectId, paymentToken, paymentAmount) view → uint256`** — Ruleset-weight issuance (not preview), converted the way the terminal store converts (one base-currency unit priced in the payment currency at the payment token's decimals). Live buys use it only when the terminal preview forwards funds to a pay hook; the mint leg's `minReturnedTokens` then enforces it. Returns `0` on controller revert, price-feed revert, or `decimals > 77`. (`JBUniswapV4Hook.sol:298-378`)
 
 - **`hasObservationCoverage(key, secondsAgo) view → bool`** — Canonical `IGeomeanOracle` coverage check. Returns whether retained observations cover the requested lookback window. (`JBUniswapV4Hook.sol:480-482`)
 
@@ -143,7 +142,7 @@ V4 `BaseHook`. Holds no persistent project funds — only transient swap-in-flig
 
 **Internal-only:**
 
-- `_routeThroughJuicebox`, `_settleOutput`, `_createSwapDelta`, `_calculateTokensWithCurrency`, `_exactZeroTaxNet`, `_getPrimaryTerminal`, `_getTokenDecimals`, `_getTWAPSqrtPrice`, `_normalizeToken`, `_observeTWAP`, `_projectIdForRegisteredToken`, `_recordObservation`, `_requireTemporaryAllowanceConsumed`.
+- `_routeThroughJuicebox`, `_settleOutput`, `_createSwapDelta`, `_calculateTokensWithCurrency`, `_exactZeroTaxNet`, `_getPrimaryTerminal`, `_getTokenDecimals`, `_normalizeToken`, `_observeTWAP`, `_projectIdForRegisteredToken`, `_recordObservation`, `_requireTemporaryAllowanceConsumed`.
 
 ## C.2 `Oracle` — `src/libraries/Oracle.sol`
 
@@ -184,15 +183,15 @@ There is no `setChainSpecificConstants` one-shot binder pattern on this contract
 
 ## Section D — Cross-cutting invariants
 
-1. **Best-execution floor.** A tagged `amountOutMin` (`JB_HOOK_DATA_TAG ++ abi.encode(min)`, when present) is enforced on the actual settlement balance delta — not on the terminal's return value — on both `_beforeSwap` (JB-routed) and `_afterSwap` (V4-routed). Fee-on-transfer output tokens cannot silently undercut it. A swap that omits the tag carries no hook-level minimum and proceeds under the caller's own protection; the hook imposes no floor of its own. (JB-routed legs additionally carry their own `routeMinimum` — the deterministic cash-out preview on sells, or "beat the displaced V4 quote" on buys.)
+1. **Best-execution floor.** A tagged `amountOutMin` (`JB_HOOK_DATA_TAG ++ abi.encode(min)`, when present) is enforced on the actual settlement balance delta — not on the terminal's return value — on both `_beforeSwap` (JB-routed) and `_afterSwap` (V4-routed). Fee-on-transfer output tokens cannot silently undercut it. A swap that omits the tag carries no hook-level minimum and proceeds under the caller's own protection; the hook imposes no floor of its own. (JB-routed legs additionally carry their own floor: the deterministic cash-out preview on sells, issuance on buys. On a split the tagged minimum covers both legs and any pool remainder together.)
 
-2. **Conservative degrade on preview failure.** Whenever `previewPayFor` / `previewCashOutFrom` / `pricePerUnitOf` / `currentRulesetOf` reverts or returns implausible metadata (extreme decimals), the JB quote falls to `0` and V4 wins the route. No path resurrects stale static math for live execution.
+2. **Conservative degrade on preview failure.** Whenever `previewPayFor` / `previewCashOutFrom` / `pricePerUnitOf` / `currentRulesetOf` reverts or returns implausible metadata (extreme decimals), the JB quote falls to `0` and the swap stays on V4. No path resurrects stale static math for live execution.
 
-3. **Live routing trusts only terminal-direct previews.** Buyback-hook metadata-only quotes are explicitly excluded from `_beforeSwap` route scoring. The static helper `calculateExpectedTokensWithCurrency` is an offchain/reference surface only.
+3. **Live routing trusts only terminal-direct previews.** Buyback-hook metadata-only quotes are explicitly excluded from `_beforeSwap` route scoring. `calculateExpectedTokensWithCurrency` prices a buy only when the preview forwards funds to a pay hook, and the terminal's `minReturnedTokens` enforces it.
 
-4. **Reentrancy guard composes safely with buyback hooks.** `_routing` is a simple bool that survives across `poolManager.unlock`. Composed `buyback -> V4 -> this -> JB -> buyback` cycles revert at the second `_beforeSwap` entry.
+4. **Reentrancy guard composes safely with buyback hooks.** `_routing` is a transient bool, set for the terminal leg and cleared after it, so it lasts only within the transaction. Composed `buyback -> V4 -> this -> JB -> buyback` cycles revert at the second `_beforeSwap` entry. The buyback hook's swaps are plain V4 swaps here (their limit is inside the issuance price), and a buyback hook paid by this hook's mint leg finds the PoolManager unlocked and mints at the weight.
 
-5. **No exact-output, no admin surface, no upgrade path.** The hook's runtime is fully constrained at deployment. The only mutable storage is the per-pool oracle ring buffer + observation state + transient `_routing` flag.
+5. **No exact-output routing, no admin surface, no upgrade path.** The hook's runtime is fully constrained at deployment. The only mutable storage is the per-pool oracle ring buffer + observation state + transient `_routing` flag.
 
 6. **Balance-delta accounting everywhere.** Pre-existing hook balances are never swept into PoolManager settlement; only the delta produced by *this* terminal call moves. Stranded-token griefing blocked.
 
@@ -202,15 +201,15 @@ There is no `setChainSpecificConstants` one-shot binder pattern on this contract
 
 9. **MAX_TWAP_CARDINALITY-bounded oracle work.** Ring buffer capped at 1801 slots. Auto-grows on demand; once at cap, only one fresh write per second is retained (same-second writes are no-ops in the oracle library). The cap is large enough to preserve the 30-minute window at one observation per second. (`JBUniswapV4Hook.sol:124-136, 1164-1248`)
 
-10. **TWAP-then-spot fallback chain.** `estimateUniswapOutput` prefers TWAP when `cardinality >= 2` AND oldest observation `>= TWAP_PERIOD` old; otherwise it falls back to slot0 spot. `amountOutMin` is the absolute floor in either mode.
+10. **No quote view.** The hook exposes no swap quote; integrators quote through Uniswap's V4 Quoter, which simulates the hook. `amountOutMin` is the absolute floor.
 
 11. **PoolManager-only callbacks.** Every state-mutating function is `internal` and inherits `onlyPoolManager` from `BaseHook`. EOAs cannot invoke `_beforeSwap` / `_afterSwap` / `_afterInitialize` / `_afterAddLiquidity` / `_afterRemoveLiquidity` directly.
 
 12. **Project-token identification is precise.** `_projectIdForRegisteredToken(token)` returns non-zero only when `TOKENS.tokenOf(projectId) == token`. Credit-only projects (no registered ERC-20) and projects with a different registered token both fall through to the normal V4 swap path. (`JBUniswapV4Hook.sol:1090-1100`)
 
-13. **Tie-break determinism.** When both buy-side and sell-side JB routes are eligible (cross-project swap where both tokens are JB project tokens), buy-side wins ties (`routeViaBuySide = ... buySideExpectedOutput >= sellSideExpectedOutput`). The router never evaluates both paths twice. (`JBUniswapV4Hook.sol:795-800`)
+13. **Cross-project determinism.** A swap between two project tokens is a buy of the output when its issuance for the input fits V4's deltas and is at least the input's reclaim (a reclaim V4's deltas cannot carry is ignored), and a sell of the input otherwise. Ties go to the buy, as in 1.2.0. Only the chosen side's Juicebox path executes.
 
-14. **No swap-time external configuration.** The hook reads only PoolManager state (`slot0`, `liquidity`) and the per-pool oracle ring buffer during `_beforeSwap` route comparison. No registry lookups, no storage-mutation reads, no off-chain oracle calls. Behavior on a given block is fully determined by on-chain state at that block.
+14. **No swap-time external configuration.** Besides Juicebox previews and the data hook's `BUYBACK_HOOK()` (only to key the skip metadata), the hook reads PoolManager state and its own `quoteSwap` simulation during `_beforeSwap`. No storage-mutation reads, no off-chain oracle calls. Behavior on a given block is fully determined by on-chain state at that block.
 
 15. **Strict separation between offchain helpers and live routing trust surfaces.** `calculateExpectedTokensWithCurrency` uses static ruleset weight; `calculateExpectedOutputFromSelling` uses the live preview surface. `_beforeSwap` invokes the live preview path directly (not the static helper). This boundary is documented and tested via `test/regression/PreviewPayForRouting.t.sol`.
 
@@ -222,8 +221,8 @@ This repo holds **no privileged role** of its own. All implied centralization fl
 
 - **PoolManager (`IPoolManager`).** Uniswap V4 PoolManager is the sole authorized caller of every hook callback. A compromised PoolManager could fabricate `_beforeSwap` / `_afterSwap` calls; this is the trust posture of every V4 hook.
 - **Juicebox Directory / Controllers / Terminals.** The hook trusts `DIRECTORY.primaryTerminalOf(...)` for terminal lookup and `terminal.previewPayFor(...)` / `previewCashOutFrom(...)` for live previews. A misconfigured controller or a malicious data hook can return arbitrary preview values; the hook's defenses are (a) conservative degrade to `0` on revert, (b) sell-preview local-surplus gating before route selection, (c) `amountOutMin` enforced against actual settlement balance delta, (d) sell-input conservation, (e) temporary-allowance consumption check.
-- **`JBPrices`.** USD-denominated currency conversion in `calculateExpectedTokensWithCurrency` consults `PRICES.pricePerUnitOf(...)`. A compromised price feed only affects the **reference helper** — live `_beforeSwap` buy decisions use `previewPayFor`, which already accounts for the project's configured feed inside the terminal.
-- **`JBTokens`.** `TOKENS.projectIdOf(...)` and `TOKENS.tokenOf(...)` decide which swaps engage JB routing at all. A maliciously registered project token would only force more swaps into JB route-comparison; the comparison still floors at `amountOutMin`.
+- **`JBPrices`.** USD-denominated currency conversion in `calculateExpectedTokensWithCurrency` consults `PRICES.pricePerUnitOf(...)`. A compromised price feed affects live buys only when the preview forwards funds to a pay hook; an overstated rate makes the mint leg's `minReturnedTokens` revert, and an understated one lets the pool fill past true issuance, lowering the buyer's floor.
+- **`JBTokens`.** `TOKENS.projectIdOf(...)` and `TOKENS.tokenOf(...)` decide which swaps engage JB routing at all. A maliciously registered project token would only force more swaps into JB routing; the swap still floors at `amountOutMin`.
 - **Pool creator's hook choice.** Whoever initializes a V4 pool with this hook permanently binds the pool to this routing logic. There is no admin override.
 - **Feeless-address misregistration.** If the protocol owner registers this hook as feeless on a `JBMultiTerminal`, sell-side cash-outs routed through it would inherit fee exemption (see `RISKS.md §5`). This is a registry-side hazard, not a hook-side power.
 
@@ -233,22 +232,21 @@ This repo holds **no privileged role** of its own. All implied centralization fl
 
 - Reentrancy guard set/check: `src/JBUniswapV4Hook.sol:178, 682-683, 1203, 1304`
 - `amountOutMin` required: `src/JBUniswapV4Hook.sol:688-693`
-- Exact-output rejection: `src/JBUniswapV4Hook.sol:699-701`
-- Route comparison + eligibility: `src/JBUniswapV4Hook.sol:734-803`
-- `routeMinimum` raise for sell: `src/JBUniswapV4Hook.sol:819-825`
-- `routeMinimum` raise for buy: `src/JBUniswapV4Hook.sol:826-831`
+- Exact-output passthrough, cash-out price limit (`_pastLimitOf`), buy pool-leg quote: `_beforeSwap`, `_routeSplit`, `_routeSell` in `src/JBUniswapV4Hook.sol`
+- Buy split and issuance floor: `_routeSplit` in `src/JBUniswapV4Hook.sol`
+- Sell choice, inventory cap: `_routeSell`; pool quotes: `quoteSwap` in `src/JBUniswapV4Hook.sol`
+- Buyback skip metadata: `_cashOutMetadataOf` in `src/JBUniswapV4Hook.sol`
 - `_routeThroughJuicebox` body: `src/JBUniswapV4Hook.sol:1191-1307`
 - Sell-input conservation revert: `src/JBUniswapV4Hook.sol:1271-1284`
 - Zero-output sell revert: `src/JBUniswapV4Hook.sol:1286-1292`
 - Final balance-delta `amountOutMin` enforcement: `src/JBUniswapV4Hook.sol:1294-1298`
 - Temporary allowance consumed check: `src/JBUniswapV4Hook.sol:1163-1174, 1247`
 - Conservative degrade in sell preview: `src/JBUniswapV4Hook.sol:281-286`
-- Buy preview degrade to `0`: `src/JBUniswapV4Hook.sol:751-759`
+- Buy issuance read and degrade to `0`: `_issuanceOf` in `src/JBUniswapV4Hook.sol`
 - `_exactZeroTaxNet` zero-tax fee computation: `src/JBUniswapV4Hook.sol:917-949`
 - Oracle initialize: `src/JBUniswapV4Hook.sol:581-590` + `src/libraries/Oracle.sol:71-83`
 - Observation recording (cap-aware guard): `src/JBUniswapV4Hook.sol:1105-1161`
-- TWAP staleness fallback to spot: `src/JBUniswapV4Hook.sol:410-416, 985-1014`
 - `getHookPermissions` declaration: `src/JBUniswapV4Hook.sol:472-489`
 - `observe` / `observeTWAP`: `src/JBUniswapV4Hook.sol:498-552`
 - `_projectIdForRegisteredToken` precise check: `src/JBUniswapV4Hook.sol:1090-1100`
-- Constants (`TWAP_PERIOD`, `MAX_TWAP_CARDINALITY`, `MAX_V4_DELTA`, `JB_NATIVE_TOKEN`, `UNISWAP_NATIVE_ETH`): `src/JBUniswapV4Hook.sol:124-146`
+- Constants (`MAX_TWAP_CARDINALITY`, `MAX_V4_DELTA`, `JB_NATIVE_TOKEN`, `UNISWAP_NATIVE_ETH`): `src/JBUniswapV4Hook.sol:124-146`

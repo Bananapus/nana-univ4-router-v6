@@ -53,6 +53,10 @@ contract MockJBTokens_Preview {
     function creditBalanceOf(address, uint256) external pure returns (uint256) {
         return 0;
     }
+
+    function totalBalanceOf(address, uint256) external pure returns (uint256) {
+        return 0;
+    }
 }
 
 /// @notice Mock directory that can return different terminals per (project, token).
@@ -557,7 +561,7 @@ contract PreviewPayForFallbackTest is Test {
         uint256 staticEstimate = hook.calculateExpectedTokensWithCurrency({
             projectId: 123, paymentToken: address(paymentToken), paymentAmount: 1 ether
         });
-        assertGt(staticEstimate, 0, "static estimate should be positive");
+        assertEq(staticEstimate, 0, "no accounting context, so no static estimate");
 
         uint256 balanceBefore = projectToken.balanceOf(address(this));
         SwapParams memory params = SwapParams({
@@ -695,7 +699,7 @@ contract NoTerminalFallbackTest is Test {
         uint256 staticEstimate = hook.calculateExpectedTokensWithCurrency({
             projectId: 123, paymentToken: address(paymentToken), paymentAmount: 1 ether
         });
-        assertGt(staticEstimate, 0, "static estimate should be positive without terminal");
+        assertEq(staticEstimate, 0, "no terminal, so no static estimate");
 
         uint256 balanceBefore = projectToken.balanceOf(address(this));
         SwapParams memory params = SwapParams({

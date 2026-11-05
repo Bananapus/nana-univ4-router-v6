@@ -19,7 +19,7 @@ contract StaleNewestObservationPoC is JuiceboxHookTest {
             (, cardinality,) = hook.states(id);
         }
 
-        assertFalse(hook.hasObservationCoverage(key, hook.TWAP_PERIOD()), "high-cadence buffer is under-covered");
+        assertFalse(hook.hasObservationCoverage(key, uint32(1800)), "high-cadence buffer is under-covered");
         uint32 oldestSecondsAgo = hook.observationCoverageOf(key);
         assertGt(oldestSecondsAgo, 0, "high-cadence buffer still exposes best-effort coverage");
 

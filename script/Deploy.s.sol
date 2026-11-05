@@ -26,7 +26,6 @@ contract DeployScript is Script {
         );
 
         uint256 deployerPrivateKey = vm.envUint("PRIVATE_KEY");
-        address deployer = vm.addr(deployerPrivateKey);
 
         // Calculate the required flags for the hook permissions.
         uint160 flags = uint160(
@@ -40,7 +39,7 @@ contract DeployScript is Script {
 
         // Mine a valid hook address.
         (address hookAddress, bytes32 salt) = HookMiner.find({
-            deployer: deployer,
+            deployer: CREATE2_FACTORY,
             flags: flags,
             creationCode: type(JBUniswapV4Hook).creationCode,
             constructorArgs: constructorArgs
@@ -55,6 +54,7 @@ contract DeployScript is Script {
         });
 
         console2.log({p0: "JBUniswapV4Hook deployed at:", p1: address(hook)});
+        require(address(hook) == hookAddress, "hook address mismatch");
 
         vm.stopBroadcast();
     }

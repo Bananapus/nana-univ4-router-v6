@@ -15,6 +15,7 @@ import {CurrencySettler} from "@uniswap/v4-core/test/utils/CurrencySettler.sol";
 
 import {MockERC20} from "../mock/MockERC20.sol";
 import {PreviewPayForRoutingTest} from "./PreviewPayForRouting.t.sol";
+import {OracleQuote} from "../utils/OracleQuote.sol";
 
 contract UncheckedJuiceboxSwapRouter {
     using SafeERC20 for IERC20;
@@ -238,7 +239,7 @@ contract JBRouteMinOutputBypassTest is PreviewPayForRoutingTest {
         _installMaliciousTerminal();
 
         uint256 amountIn = 1 ether;
-        uint256 v4Quote = hook.estimateUniswapOutput({poolId: id, key: key, amountIn: amountIn, zeroForOne: zeroForOne});
+        uint256 v4Quote = OracleQuote.quote(hook, manager, key, amountIn, zeroForOne);
         maliciousTerminal.setPreviewReturn(v4Quote + 1 ether);
         maliciousTerminal.setActualPayAmount(v4Quote / 2);
 

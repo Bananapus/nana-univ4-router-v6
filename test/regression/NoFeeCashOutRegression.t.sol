@@ -14,6 +14,7 @@ import {IJBTerminal} from "@bananapus/core-v6/src/interfaces/IJBTerminal.sol";
 
 import {MockERC20} from "../mock/MockERC20.sol";
 import {JuiceboxHookTest} from "../JBUniswapV4Hook.t.sol";
+import {OracleQuote} from "../utils/OracleQuote.sol";
 
 contract NoFeeCashOutTerminal {
     // forge-lint: disable-next-line(screaming-snake-case-immutable)
@@ -93,7 +94,7 @@ contract RegressionRegression is JuiceboxHookTest {
         uint256 sellSideQuote = hook.calculateExpectedOutputFromSelling(
             sellProjectId, 1 ether, address(dualToken1), IJBTerminal(address(mockJBMultiTerminal))
         );
-        uint256 v4Quote = hook.estimateUniswapOutput(dualKey.toId(), dualKey, 1 ether, true);
+        uint256 v4Quote = OracleQuote.quote(hook, manager, dualKey, 1 ether, true);
 
         assertEq(buySideQuote, 5000 ether, "buy-side preview sanity");
         assertEq(sellSideQuote, 10_000 ether, "sell-side preview sanity");
@@ -125,7 +126,7 @@ contract RegressionRegression is JuiceboxHookTest {
 
         token0.approve(address(jbSwapRouter), 1 ether);
 
-        uint256 v4Quote = hook.estimateUniswapOutput(id, key, 1 ether, true);
+        uint256 v4Quote = OracleQuote.quote(hook, manager, key, 1 ether, true);
         assertGt(v4Quote, 0, "V4 route is otherwise live");
 
         // With the try-catch fix, the swap no longer reverts. It falls back to V4.

@@ -23,6 +23,8 @@ import {MockERC20, MockERC20WithDecimals} from "./mock/MockERC20.sol";
 import {JuiceboxSwapRouter} from "./utils/JuiceboxSwapRouter.sol";
 // Import Juicebox interfaces and structs from the hook file
 import {IJBTokens, IJBPrices, IJBDirectory} from "../src/JBUniswapV4Hook.sol";
+import {JBAccountingContext} from "@bananapus/core-v6/src/structs/JBAccountingContext.sol";
+import {JBConstants} from "@bananapus/core-v6/src/libraries/JBConstants.sol";
 import {JBRuleset} from "@bananapus/core-v6/src/structs/JBRuleset.sol";
 import {JBRulesetMetadata} from "@bananapus/core-v6/src/structs/JBRulesetMetadata.sol";
 import {JBRulesetMetadataResolver} from "@bananapus/core-v6/src/libraries/JBRulesetMetadataResolver.sol";
@@ -30,6 +32,7 @@ import {IJBRulesetApprovalHook} from "@bananapus/core-v6/src/interfaces/IJBRules
 import {IJBTerminalStore} from "@bananapus/core-v6/src/interfaces/IJBTerminalStore.sol";
 import {JBCashOutHookSpecification} from "@bananapus/core-v6/src/structs/JBCashOutHookSpecification.sol";
 import {HookMiner} from "@uniswap/v4-periphery/src/utils/HookMiner.sol";
+import {OracleQuote} from "./utils/OracleQuote.sol";
 
 // ──────────────────────────────────────────────────────────────────────────
 // Mock Juicebox contracts (copied from JBUniswapV4Hook.t.sol)
@@ -45,6 +48,10 @@ contract MockJBTokens {
     }
 
     function creditBalanceOf(address, uint256) external pure returns (uint256) {
+        return 0;
+    }
+
+    function totalBalanceOf(address, uint256) external pure returns (uint256) {
         return 0;
     }
 }
@@ -146,6 +153,15 @@ contract MockJBMultiTerminal {
 
     function setTerminalStore(address terminalStore) external {
         TERMINAL_STORE = MockJBTerminalStore(terminalStore);
+    }
+
+    /// @dev The store prices a payment with this context: native ETH in the base currency (ID 1), other tokens in
+    /// their address-derived currency at their own decimals.
+    function accountingContextForTokenOf(uint256, address token) external view returns (JBAccountingContext memory) {
+        if (token == JBConstants.NATIVE_TOKEN) return JBAccountingContext({token: token, decimals: 18, currency: 1});
+        // forge-lint: disable-next-line(unsafe-typecast)
+        return
+            JBAccountingContext({token: token, decimals: MockERC20(token).decimals(), currency: uint32(uint160(token))});
     }
 
     // forge-lint: disable-next-line(mixed-case-function)
@@ -499,171 +515,6 @@ contract StressAndOrderOfMagnitudeTest is Test {
     }
 
     // ──────────────────────────────────────────────────────────────────────
-    // 1. Fuzz estimateUniswapOutput with extreme amountIn values
-    //    The function uses FullMath.mulDiv internally which should handle
-    //    the full uint256 range without overflow. We verify it never reverts.
-    // ──────────────────────────────────────────────────────────────────────
-    function testFuzz_EstimateOutput_ExtremeAmounts(uint128 amountIn) public view {
-        // Bound to >= 1 so we always have a meaningful input
-        amountIn = uint128(bound(uint256(amountIn), 1, type(uint128).max));
-
-        // At 1:1 price (SQRT_PRICE_1_1), estimateUniswapOutput should not revert
-        // for any valid amountIn. The function uses FullMath.mulDiv(amountIn, priceSquared, Q192)
-        // where priceSquared = sqrtPriceX96^2 and Q192 = (2^96)^2.
-        //
-        // Since sqrtPriceX96 is uint160, priceSquared fits in 320 bits, and FullMath.mulDiv
-        // is designed to handle 512-bit intermediates, this should never overflow.
-        uint256 estimatedOut = hook.estimateUniswapOutput(id, key, uint256(amountIn), true);
-
-        // Output should be non-zero for non-zero input at 1:1 price (after 0.3% fee)
-        if (amountIn > 1000) {
-            // For very small amounts, rounding can produce 0, but for amounts > 1000 wei
-            // at 1:1 price we should always get some output
-            assertGt(estimatedOut, 0, "Non-trivial input should produce non-zero output");
-        }
-
-        // Also test the reverse direction (oneForZero)
-        uint256 estimatedOutReverse = hook.estimateUniswapOutput(id, key, uint256(amountIn), false);
-        if (amountIn > 1000) {
-            assertGt(estimatedOutReverse, 0, "Reverse direction should also produce non-zero output");
-        }
-    }
-
-    // ──────────────────────────────────────────────────────────────────────
-    // 2. Test estimateUniswapOutput with sqrtPriceX96 near MAX_SQRT_PRICE
-    //
-    //    estimateUniswapOutput uses `uint256(sqrtPriceX96) * sqrtPriceX96`
-    //    at line 350 which overflows for sqrtPriceX96 > ~type(uint128).max.
-    //    MAX_SQRT_PRICE (~1.46e48) squared is ~2.13e96, exceeding uint256.max (~1.16e77).
-    //
-    //    The _getQuoteAtTick function handles this correctly by branching on
-    //    sqrtRatioX96 <= type(uint128).max, but estimateUniswapOutput does not.
-    //
-    //    This test verifies the overflow at extreme prices and confirms the
-    //    function works for the safe range (sqrtPriceX96 <= type(uint128).max).
-    // ──────────────────────────────────────────────────────────────────────
-    function test_EstimateOutput_VeryHighSqrtPrice() public {
-        // Part A: Verify that near-MAX_SQRT_PRICE overflows (known limitation)
-        {
-            MockERC20 hiToken0 = new MockERC20("HiToken0", "HT0");
-            MockERC20 hiToken1 = new MockERC20("HiToken1", "HT1");
-            if (address(hiToken0) > address(hiToken1)) {
-                (hiToken0, hiToken1) = (hiToken1, hiToken0);
-            }
-
-            uint160 highSqrtPrice = TickMath.MAX_SQRT_PRICE - 1;
-
-            PoolKey memory hiKey = PoolKey({
-                currency0: Currency.wrap(address(hiToken0)),
-                currency1: Currency.wrap(address(hiToken1)),
-                fee: 3000,
-                tickSpacing: 60,
-                hooks: IHooks(address(hook))
-            });
-
-            hiToken0.mint(address(this), 1000 ether);
-            hiToken1.mint(address(this), 1000 ether);
-            hiToken0.approve(address(modifyLiquidityRouter), 1000 ether);
-            hiToken1.approve(address(modifyLiquidityRouter), 1000 ether);
-
-            manager.initialize(hiKey, highSqrtPrice);
-            PoolId hiId = hiKey.toId();
-
-            // After the overflow fix (UV4-14), this should succeed instead of reverting.
-            // The fix uses FullMath.mulDiv to avoid overflow when sqrtPrice > uint128.max.
-            uint256 output = hook.estimateUniswapOutput(hiId, hiKey, 1 ether, true);
-            assertTrue(output > 0, "Should produce nonzero output at near-MAX_SQRT_PRICE after overflow fix");
-        }
-
-        // Part B: Verify the function works at the safe boundary (sqrtPrice <= uint128.max)
-        {
-            MockERC20 safeToken0 = new MockERC20("SafeHi0", "SH0");
-            MockERC20 safeToken1 = new MockERC20("SafeHi1", "SH1");
-            if (address(safeToken0) > address(safeToken1)) {
-                (safeToken0, safeToken1) = (safeToken1, safeToken0);
-            }
-
-            // Use a high but safe sqrtPriceX96: type(uint128).max fits in the squaring
-            // getSqrtPriceAtTick for tick ~443636 gives sqrtPriceX96 ~ type(uint128).max
-            // Use tick 443636 which is well within bounds
-            uint160 safeSqrtPrice = TickMath.getSqrtPriceAtTick(443_636);
-            assertTrue(safeSqrtPrice <= type(uint128).max, "Safe price should be <= uint128.max");
-
-            PoolKey memory safeKey = PoolKey({
-                currency0: Currency.wrap(address(safeToken0)),
-                currency1: Currency.wrap(address(safeToken1)),
-                fee: 3000,
-                tickSpacing: 60,
-                hooks: IHooks(address(hook))
-            });
-
-            safeToken0.mint(address(this), 1000 ether);
-            safeToken1.mint(address(this), 1000 ether);
-            safeToken0.approve(address(modifyLiquidityRouter), 1000 ether);
-            safeToken1.approve(address(modifyLiquidityRouter), 1000 ether);
-
-            manager.initialize(safeKey, safeSqrtPrice);
-            PoolId safeId = safeKey.toId();
-
-            // This should NOT revert: sqrtPrice^2 fits in uint256
-            uint256 estimatedOut = hook.estimateUniswapOutput(safeId, safeKey, 1 ether, true);
-            assertGt(estimatedOut, 0, "Should produce output at safe high sqrt price (zeroForOne)");
-
-            uint256 estimatedOutReverse = hook.estimateUniswapOutput(safeId, safeKey, 1 ether, false);
-            // Reverse direction at high price may yield 0 due to extreme ratio, that is OK
-            assertTrue(true, "No revert at safe high sqrt price (oneForZero)");
-
-            console.log("Safe high sqrt price zeroForOne output:", estimatedOut);
-            console.log("Safe high sqrt price oneForZero output:", estimatedOutReverse);
-        }
-    }
-
-    // ──────────────────────────────────────────────────────────────────────
-    // 3. Test estimateUniswapOutput with sqrtPriceX96 near MIN_SQRT_PRICE
-    //    This tests the extreme case where token1/token0 price is near zero.
-    // ──────────────────────────────────────────────────────────────────────
-    function test_EstimateOutput_VeryLowSqrtPrice() public {
-        MockERC20 loToken0 = new MockERC20("LoToken0", "LT0");
-        MockERC20 loToken1 = new MockERC20("LoToken1", "LT1");
-        if (address(loToken0) > address(loToken1)) {
-            (loToken0, loToken1) = (loToken1, loToken0);
-        }
-
-        // Use MIN_SQRT_PRICE + 1 (the lowest valid price for pool initialization)
-        // MIN_SQRT_PRICE = 4295128739
-        uint160 lowSqrtPrice = TickMath.MIN_SQRT_PRICE + 1;
-
-        PoolKey memory loKey = PoolKey({
-            currency0: Currency.wrap(address(loToken0)),
-            currency1: Currency.wrap(address(loToken1)),
-            fee: 3000,
-            tickSpacing: 60,
-            hooks: IHooks(address(hook))
-        });
-
-        loToken0.mint(address(this), 1000 ether);
-        loToken1.mint(address(this), 1000 ether);
-        loToken0.approve(address(modifyLiquidityRouter), 1000 ether);
-        loToken1.approve(address(modifyLiquidityRouter), 1000 ether);
-
-        manager.initialize(loKey, lowSqrtPrice);
-        PoolId loId = loKey.toId();
-
-        // At MIN_SQRT_PRICE, token0 is extremely expensive relative to token1.
-        // zeroForOne: selling token0 for token1 at near-zero price yields very little
-        uint256 estimatedOut = hook.estimateUniswapOutput(loId, loKey, 1 ether, true);
-        // May be 0 due to extreme price ratio, but must not revert
-        assertTrue(true, "No revert at very low sqrt price (zeroForOne)");
-
-        // oneForZero: selling token1 for token0 should yield an enormous amount
-        uint256 estimatedOutReverse = hook.estimateUniswapOutput(loId, loKey, 1 ether, false);
-        assertGt(estimatedOutReverse, 0, "Should produce output at low sqrt price (oneForZero)");
-
-        console.log("Low sqrt price zeroForOne output:", estimatedOut);
-        console.log("Low sqrt price oneForZero output:", estimatedOutReverse);
-    }
-
-    // ──────────────────────────────────────────────────────────────────────
     // 4. Test calculateExpectedTokensWithCurrency with max weight
     //    Weight is uint112, so max is 2^112-1 = 5192296858534827628530496329220096.
     //    For 1 wei of payment, the formula is:
@@ -720,41 +571,6 @@ contract StressAndOrderOfMagnitudeTest is Test {
     }
 
     // ──────────────────────────────────────────────────────────────────────
-    // 6. Fuzz that FullMath.mulDiv with sqrtPrice^2 / Q192 never reverts
-    //    for sqrtPriceX96 in the safe range (up to uint128.max).
-    //
-    //    NOTE: estimateUniswapOutput uses `uint256(sqrtPrice) * sqrtPrice`
-    //    which overflows for sqrtPrice > type(uint128).max. This test verifies
-    //    that the FullMath.mulDiv calls are safe within the non-overflowing range,
-    //    and also verifies the overflow boundary.
-    // ──────────────────────────────────────────────────────────────────────
-    function testFuzz_FullMathSafety_PriceSquared(uint160 sqrtPrice) public pure {
-        // After UV4-14 fix, the full range is safe (MIN_SQRT_PRICE to MAX_SQRT_PRICE-1).
-        // The fix branches: sqrtPrice <= uint128.max uses ratioX192, otherwise uses ratioX128
-        // via FullMath.mulDiv to avoid overflow.
-        sqrtPrice = uint160(bound(uint256(sqrtPrice), TickMath.MIN_SQRT_PRICE, TickMath.MAX_SQRT_PRICE - 1));
-
-        // Replicate the fixed logic from estimateUniswapOutput
-        uint256 resultZeroForOne;
-        uint256 resultOneForZero;
-
-        if (sqrtPrice <= type(uint128).max) {
-            uint256 ratioX192 = uint256(sqrtPrice) * sqrtPrice;
-            resultZeroForOne = FullMath.mulDiv(1 ether, ratioX192, 1 << 192);
-            resultOneForZero = FullMath.mulDiv(1 ether, 1 << 192, ratioX192);
-        } else {
-            uint256 ratioX128 = FullMath.mulDiv(sqrtPrice, sqrtPrice, 1 << 64);
-            resultZeroForOne = FullMath.mulDiv(1 ether, ratioX128, 1 << 128);
-            resultOneForZero = FullMath.mulDiv(1 ether, 1 << 128, ratioX128);
-        }
-
-        // At least one direction should produce a non-zero result for 1 ether input
-        assertTrue(
-            resultZeroForOne > 0 || resultOneForZero > 0, "At least one direction should produce non-zero output"
-        );
-    }
-
-    // ──────────────────────────────────────────────────────────────────────
     // 7. Fuzz calculateExpectedTokensWithCurrency across different decimal
     //    tokens (0 to 18 decimals). The internal function normalizes to 18
     //    decimals before calculating. Verify correct behavior for each.
@@ -779,12 +595,13 @@ contract StressAndOrderOfMagnitudeTest is Test {
 
         // Set price for this token's currency
         uint32 customCurrencyId = uint32(uint160(address(customToken)));
-        mockJBPrices.setPricePerUnitOf(projectId, 1, customCurrencyId, 1e18); // 1:1 with base currency
+        // 1:1 with base currency: one base unit priced in this token at its decimals, as the terminal store reads it
+        mockJBPrices.setPricePerUnitOf(projectId, customCurrencyId, 1, oneUnit);
 
         uint256 expectedTokens = hook.calculateExpectedTokensWithCurrency(projectId, address(customToken), oneUnit);
 
-        // With weight = 1000e18 and 1 full unit of payment (normalized to 18 decimals = 1e18):
-        //   tokens = mulDiv(1000e18, 1e18, 1e18) = 1000e18
+        // With weight = 1000e18 and 1 full unit of payment:
+        //   tokens = mulDiv(oneUnit, 1000e18, oneUnit) = 1000e18
         // This should be the same regardless of the payment token's native decimals.
         assertEq(
             expectedTokens,
@@ -858,15 +675,13 @@ contract StressAndOrderOfMagnitudeTest is Test {
         assertLt(expectedTokensMillionEth, type(uint256).max, "Result should fit in uint256");
 
         // Test with price conversion factor (non-1:1 price)
-        // Set up a 2:1 price (2 base currency per payment token)
+        // Set up a 2:1 price (2 base currency per payment token, so one base unit is 0.5 payment tokens)
         uint32 token1CurrencyId = uint32(uint160(address(token1)));
-        mockJBPrices.setPricePerUnitOf(projectId, 1, token1CurrencyId, 2e18);
+        mockJBPrices.setPricePerUnitOf(projectId, token1CurrencyId, 1, 0.5e18);
 
         uint256 expectedWithPrice = hook.calculateExpectedTokensWithCurrency(projectId, address(token1), 100 ether);
 
-        // tokens = mulDiv(uint112.max, 100e18, 1e18) then mulDiv(intermediate, 2e18, 1e18)
-        //        = uint112.max * 100 * 2
-        //        = uint112.max * 200
+        // tokens = mulDiv(100e18, uint112.max, 0.5e18) = uint112.max * 200
         uint256 expectedWithPriceExact = uint256(maxWeight) * 200;
         assertEq(
             expectedWithPrice,
