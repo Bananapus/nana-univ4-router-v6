@@ -57,7 +57,7 @@ It is infrastructure, but infrastructure with direct economic consequences.
 
 - this hook can choose between market and protocol-native execution, so pool state alone does not determine the path
 - oracle maturity matters; early or thin pools weaken protection even if swaps still execute
-- downstream consumers should prefer the full intended TWAP window, but can use `observationCoverageOf(...)` to fall back to the longest retained best-effort window instead of treating every partial window as spot
+- downstream consumers should prefer the full intended TWAP window, but can use `observationCoverageOf(...)` to choose a shorter retained window; `observe` reverts when asked for more history than is retained
 - callers that need a hard value floor should pass tagged `hookData` with an explicit `amountOutMin`; price limits and
   pool state alone are not a complete slippage policy
 - hook-data encoding is part of the trusted interface
@@ -105,7 +105,8 @@ script/
 
 ## Risks and notes
 
-- early pools may not have enough oracle history, which weakens TWAP-based protection
+- early pools may not have enough oracle history, which weakens TWAP readers such as the buyback hook; routing reads no TWAP
+- the hook has no quote view; integrators quote through Uniswap's V4 Quoter, which simulates the hook's routing
 - buys fill from the pool while its output after fees beats issuance and mint the rest, so a buyer gets at least minting the whole input; the issuance rate comes from `previewPayFor(...)`, or the ruleset weight when the preview mints nothing for the payer and forwards the pay to a hook
 - sell-side routing is only for registered project ERC-20s; hook-held internal credits are claimed into the ERC-20
   before the hook checks exact-input settlement
@@ -113,7 +114,6 @@ script/
   not make the JB route eligible
 - buyback-hook metadata is not used as a route-scoring source for buy or sell paths
 - the hook falls back when Juicebox-side estimation fails, so liveness and perfect observability are traded against each other
-- if no usable observation history exists, spot-price fallback is intentionally allowed but materially weaker than a mature TWAP
 - official pools should be pre-warmed before launch if downstream hooks are expected to rely on TWAP history from the
   first user-facing route
 - `hookData` is optional and tag-gated: a minimum is enforced only when `hookData` begins with `JB_HOOK_DATA_TAG` followed by a `uint256 amountOutMin`. Any other payload — empty, or a generic integration's own metadata — carries no minimum (its first word is never mis-read as one), so the swap proceeds under the caller's own protection; the hook imposes no floor of its own

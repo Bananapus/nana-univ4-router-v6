@@ -6,6 +6,7 @@ import {TickMath} from "@uniswap/v4-core/src/libraries/TickMath.sol";
 
 import {MockTerminalIgnoringMin} from "../regression/JBRouteMinOutputBypass.t.sol";
 import {PreviewPayForRoutingTest} from "../regression/PreviewPayForRouting.t.sol";
+import {OracleQuote} from "../utils/OracleQuote.sol";
 
 contract BuySideRouteHonestyTest is PreviewPayForRoutingTest {
     /// @notice A terminal that inflates `previewPayFor` to win the routing decision and then mints fewer project
@@ -18,7 +19,7 @@ contract BuySideRouteHonestyTest is PreviewPayForRoutingTest {
         mockDirectory.setDefaultTerminal(address(terminal));
 
         uint256 amountIn = 1 ether;
-        uint256 v4Quote = hook.estimateUniswapOutput({poolId: id, key: key, amountIn: amountIn, zeroForOne: zeroForOne});
+        uint256 v4Quote = OracleQuote.quote(hook, manager, key, amountIn, zeroForOne);
 
         terminal.setPreviewReturn(v4Quote + 1 ether);
         terminal.setActualPayAmount(v4Quote / 2);
